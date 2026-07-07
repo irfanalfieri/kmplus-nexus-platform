@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Plus, Play, Trash2, Edit } from 'lucide-react'
+import { Plus, Play, Trash2, Edit, X, Save } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -57,6 +57,9 @@ export default function PipelineDesignerLayer() {
   const [pipelines, setPipelines] = useState(MOCK_PIPELINES)
   const [showNewForm, setShowNewForm] = useState(false)
   const [newName, setNewName] = useState('')
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editName, setEditName] = useState('')
+  const [runningId, setRunningId] = useState<string | null>(null)
 
   const addPipeline = () => {
     if (newName) {
@@ -77,6 +80,43 @@ export default function PipelineDesignerLayer() {
       setNewName('')
       setShowNewForm(false)
     }
+  }
+
+  const startEdit = (id: string, name: string) => {
+    setEditingId(id)
+    setEditName(name)
+  }
+
+  const saveEdit = (id: string) => {
+    if (editName.trim()) {
+      setPipelines(
+        pipelines.map((p) =>
+          p.id === id ? { ...p, name: editName } : p
+        )
+      )
+    }
+    setEditingId(null)
+    setEditName('')
+  }
+
+  const runPipeline = (id: string) => {
+    setRunningId(id)
+    setTimeout(() => {
+      setPipelines(
+        pipelines.map((p) =>
+          p.id === id
+            ? {
+                ...p,
+                status: 'active',
+                enabled: true,
+                lastRun: 'Just now',
+                nextRun: 'in 1 hour',
+              }
+            : p
+        )
+      )
+      setRunningId(null)
+    }, 1200)
   }
 
   const togglePipeline = (id: string) => {
@@ -132,38 +172,82 @@ export default function PipelineDesignerLayer() {
               <div className="flex items-start justify-between">
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
-                    <div className="font-semibold">{pipeline.name}</div>
-                    <Badge variant={pipeline.enabled ? 'default' : 'secondary'}>
-                      {pipeline.status}
-                    </Badge>
+                    {editingId === pipeline.id ? (
+                      <div className="flex gap-2 flex-1 max-w-md">
+                        <Input
+                          value={editName}
+                          onChange={(e) => setEditName(e.target.value)}
+                          className="text-sm"
+                        />
+                        <Button
+                          size="sm"
+                          onClick={() => saveEdit(pipeline.id)}
+                          className="px-2"
+                        >
+                          <Save className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setEditingId(null)}
+                          className="px-2"
+                        >
+                          <X className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="font-semibold">{pipeline.name}</div>
+                        <Badge variant={pipeline.enabled ? 'default' : 'secondary'}>
+                          {pipeline.status}
+                        </Badge>
+                      </>
+                    )}
                   </div>
-                  <div className="text-sm text-muted-foreground mt-1">
-                    {pipeline.description}
-                  </div>
-                  <div className="text-xs text-muted-foreground mt-2 space-y-1">
-                    <div>Source: {pipeline.source} → Destination: {pipeline.destination}</div>
-                    <div>Last run: {pipeline.lastRun} • Next: {pipeline.nextRun}</div>
-                  </div>
+                  {editingId !== pipeline.id && (
+                    <>
+                      <div className="text-sm text-muted-foreground mt-1">
+                        {pipeline.description}
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-2 space-y-1">
+                        <div>Source: {pipeline.source} → Destination: {pipeline.destination}</div>
+                        <div>Last run: {pipeline.lastRun} • Next: {pipeline.nextRun}</div>
+                      </div>
+                    </>
+                  )}
                 </div>
-                <div className="flex items-center gap-2">
-                  <Button size="sm" variant="ghost">
-                    <Edit className="w-4 h-4" />
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => togglePipeline(pipeline.id)}
-                  >
-                    <Play className="w-4 h-4" />
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => deletePipeline(pipeline.id)}
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </Button>
-                </div>
+                {editingId !== pipeline.id && (
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => startEdit(pipeline.id, pipeline.name)}
+                      title="Edit pipeline name"
+                    >
+                      <Edit className="w-4 h-4" />
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => runPipeline(pipeline.id)}
+                      disabled={runningId === pipeline.id}
+                      title="Run pipeline"
+                    >
+                      <Play className="w-4 h-4" />
+                      {runningId === pipeline.id && (
+                        <span className="ml-1 text-xs">Running...</span>
+                      )}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => deletePipeline(pipeline.id)}
+                      title="Delete pipeline"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  </div>
+                )}
               </div>
             </div>
           ))}

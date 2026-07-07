@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Plus, Trash2, CheckCircle2, AlertCircle } from 'lucide-react'
+import { Plus, Trash2, CheckCircle2, AlertCircle, Plug, RotateCcw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -82,6 +82,21 @@ export default function DataSourcesLayer() {
     setSources(sources.filter((s) => s.id !== id))
   }
 
+  const toggleConnection = (id: string) => {
+    setSources(
+      sources.map((s) =>
+        s.id === id
+          ? {
+              ...s,
+              status: s.status === 'connected' ? 'disconnected' : 'connected',
+              lastConnected:
+                s.status === 'connected' ? '3 days ago' : 'Just now',
+            }
+          : s
+      )
+    )
+  }
+
   return (
     <div className="space-y-6">
       <div className="bg-card rounded-lg border border-border p-6">
@@ -147,7 +162,16 @@ export default function DataSourcesLayer() {
                 <Button
                   variant="ghost"
                   size="sm"
+                  onClick={() => toggleConnection(source.id)}
+                  title={source.status === 'connected' ? 'Disconnect' : 'Connect'}
+                >
+                  <Plug className="w-4 h-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() => deleteSource(source.id)}
+                  title="Delete source"
                 >
                   <Trash2 className="w-4 h-4" />
                 </Button>

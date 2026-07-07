@@ -1,6 +1,7 @@
 'use client'
 
-import { Plus, Download } from 'lucide-react'
+import { useState } from 'react'
+import { Plus, Download, Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 const CONNECTORS = [
@@ -55,6 +56,21 @@ const CONNECTORS = [
 ]
 
 export default function ConnectorLayer() {
+  const [connectors, setConnectors] = useState(CONNECTORS)
+  const [installingId, setInstallingId] = useState<string | null>(null)
+
+  const handleInstall = (id: string) => {
+    setInstallingId(id)
+    setTimeout(() => {
+      setConnectors(
+        connectors.map((c) =>
+          c.id === id ? { ...c, installed: true } : c
+        )
+      )
+      setInstallingId(null)
+    }, 1500)
+  }
+
   return (
     <div className="space-y-6">
       <div className="bg-card rounded-lg border border-border p-6">
@@ -64,7 +80,7 @@ export default function ConnectorLayer() {
         </p>
 
         <div className="grid grid-cols-2 gap-4">
-          {CONNECTORS.map((connector) => (
+          {connectors.map((connector) => (
             <div
               key={connector.id}
               className="p-4 bg-muted/30 rounded-lg border border-border/50 hover:bg-muted/50 transition-colors"
@@ -82,13 +98,20 @@ export default function ConnectorLayer() {
               </div>
               <div className="mt-4 flex items-center gap-2">
                 {connector.installed ? (
-                  <div className="flex-1 px-3 py-1 bg-green-100 text-green-800 text-xs rounded font-medium">
+                  <div className="flex-1 px-3 py-1 bg-green-100 text-green-800 text-xs rounded font-medium flex items-center justify-center gap-1">
+                    <Check className="w-3 h-3" />
                     Installed
                   </div>
                 ) : (
-                  <Button size="sm" variant="outline" className="flex-1">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="flex-1"
+                    onClick={() => handleInstall(connector.id)}
+                    disabled={installingId === connector.id}
+                  >
                     <Download className="w-3 h-3 mr-1" />
-                    Install
+                    {installingId === connector.id ? 'Installing...' : 'Install'}
                   </Button>
                 )}
               </div>
@@ -101,17 +124,17 @@ export default function ConnectorLayer() {
         <div className="bg-card rounded-lg border border-border p-4">
           <div className="text-sm font-medium text-muted-foreground">Installed Connectors</div>
           <div className="text-2xl font-bold mt-2">
-            {CONNECTORS.filter((c) => c.installed).length}
+            {connectors.filter((c) => c.installed).length}
           </div>
         </div>
         <div className="bg-card rounded-lg border border-border p-4">
           <div className="text-sm font-medium text-muted-foreground">Available</div>
-          <div className="text-2xl font-bold mt-2">{CONNECTORS.length}</div>
+          <div className="text-2xl font-bold mt-2">{connectors.length}</div>
         </div>
         <div className="bg-card rounded-lg border border-border p-4">
           <div className="text-sm font-medium text-muted-foreground">Categories</div>
           <div className="text-2xl font-bold mt-2">
-            {new Set(CONNECTORS.map((c) => c.category)).size}
+            {new Set(connectors.map((c) => c.category)).size}
           </div>
         </div>
       </div>

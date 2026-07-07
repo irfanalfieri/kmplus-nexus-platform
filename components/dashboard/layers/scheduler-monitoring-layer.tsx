@@ -1,7 +1,9 @@
 'use client'
 
-import { Clock, Activity, AlertCircle, CheckCircle2 } from 'lucide-react'
+import { useState } from 'react'
+import { Clock, Activity, AlertCircle, CheckCircle2, RotateCcw } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 
 const EXECUTIONS = [
   {
@@ -39,9 +41,32 @@ const EXECUTIONS = [
 ]
 
 export default function SchedulerMonitoringLayer() {
-  const successCount = EXECUTIONS.filter((e) => e.status === 'success').length
-  const failureCount = EXECUTIONS.filter((e) => e.status === 'failed').length
-  const runningCount = EXECUTIONS.filter((e) => e.status === 'running').length
+  const [executions, setExecutions] = useState(EXECUTIONS)
+  const [retryingId, setRetryingId] = useState<string | null>(null)
+
+  const retryExecution = (id: string) => {
+    setRetryingId(id)
+    setTimeout(() => {
+      setExecutions(
+        executions.map((e) =>
+          e.id === id
+            ? {
+                ...e,
+                status: 'running',
+                recordsProcessed: 0,
+                duration: 'In progress',
+                startTime: 'Just now',
+              }
+            : e
+        )
+      )
+      setRetryingId(null)
+    }, 800)
+  }
+
+  const successCount = executions.filter((e) => e.status === 'success').length
+  const failureCount = executions.filter((e) => e.status === 'failed').length
+  const runningCount = executions.filter((e) => e.status === 'running').length
 
   return (
     <div className="space-y-6">
@@ -82,7 +107,7 @@ export default function SchedulerMonitoringLayer() {
       <div className="bg-card rounded-lg border border-border p-6">
         <h3 className="font-semibold mb-4">Recent Executions</h3>
         <div className="space-y-3">
-          {EXECUTIONS.map((exec) => (
+          {executions.map((exec) => (
             <div
               key={exec.id}
               className="flex items-center justify-between p-3 bg-muted/30 rounded-lg"
@@ -117,6 +142,17 @@ export default function SchedulerMonitoringLayer() {
                 <div className="text-xs text-muted-foreground w-20 text-right">
                   {exec.startTime}
                 </div>
+                {exec.status === 'failed' && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => retryExecution(exec.id)}
+                    disabled={retryingId === exec.id}
+                    title="Retry execution"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                  </Button>
+                )}
               </div>
             </div>
           ))}

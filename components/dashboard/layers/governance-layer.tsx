@@ -1,8 +1,10 @@
 'use client'
 
-import { Shield, Lock, Users, FileText, Plus } from 'lucide-react'
+import { useState } from 'react'
+import { Shield, Lock, Users, FileText, Plus, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
 
 const POLICIES = [
   {
@@ -47,6 +49,34 @@ const AUDIT_SUMMARY = [
 ]
 
 export default function GovernanceLayer() {
+  const [policies, setPolicies] = useState(POLICIES)
+  const [showNewPolicyForm, setShowNewPolicyForm] = useState(false)
+  const [newPolicyName, setNewPolicyName] = useState('')
+  const [newPolicyType, setNewPolicyType] = useState('Access Control')
+
+  const addPolicy = () => {
+    if (newPolicyName.trim()) {
+      setPolicies([
+        ...policies,
+        {
+          id: `policy_${Date.now()}`,
+          name: newPolicyName,
+          type: newPolicyType,
+          status: 'active',
+          appliedTo: 'All Systems',
+          description: 'New governance policy',
+        },
+      ])
+      setNewPolicyName('')
+      setNewPolicyType('Access Control')
+      setShowNewPolicyForm(false)
+    }
+  }
+
+  const deletePolicy = (id: string) => {
+    setPolicies(policies.filter((p) => p.id !== id))
+  }
+
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-2 gap-4 mb-6">
@@ -74,30 +104,59 @@ export default function GovernanceLayer() {
               <Lock className="w-5 h-5" />
               Governance Policies
             </h3>
-            <Button size="sm">
+            <Button size="sm" onClick={() => setShowNewPolicyForm(!showNewPolicyForm)}>
               <Plus className="w-4 h-4 mr-1" />
               Add
             </Button>
           </div>
+
+          {showNewPolicyForm && (
+            <div className="mb-4 p-3 bg-muted/50 rounded-lg border border-border/50 space-y-3">
+              <Input
+                placeholder="Policy name"
+                value={newPolicyName}
+                onChange={(e) => setNewPolicyName(e.target.value)}
+              />
+              <div className="flex gap-2">
+                <Button size="sm" onClick={addPolicy}>
+                  Create
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setShowNewPolicyForm(false)}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
+
           <div className="space-y-3">
-            {POLICIES.map((policy) => (
-              <div key={policy.id} className="p-3 bg-muted/30 rounded-lg border border-border/50">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="font-medium text-sm">{policy.name}</div>
-                    <div className="text-xs text-muted-foreground mt-1">
-                      {policy.description}
-                    </div>
-                    <div className="flex items-center gap-2 mt-2">
-                      <Badge variant="outline" className="text-xs">
-                        {policy.type}
-                      </Badge>
-                      <Badge className="text-xs bg-green-100 text-green-800">
-                        {policy.appliedTo}
-                      </Badge>
-                    </div>
+            {policies.map((policy) => (
+              <div key={policy.id} className="p-3 bg-muted/30 rounded-lg border border-border/50 flex items-start justify-between">
+                <div className="flex-1">
+                  <div className="font-medium text-sm">{policy.name}</div>
+                  <div className="text-xs text-muted-foreground mt-1">
+                    {policy.description}
+                  </div>
+                  <div className="flex items-center gap-2 mt-2">
+                    <Badge variant="outline" className="text-xs">
+                      {policy.type}
+                    </Badge>
+                    <Badge className="text-xs bg-green-100 text-green-800">
+                      {policy.appliedTo}
+                    </Badge>
                   </div>
                 </div>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => deletePolicy(policy.id)}
+                  className="ml-2"
+                >
+                  <X className="w-4 h-4" />
+                </Button>
               </div>
             ))}
           </div>
@@ -128,7 +187,7 @@ export default function GovernanceLayer() {
         <div className="bg-card rounded-lg border border-border p-4">
           <div className="text-sm font-medium text-muted-foreground">Active Policies</div>
           <div className="text-2xl font-bold mt-2">
-            {POLICIES.filter((p) => p.status === 'active').length}
+            {policies.filter((p) => p.status === 'active').length}
           </div>
         </div>
         <div className="bg-card rounded-lg border border-border p-4">
