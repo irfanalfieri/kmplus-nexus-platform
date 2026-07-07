@@ -22,6 +22,7 @@ export const auth = betterAuth({
       : []),
     'http://localhost:3000',
     'http://localhost:3001',
+    'https://vm-rafjbtamt3i.vusercontent.net',
   ],
   session: {
     expiresIn: 60 * 60 * 24 * 7, // 7 days
