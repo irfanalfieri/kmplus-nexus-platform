@@ -1,10 +1,21 @@
 'use client'
 
 import { useState } from 'react'
-import { Plus, Play, Trash2, Edit, X, Save } from 'lucide-react'
+import { Plus, Play, Trash2, Edit, X, Save, Settings } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+
+const DATA_SOURCES = ['SAP ERP System', 'Oracle Database', 'MySQL Production', 'REST API Gateway', 'CSV File Uploads']
+const TRANSFORMATIONS = ['None', 'Mapping', 'Filtering', 'Aggregation', 'Cleansing']
+const SCHEDULES = ['Manual', 'Hourly', 'Daily', 'Weekly', 'Monthly']
 
 const MOCK_PIPELINES = [
   {
@@ -57,47 +68,80 @@ export default function PipelineDesignerLayer() {
   const [pipelines, setPipelines] = useState(MOCK_PIPELINES)
   const [showNewForm, setShowNewForm] = useState(false)
   const [newName, setNewName] = useState('')
+  const [newDescription, setNewDescription] = useState('')
+  const [newSource, setNewSource] = useState('')
+  const [newDestination, setNewDestination] = useState('')
+  const [newTransformation, setNewTransformation] = useState('None')
+  const [newSchedule, setNewSchedule] = useState('Manual')
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [configuringId, setConfiguringId] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
+  const [editDescription, setEditDescription] = useState('')
+  const [editSource, setEditSource] = useState('')
+  const [editDestination, setEditDestination] = useState('')
+  const [editTransformation, setEditTransformation] = useState('')
+  const [editSchedule, setEditSchedule] = useState('')
   const [runningId, setRunningId] = useState<string | null>(null)
 
   const addPipeline = () => {
-    if (newName) {
+    if (newName && newSource && newDestination) {
       setPipelines([
         ...pipelines,
         {
           id: `pipe_${Date.now()}`,
           name: newName,
-          description: 'New pipeline',
-          source: 'Select source',
-          destination: 'Select destination',
+          description: newDescription || 'New pipeline',
+          source: newSource,
+          destination: newDestination,
           status: 'draft',
           enabled: false,
           lastRun: 'Never',
-          nextRun: 'Manual',
+          nextRun: newSchedule,
         },
       ])
       setNewName('')
+      setNewDescription('')
+      setNewSource('')
+      setNewDestination('')
+      setNewTransformation('None')
+      setNewSchedule('Manual')
       setShowNewForm(false)
     }
   }
 
-  const startEdit = (id: string, name: string) => {
-    setEditingId(id)
-    setEditName(name)
+  const startConfigureEdit = (id: string) => {
+    const pipeline = pipelines.find((p) => p.id === id)
+    if (pipeline) {
+      setConfiguringId(id)
+      setEditName(pipeline.name)
+      setEditDescription(pipeline.description)
+      setEditSource(pipeline.source)
+      setEditDestination(pipeline.destination)
+      setEditSchedule(pipeline.nextRun)
+    }
   }
 
-  const saveEdit = (id: string) => {
-    if (editName.trim()) {
+  const saveConfiguration = () => {
+    if (configuringId && editName.trim() && editSource && editDestination) {
       setPipelines(
         pipelines.map((p) =>
-          p.id === id ? { ...p, name: editName } : p
+          p.id === configuringId
+            ? {
+                ...p,
+                name: editName,
+                description: editDescription,
+                source: editSource,
+                destination: editDestination,
+                nextRun: editSchedule,
+              }
+            : p
         )
       )
+      setConfiguringId(null)
     }
-    setEditingId(null)
-    setEditName('')
   }
+
+
 
   const runPipeline = (id: string) => {
     setRunningId(id)
@@ -146,19 +190,184 @@ export default function PipelineDesignerLayer() {
         </div>
 
         {showNewForm && (
-          <div className="bg-muted/50 rounded-lg p-4 mb-6 space-y-3">
-            <Input
-              placeholder="Pipeline name"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-            />
-            <div className="flex gap-2">
-              <Button onClick={addPipeline} size="sm">
-                Create
-              </Button>
-              <Button onClick={() => setShowNewForm(false)} size="sm" variant="outline">
-                Cancel
-              </Button>
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-card rounded-lg border border-border p-6 max-w-2xl w-full space-y-4">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold">Create New Pipeline</h3>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setShowNewForm(false)}
+                >
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+
+              <Input
+                placeholder="Pipeline name"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+              />
+
+              <Input
+                placeholder="Description (optional)"
+                value={newDescription}
+                onChange={(e) => setNewDescription(e.target.value)}
+              />
+
+              <div className="grid grid-cols-2 gap-4">
+                <Select value={newSource} onValueChange={setNewSource}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Source" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {DATA_SOURCES.map((src) => (
+                      <SelectItem key={src} value={src}>
+                        {src}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+
+                <Select value={newDestination} onValueChange={setNewDestination}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Destination" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {DATA_SOURCES.map((dst) => (
+                      <SelectItem key={dst} value={dst}>
+                        {dst}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <Select value={newTransformation} onValueChange={setNewTransformation}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Transformation" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {TRANSFORMATIONS.map((trans) => (
+                      <SelectItem key={trans} value={trans}>
+                        {trans}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+
+                <Select value={newSchedule} onValueChange={setNewSchedule}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Schedule" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {SCHEDULES.map((sch) => (
+                      <SelectItem key={sch} value={sch}>
+                        {sch}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="flex gap-2 pt-4">
+                <Button onClick={addPipeline} className="flex-1">
+                  <Save className="w-4 h-4 mr-2" />
+                  Create
+                </Button>
+                <Button
+                  onClick={() => setShowNewForm(false)}
+                  variant="outline"
+                  className="flex-1"
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {configuringId && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-card rounded-lg border border-border p-6 max-w-2xl w-full space-y-4">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold">Configure Pipeline</h3>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setConfiguringId(null)}
+                >
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+
+              <Input
+                placeholder="Pipeline name"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+              />
+
+              <Input
+                placeholder="Description"
+                value={editDescription}
+                onChange={(e) => setEditDescription(e.target.value)}
+              />
+
+              <div className="grid grid-cols-2 gap-4">
+                <Select value={editSource} onValueChange={setEditSource}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Source" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {DATA_SOURCES.map((src) => (
+                      <SelectItem key={src} value={src}>
+                        {src}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+
+                <Select value={editDestination} onValueChange={setEditDestination}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Destination" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {DATA_SOURCES.map((dst) => (
+                      <SelectItem key={dst} value={dst}>
+                        {dst}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <Select value={editSchedule} onValueChange={setEditSchedule}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Schedule" />
+                </SelectTrigger>
+                <SelectContent>
+                  {SCHEDULES.map((sch) => (
+                    <SelectItem key={sch} value={sch}>
+                      {sch}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <div className="flex gap-2 pt-4">
+                <Button onClick={saveConfiguration} className="flex-1">
+                  <Save className="w-4 h-4 mr-2" />
+                  Save Configuration
+                </Button>
+                <Button
+                  onClick={() => setConfiguringId(null)}
+                  variant="outline"
+                  className="flex-1"
+                >
+                  Cancel
+                </Button>
+              </div>
             </div>
           </div>
         )}
@@ -171,83 +380,50 @@ export default function PipelineDesignerLayer() {
             >
               <div className="flex items-start justify-between">
                 <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    {editingId === pipeline.id ? (
-                      <div className="flex gap-2 flex-1 max-w-md">
-                        <Input
-                          value={editName}
-                          onChange={(e) => setEditName(e.target.value)}
-                          className="text-sm"
-                        />
-                        <Button
-                          size="sm"
-                          onClick={() => saveEdit(pipeline.id)}
-                          className="px-2"
-                        >
-                          <Save className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => setEditingId(null)}
-                          className="px-2"
-                        >
-                          <X className="w-4 h-4" />
-                        </Button>
-                      </div>
-                    ) : (
-                      <>
-                        <div className="font-semibold">{pipeline.name}</div>
-                        <Badge variant={pipeline.enabled ? 'default' : 'secondary'}>
-                          {pipeline.status}
-                        </Badge>
-                      </>
-                    )}
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className="font-semibold">{pipeline.name}</div>
+                    <Badge variant={pipeline.enabled ? 'default' : 'secondary'}>
+                      {pipeline.status}
+                    </Badge>
                   </div>
-                  {editingId !== pipeline.id && (
-                    <>
-                      <div className="text-sm text-muted-foreground mt-1">
-                        {pipeline.description}
-                      </div>
-                      <div className="text-xs text-muted-foreground mt-2 space-y-1">
-                        <div>Source: {pipeline.source} → Destination: {pipeline.destination}</div>
-                        <div>Last run: {pipeline.lastRun} • Next: {pipeline.nextRun}</div>
-                      </div>
-                    </>
-                  )}
+                  <div className="text-sm text-muted-foreground mb-2">
+                    {pipeline.description}
+                  </div>
+                  <div className="text-xs text-muted-foreground space-y-1">
+                    <div>Source: {pipeline.source} → Destination: {pipeline.destination}</div>
+                    <div>Last run: {pipeline.lastRun} • Next: {pipeline.nextRun}</div>
+                  </div>
                 </div>
-                {editingId !== pipeline.id && (
-                  <div className="flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => startEdit(pipeline.id, pipeline.name)}
-                      title="Edit pipeline name"
-                    >
-                      <Edit className="w-4 h-4" />
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => runPipeline(pipeline.id)}
-                      disabled={runningId === pipeline.id}
-                      title="Run pipeline"
-                    >
-                      <Play className="w-4 h-4" />
-                      {runningId === pipeline.id && (
-                        <span className="ml-1 text-xs">Running...</span>
-                      )}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => deletePipeline(pipeline.id)}
-                      title="Delete pipeline"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
-                  </div>
-                )}
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => startConfigureEdit(pipeline.id)}
+                    title="Configure pipeline"
+                  >
+                    <Settings className="w-4 h-4" />
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => runPipeline(pipeline.id)}
+                    disabled={runningId === pipeline.id}
+                    title="Run pipeline"
+                  >
+                    <Play className="w-4 h-4" />
+                    {runningId === pipeline.id && (
+                      <span className="ml-1 text-xs">Running...</span>
+                    )}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => deletePipeline(pipeline.id)}
+                    title="Delete pipeline"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
+                </div>
               </div>
             </div>
           ))}
