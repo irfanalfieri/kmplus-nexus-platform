@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Plus, Play, Trash2, Edit, X, Save, Settings } from 'lucide-react'
+import { Plus, Play, Trash2, Edit, X, Save, Settings, TestTube } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -12,6 +12,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import PipelineTestModal from '@/components/modals/pipeline-test-modal'
+import ColumnMappingModal from '@/components/modals/column-mapping-modal'
 
 const DATA_SOURCES = ['SAP ERP System', 'Oracle Database', 'MySQL Production', 'REST API Gateway', 'CSV File Uploads']
 const TRANSFORMATIONS = ['None', 'Mapping', 'Filtering', 'Aggregation', 'Cleansing']
@@ -82,6 +84,8 @@ export default function PipelineDesignerLayer() {
   const [editTransformation, setEditTransformation] = useState('')
   const [editSchedule, setEditSchedule] = useState('')
   const [runningId, setRunningId] = useState<string | null>(null)
+  const [testingPipelineId, setTestingPipelineId] = useState<string | null>(null)
+  const [mappingPipelineId, setMappingPipelineId] = useState<string | null>(null)
 
   const addPipeline = () => {
     if (newName && newSource && newDestination) {
@@ -173,8 +177,32 @@ export default function PipelineDesignerLayer() {
     setPipelines(pipelines.filter((p) => p.id !== id))
   }
 
+  const testingPipeline = pipelines.find((p) => p.id === testingPipelineId)
+  const mappingPipeline = pipelines.find((p) => p.id === mappingPipelineId)
+
   return (
     <div className="space-y-6">
+      <PipelineTestModal
+        isOpen={!!testingPipelineId}
+        pipelineName={testingPipeline?.name || ''}
+        sourceType={testingPipeline?.source?.split(' ')[0] || ''}
+        onClose={() => setTestingPipelineId(null)}
+        onSuccess={() => {
+          setTestingPipelineId(null)
+          setMappingPipelineId(testingPipelineId)
+        }}
+      />
+
+      <ColumnMappingModal
+        isOpen={!!mappingPipelineId}
+        pipelineName={mappingPipeline?.name || ''}
+        onClose={() => setMappingPipelineId(null)}
+        onSave={(mappings) => {
+          console.log('Mappings saved:', mappings)
+          setMappingPipelineId(null)
+        }}
+      />
+
       <div className="bg-card rounded-lg border border-border p-6">
         <div className="flex items-center justify-between mb-6">
           <div>
@@ -402,6 +430,23 @@ export default function PipelineDesignerLayer() {
                     title="Configure pipeline"
                   >
                     <Settings className="w-4 h-4" />
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setTestingPipelineId(pipeline.id)}
+                    title="Test pipeline"
+                  >
+                    <TestTube className="w-4 h-4" />
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setMappingPipelineId(pipeline.id)}
+                    title="Edit column mapping"
+                  >
+                    <Edit className="w-4 h-4 mr-1" />
+                    Map
                   </Button>
                   <Button
                     size="sm"

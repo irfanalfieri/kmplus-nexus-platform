@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Plus, Trash2, CheckCircle2, AlertCircle, Plug, X, Save, Edit } from 'lucide-react'
+import { Plus, Trash2, CheckCircle2, AlertCircle, Plug, X, Save, Edit, Lock, Eye } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -11,6 +11,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import DataSourceAuthModal from '@/components/modals/data-source-auth-modal'
+import SampleDataPreviewModal from '@/components/modals/sample-data-preview-modal'
 
 const MOCK_DATA_SOURCES = [
   {
@@ -67,6 +69,10 @@ export default function DataSourcesLayer() {
   const [editName, setEditName] = useState('')
   const [editHost, setEditHost] = useState('')
   const [editPort, setEditPort] = useState('')
+  const [authModalOpen, setAuthModalOpen] = useState(false)
+  const [previewModalOpen, setPreviewModalOpen] = useState(false)
+  const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null)
+  const [authorizedSources, setAuthorizedSources] = useState<Set<string>>(new Set())
 
   const addSource = () => {
     if (newSourceName && newSourceType) {
@@ -130,8 +136,59 @@ export default function DataSourcesLayer() {
     )
   }
 
+  const openAuthModal = (id: string) => {
+    setSelectedSourceId(id)
+    setAuthModalOpen(true)
+  }
+
+  const handleAuthSuccess = (credentials: Record<string, string>) => {
+    if (selectedSourceId) {
+      setAuthorizedSources(new Set([...authorizedSources, selectedSourceId]))
+      setSources(
+        sources.map((s) =>
+          s.id === selectedSourceId
+            ? { ...s, status: 'connected', lastConnected: 'Just now' }
+            : s
+        )
+      )
+      setAuthModalOpen(false)
+      setTimeout(() => {
+        setPreviewModalOpen(true)
+      }, 500)
+    }
+  }
+
+  const handlePreviewClose = () => {
+    setPreviewModalOpen(false)
+    setSelectedSourceId(null)
+  }
+
+  const selectedSource = selectedSourceId ? sources.find((s) => s.id === selectedSourceId) : null
+
   return (
     <div className="space-y-6">
+      <DataSourceAuthModal
+        isOpen={authModalOpen}
+        sourceId={selectedSourceId || ''}
+        sourceName={selectedSource?.name || ''}
+        sourceType={selectedSource?.sourceType || ''}
+        onClose={() => {
+          setAuthModalOpen(false)
+          setSelectedSourceId(null)
+        }}
+        onSuccess={handleAuthSuccess}
+      />
+
+      <SampleDataPreviewModal
+        isOpen={previewModalOpen}
+        sourceName={selectedSource?.name || ''}
+        sourceType={selectedSource?.sourceType || ''}
+        onClose={handlePreviewClose}
+        onProceed={() => {
+          setPreviewModalOpen(false)
+        }}
+      />
+
       <div className="bg-card rounded-lg border border-border p-6">
         <div className="flex items-center justify-between mb-6">
           <div>
@@ -265,6 +322,28 @@ export default function DataSourcesLayer() {
                       Disconnected
                     </div>
                   )}
+                  {authorizedSources.has(source.id) && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setPreviewModalOpen(true)}
+                      title="View sample data"
+                      className="gap-1"
+                    >
+                      <Eye className="w-4 h-4" />
+                      <span className="text-xs">Sample Data</span>
+                    </Button>
+                  )}
+                  {!authorizedSources.has(source.id) && source.status === 'disconnected' && (
+                    <Button
+                      size="sm"
+                      onClick={() => openAuthModal(source.id)}
+                      className="gap-1"
+                    >
+                      <Lock className="w-4 h-4" />
+                      <span className="text-xs">Authorize</span>
+                    </Button>
+                  )}
                   <Button
                     variant="ghost"
                     size="sm"
@@ -272,14 +351,6 @@ export default function DataSourcesLayer() {
                     title="Edit source"
                   >
                     <Edit className="w-4 h-4" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => toggleConnection(source.id)}
-                    title={source.status === 'connected' ? 'Disconnect' : 'Connect'}
-                  >
-                    <Plug className="w-4 h-4" />
                   </Button>
                   <Button
                     variant="ghost"
