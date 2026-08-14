@@ -30,7 +30,7 @@ const SCHEMAS: Record<string, Array<{ name: string; type: string }>> = {
 const TRANSFORMATIONS = ['None', 'Mapping', 'Filtering', 'Aggregation', 'Cleansing']
 const SCHEDULES = ['Manual', 'Hourly', 'Daily', 'Weekly', 'Monthly']
 
-const MOCK_PIPELINES = [
+const MOCK_PIPELINES: Array<{ id: string; name: string; description: string; source: string; destination: string; status: string; enabled: boolean; lastRun: string; nextRun: string; transformations?: string[] }> = [
   {
     id: 'pipe_1',
     name: 'Daily SAP to Oracle Sync',
@@ -85,6 +85,7 @@ export default function PipelineDesignerLayer() {
   const [newSource, setNewSource] = useState('')
   const [newDestination, setNewDestination] = useState('')
   const [newTransformation, setNewTransformation] = useState('None')
+  const [newTransformations, setNewTransformations] = useState<string[]>(['Cleansing'])
   const [newSchedule, setNewSchedule] = useState('Manual')
   const [schemaTable, setSchemaTable] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -111,6 +112,7 @@ export default function PipelineDesignerLayer() {
           description: newDescription || 'New pipeline',
           source: newSource,
           destination: newDestination,
+          transformations: newTransformations,
           status: 'draft',
           enabled: false,
           lastRun: 'Never',
@@ -292,6 +294,8 @@ export default function PipelineDesignerLayer() {
               </div>
 
               <div className="rounded-lg border border-border bg-muted/20 p-4"><div className="mb-3 flex items-center justify-between"><div><div className="font-medium">Schema and destination mapping</div><div className="text-xs text-muted-foreground">Source and destination columns are read from the connected schemas.</div></div><select value={schemaTable} onChange={(e) => setSchemaTable(e.target.value)} className="rounded-md border border-input bg-background p-2 text-sm"><option value="">Select destination table</option><option>employee_master</option><option>organization</option><option>kpi_daily</option></select></div>{newSource && newDestination && <div className="grid gap-2 md:grid-cols-2"><div className="rounded border border-border p-3"><div className="mb-2 text-xs font-semibold uppercase text-muted-foreground">{newSource} · source</div>{(SCHEMAS[newSource] || []).map((column) => <div key={column.name} className="flex justify-between border-b border-border/50 py-1 text-sm"><span>{column.name}</span><span className="font-mono text-xs text-muted-foreground">{column.type}</span></div>)}</div><div className="rounded border border-border p-3"><div className="mb-2 text-xs font-semibold uppercase text-muted-foreground">{newDestination} · destination</div>{(SCHEMAS[newDestination] || []).map((column) => <div key={column.name} className="flex justify-between border-b border-border/50 py-1 text-sm"><span>{column.name}</span><span className="font-mono text-xs text-muted-foreground">{column.type}</span></div>)}</div></div>}</div>
+
+              <div className="rounded-lg border border-border p-4"><div className="mb-2 font-medium">Transformation methods</div><div className="grid gap-2 sm:grid-cols-2">{TRANSFORMATIONS.filter((method) => method !== 'None').map((method) => <label key={method} className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm"><input type="checkbox" checked={newTransformations.includes(method)} onChange={() => setNewTransformations((items) => items.includes(method) ? items.filter((item) => item !== method) : [...items, method])} />{method}</label>)}</div><div className="mt-2 text-xs text-muted-foreground">Methods execute in selected sequence and can be combined in one pipeline.</div></div>
 
               <div className="grid grid-cols-2 gap-4">
                 <Select value={newTransformation} onValueChange={(value) => value && setNewTransformation(value)}>
