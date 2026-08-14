@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Plus, Play, Trash2, Edit, X, Save, Settings, TestTube } from 'lucide-react'
+import { Plus, Play, Trash2, Edit, X, Save, Settings, TestTube, Activity } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/select'
 import PipelineTestModal from '@/components/modals/pipeline-test-modal'
 import ColumnMappingModal from '@/components/modals/column-mapping-modal'
+import PipelineExecutionVisualizer from '@/components/modals/pipeline-execution-visualizer'
 
 const DATA_SOURCES = ['SAP ERP System', 'Oracle Database', 'MySQL Production', 'REST API Gateway', 'CSV File Uploads']
 const TRANSFORMATIONS = ['None', 'Mapping', 'Filtering', 'Aggregation', 'Cleansing']
@@ -86,6 +87,7 @@ export default function PipelineDesignerLayer() {
   const [runningId, setRunningId] = useState<string | null>(null)
   const [testingPipelineId, setTestingPipelineId] = useState<string | null>(null)
   const [mappingPipelineId, setMappingPipelineId] = useState<string | null>(null)
+  const [visualizingPipelineId, setVisualizingPipelineId] = useState<string | null>(null)
 
   const addPipeline = () => {
     if (newName && newSource && newDestination) {
@@ -182,6 +184,12 @@ export default function PipelineDesignerLayer() {
 
   return (
     <div className="space-y-6">
+      <PipelineExecutionVisualizer
+        isOpen={!!visualizingPipelineId}
+        pipeline={visualizingPipelineId ? pipelines.find((p) => p.id === visualizingPipelineId) || null : null}
+        onClose={() => setVisualizingPipelineId(null)}
+      />
+
       <PipelineTestModal
         isOpen={!!testingPipelineId}
         pipelineName={testingPipeline?.name || ''}
@@ -430,6 +438,15 @@ export default function PipelineDesignerLayer() {
                     title="Configure pipeline"
                   >
                     <Settings className="w-4 h-4" />
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setVisualizingPipelineId(pipeline.id)}
+                    title="Visualize pipeline execution"
+                  >
+                    <Activity className="w-4 h-4 mr-1" />
+                    Observe
                   </Button>
                   <Button
                     size="sm"
