@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { Plus, Trash2, CheckCircle2, AlertCircle, Plug, X, Save, Edit, Lock, Eye } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import {
   Select,
@@ -14,7 +15,7 @@ import {
 import DataSourceAuthModal from '@/components/modals/data-source-auth-modal'
 import SampleDataPreviewModal from '@/components/modals/sample-data-preview-modal'
 
-const MOCK_DATA_SOURCES = [
+const MOCK_DATA_SOURCES: Array<{ id: string; name: string; type: string; sourceType: string; role?: 'source' | 'destination'; status: string; lastConnected: string }> = [
   {
     id: 'src_1',
     name: 'SAP ERP System',
@@ -60,6 +61,7 @@ const MOCK_DATA_SOURCES = [
 export default function DataSourcesLayer() {
   const [sources, setSources] = useState(MOCK_DATA_SOURCES)
   const [showAddForm, setShowAddForm] = useState(false)
+  const [newSourceRole, setNewSourceRole] = useState<'source' | 'destination'>('source')
   const [newSourceName, setNewSourceName] = useState('')
   const [newSourceType, setNewSourceType] = useState('')
   const [newSourceHost, setNewSourceHost] = useState('')
@@ -110,6 +112,7 @@ export default function DataSourcesLayer() {
           name: newSourceName,
           type: newSourceType,
           sourceType: newSourceType.toLowerCase(),
+          role: newSourceRole,
           status: 'disconnected',
           lastConnected: 'Never',
         },
@@ -229,17 +232,21 @@ export default function DataSourcesLayer() {
               Manage connections to enterprise systems, databases, APIs, and file sources.
             </p>
           </div>
-          <Button onClick={() => setShowAddForm(!showAddForm)} className="px-6">
-            <Plus className="w-4 h-4 mr-2" />
-            Add Source
-          </Button>
+          <div className="flex gap-2">
+            <Button onClick={() => { setNewSourceRole('source'); setShowAddForm(!showAddForm) }} variant="outline" className="px-4">
+              <Plus className="w-4 h-4 mr-2" /> Add Source
+            </Button>
+            <Button onClick={() => { setNewSourceRole('destination'); setShowAddForm(true) }} className="px-4">
+              <Plus className="w-4 h-4 mr-2" /> Add Destination
+            </Button>
+          </div>
         </div>
 
         {showAddForm && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-card rounded-lg border border-border p-6 max-w-md w-full space-y-4">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold">Add New Data Source</h3>
+                <h3 className="text-lg font-semibold">Add New {newSourceRole === 'destination' ? 'Destination' : 'Data'} Source</h3>
                 <Button
                   size="sm"
                   variant="ghost"
@@ -310,6 +317,11 @@ export default function DataSourcesLayer() {
             </div>
           </div>
         )}
+
+        <div className="mb-5 rounded-lg border border-primary/20 bg-primary/5 p-4">
+          <div className="flex items-center justify-between"><div><h3 className="font-semibold">Destinations</h3><p className="text-sm text-muted-foreground">Where final pipeline data is stored. KMPlus Nexus is always available by default.</p></div><span className="rounded-full bg-primary/10 px-3 py-1 text-xs text-primary">KMPlus Nexus · Default</span></div>
+          <div className="mt-3 flex flex-wrap gap-2">{sources.filter((source) => (source as any).role === 'destination').map((source) => <Badge key={source.id} variant="outline">{source.name} · {source.status}</Badge>)}<Badge variant="secondary">KMPlus Nexus</Badge></div>
+        </div>
 
         <div className="grid gap-3">
           {sources.map((source) => (

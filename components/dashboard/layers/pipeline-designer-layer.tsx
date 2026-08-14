@@ -17,6 +17,16 @@ import ColumnMappingModal from '@/components/modals/column-mapping-modal'
 import PipelineExecutionVisualizer from '@/components/modals/pipeline-execution-visualizer'
 
 const DATA_SOURCES = ['SAP ERP System', 'Oracle Database', 'MySQL Production', 'REST API Gateway', 'CSV File Uploads']
+const DESTINATIONS = ['KMPlus Nexus', 'Oracle Database', 'MySQL Production', 'Snowflake Warehouse', 'Data Catalog']
+const SCHEMAS: Record<string, Array<{ name: string; type: string }>> = {
+  'SAP ERP System': [{ name: 'employee_id', type: 'VARCHAR' }, { name: 'department', type: 'VARCHAR' }, { name: 'effective_date', type: 'DATE' }],
+  'REST API Gateway': [{ name: 'event_id', type: 'VARCHAR' }, { name: 'amount', type: 'DECIMAL' }, { name: 'created_at', type: 'TIMESTAMP' }],
+  'Oracle Database': [{ name: 'employee_id', type: 'VARCHAR' }, { name: 'department_name', type: 'VARCHAR' }, { name: 'loaded_at', type: 'TIMESTAMP' }],
+  'KMPlus Nexus': [{ name: 'employee_id', type: 'VARCHAR' }, { name: 'department', type: 'VARCHAR' }, { name: 'effective_date', type: 'DATE' }],
+  'MySQL Production': [{ name: 'id', type: 'BIGINT' }, { name: 'payload', type: 'JSON' }, { name: 'created_at', type: 'DATETIME' }],
+  'Snowflake Warehouse': [{ name: 'EMPLOYEE_ID', type: 'TEXT' }, { name: 'DEPARTMENT', type: 'TEXT' }, { name: 'LOADED_AT', type: 'TIMESTAMP_NTZ' }],
+  'Data Catalog': [{ name: 'dataset_id', type: 'VARCHAR' }, { name: 'record_count', type: 'INTEGER' }],
+}
 const TRANSFORMATIONS = ['None', 'Mapping', 'Filtering', 'Aggregation', 'Cleansing']
 const SCHEDULES = ['Manual', 'Hourly', 'Daily', 'Weekly', 'Monthly']
 
@@ -76,6 +86,7 @@ export default function PipelineDesignerLayer() {
   const [newDestination, setNewDestination] = useState('')
   const [newTransformation, setNewTransformation] = useState('None')
   const [newSchedule, setNewSchedule] = useState('Manual')
+  const [schemaTable, setSchemaTable] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [configuringId, setConfiguringId] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
@@ -271,7 +282,7 @@ export default function PipelineDesignerLayer() {
                     <SelectValue placeholder="Destination" />
                   </SelectTrigger>
                   <SelectContent>
-                    {DATA_SOURCES.map((dst) => (
+                    {DESTINATIONS.map((dst) => (
                       <SelectItem key={dst} value={dst}>
                         {dst}
                       </SelectItem>
@@ -279,6 +290,8 @@ export default function PipelineDesignerLayer() {
                   </SelectContent>
                 </Select>
               </div>
+
+              <div className="rounded-lg border border-border bg-muted/20 p-4"><div className="mb-3 flex items-center justify-between"><div><div className="font-medium">Schema and destination mapping</div><div className="text-xs text-muted-foreground">Source and destination columns are read from the connected schemas.</div></div><select value={schemaTable} onChange={(e) => setSchemaTable(e.target.value)} className="rounded-md border border-input bg-background p-2 text-sm"><option value="">Select destination table</option><option>employee_master</option><option>organization</option><option>kpi_daily</option></select></div>{newSource && newDestination && <div className="grid gap-2 md:grid-cols-2"><div className="rounded border border-border p-3"><div className="mb-2 text-xs font-semibold uppercase text-muted-foreground">{newSource} · source</div>{(SCHEMAS[newSource] || []).map((column) => <div key={column.name} className="flex justify-between border-b border-border/50 py-1 text-sm"><span>{column.name}</span><span className="font-mono text-xs text-muted-foreground">{column.type}</span></div>)}</div><div className="rounded border border-border p-3"><div className="mb-2 text-xs font-semibold uppercase text-muted-foreground">{newDestination} · destination</div>{(SCHEMAS[newDestination] || []).map((column) => <div key={column.name} className="flex justify-between border-b border-border/50 py-1 text-sm"><span>{column.name}</span><span className="font-mono text-xs text-muted-foreground">{column.type}</span></div>)}</div></div>}</div>
 
               <div className="grid grid-cols-2 gap-4">
                 <Select value={newTransformation} onValueChange={(value) => value && setNewTransformation(value)}>
