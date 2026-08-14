@@ -88,6 +88,7 @@ export default function PipelineDesignerLayer() {
   const [testingPipelineId, setTestingPipelineId] = useState<string | null>(null)
   const [mappingPipelineId, setMappingPipelineId] = useState<string | null>(null)
   const [visualizingPipelineId, setVisualizingPipelineId] = useState<string | null>(null)
+  const [pipelineMappings, setPipelineMappings] = useState<Record<string, any[]>>({})
 
   const addPipeline = () => {
     if (newName && newSource && newDestination) {
@@ -186,7 +187,7 @@ export default function PipelineDesignerLayer() {
     <div className="space-y-6">
       <PipelineExecutionVisualizer
         isOpen={!!visualizingPipelineId}
-        pipeline={visualizingPipelineId ? pipelines.find((p) => p.id === visualizingPipelineId) || null : null}
+        pipeline={visualizingPipelineId ? (() => { const current = pipelines.find((p) => p.id === visualizingPipelineId); return current ? { ...current, mappings: pipelineMappings[current.id] } : null })() : null}
         onClose={() => setVisualizingPipelineId(null)}
       />
 
@@ -205,8 +206,8 @@ export default function PipelineDesignerLayer() {
         isOpen={!!mappingPipelineId}
         pipelineName={mappingPipeline?.name || ''}
         onClose={() => setMappingPipelineId(null)}
-        onSave={(mappings) => {
-          console.log('Mappings saved:', mappings)
+        onSave={(payload) => {
+          if (mappingPipelineId) setPipelineMappings((current) => ({ ...current, [mappingPipelineId]: payload.mappings }))
           setMappingPipelineId(null)
         }}
       />
@@ -252,7 +253,7 @@ export default function PipelineDesignerLayer() {
               />
 
               <div className="grid grid-cols-2 gap-4">
-                <Select value={newSource} onValueChange={setNewSource}>
+                <Select value={newSource} onValueChange={(value) => value && setNewSource(value)}>
                   <SelectTrigger>
                     <SelectValue placeholder="Source" />
                   </SelectTrigger>
@@ -265,7 +266,7 @@ export default function PipelineDesignerLayer() {
                   </SelectContent>
                 </Select>
 
-                <Select value={newDestination} onValueChange={setNewDestination}>
+                <Select value={newDestination} onValueChange={(value) => value && setNewDestination(value)}>
                   <SelectTrigger>
                     <SelectValue placeholder="Destination" />
                   </SelectTrigger>
@@ -280,7 +281,7 @@ export default function PipelineDesignerLayer() {
               </div>
 
               <div className="grid grid-cols-2 gap-4">
-                <Select value={newTransformation} onValueChange={setNewTransformation}>
+                <Select value={newTransformation} onValueChange={(value) => value && setNewTransformation(value)}>
                   <SelectTrigger>
                     <SelectValue placeholder="Transformation" />
                   </SelectTrigger>
@@ -293,7 +294,7 @@ export default function PipelineDesignerLayer() {
                   </SelectContent>
                 </Select>
 
-                <Select value={newSchedule} onValueChange={setNewSchedule}>
+                <Select value={newSchedule} onValueChange={(value) => value && setNewSchedule(value)}>
                   <SelectTrigger>
                     <SelectValue placeholder="Schedule" />
                   </SelectTrigger>
@@ -351,7 +352,7 @@ export default function PipelineDesignerLayer() {
               />
 
               <div className="grid grid-cols-2 gap-4">
-                <Select value={editSource} onValueChange={setEditSource}>
+                <Select value={editSource} onValueChange={(value) => value && setEditSource(value)}>
                   <SelectTrigger>
                     <SelectValue placeholder="Source" />
                   </SelectTrigger>
@@ -364,7 +365,7 @@ export default function PipelineDesignerLayer() {
                   </SelectContent>
                 </Select>
 
-                <Select value={editDestination} onValueChange={setEditDestination}>
+                <Select value={editDestination} onValueChange={(value) => value && setEditDestination(value)}>
                   <SelectTrigger>
                     <SelectValue placeholder="Destination" />
                   </SelectTrigger>
@@ -378,7 +379,7 @@ export default function PipelineDesignerLayer() {
                 </Select>
               </div>
 
-              <Select value={editSchedule} onValueChange={setEditSchedule}>
+              <Select value={editSchedule} onValueChange={(value) => value && setEditSchedule(value)}>
                 <SelectTrigger>
                   <SelectValue placeholder="Schedule" />
                 </SelectTrigger>

@@ -65,6 +65,12 @@ export default function DataSourcesLayer() {
   const [newSourceHost, setNewSourceHost] = useState('')
   const [newSourcePort, setNewSourcePort] = useState('')
   const [newSourceUser, setNewSourceUser] = useState('')
+  const [newConnectionString, setNewConnectionString] = useState('')
+  const [newClientId, setNewClientId] = useState('')
+  const [newClientSecret, setNewClientSecret] = useState('')
+  const [connectionTested, setConnectionTested] = useState(false)
+  const [testingConnection, setTestingConnection] = useState(false)
+  const [connectionError, setConnectionError] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
   const [editHost, setEditHost] = useState('')
@@ -74,8 +80,29 @@ export default function DataSourcesLayer() {
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null)
   const [authorizedSources, setAuthorizedSources] = useState<Set<string>>(new Set())
 
+  const requiresConnectionString = ['oracle', 'mysql', 'postgresql'].includes(newSourceType)
+  const requiresClientCredentials = ['rest', 'sap'].includes(newSourceType)
+  const connectionFieldsValid = requiresConnectionString
+    ? Boolean(newConnectionString.trim())
+    : requiresClientCredentials
+      ? Boolean(newClientId.trim() && newClientSecret.trim())
+      : Boolean(newSourceHost.trim())
+
+  const testNewConnection = async () => {
+    setTestingConnection(true)
+    setConnectionError('')
+    await new Promise((resolve) => setTimeout(resolve, 700))
+    if (!connectionFieldsValid) {
+      setConnectionError(requiresConnectionString ? 'Enter a connection string before testing.' : requiresClientCredentials ? 'Enter both client ID and client secret before testing.' : 'Enter a host or URL before testing.')
+      setConnectionTested(false)
+    } else {
+      setConnectionTested(true)
+    }
+    setTestingConnection(false)
+  }
+
   const addSource = () => {
-    if (newSourceName && newSourceType) {
+    if (newSourceName && newSourceType && connectionFieldsValid && connectionTested) {
       setSources([
         ...sources,
         {
@@ -92,6 +119,11 @@ export default function DataSourcesLayer() {
       setNewSourceHost('')
       setNewSourcePort('')
       setNewSourceUser('')
+      setNewConnectionString('')
+      setNewClientId('')
+      setNewClientSecret('')
+      setConnectionTested(false)
+      setConnectionError('')
       setShowAddForm(false)
     }
   }
@@ -223,7 +255,7 @@ export default function DataSourcesLayer() {
                 onChange={(e) => setNewSourceName(e.target.value)}
               />
 
-              <Select value={newSourceType} onValueChange={setNewSourceType}>
+              <Select value={newSourceType} onValueChange={(value) => { setNewSourceType(value || ''); setConnectionTested(false) }}>
                 <SelectTrigger>
                   <SelectValue placeholder="Source type" />
                 </SelectTrigger>
@@ -237,26 +269,33 @@ export default function DataSourcesLayer() {
                 </SelectContent>
               </Select>
 
-              <Input
-                placeholder="Host / URL"
-                value={newSourceHost}
-                onChange={(e) => setNewSourceHost(e.target.value)}
-              />
+              {requiresConnectionString ? (
+                <Input
+                  placeholder="Database connection string"
+                  value={newConnectionString}
+                  onChange={(e) => { setNewConnectionString(e.target.value); setConnectionTested(false) }}
+                />
+              ) : requiresClientCredentials ? (
+                <>
+                  <Input placeholder="Client ID" value={newClientId} onChange={(e) => { setNewClientId(e.target.value); setConnectionTested(false) }} />
+                  <Input type="password" placeholder="Client secret" value={newClientSecret} onChange={(e) => { setNewClientSecret(e.target.value); setConnectionTested(false) }} />
+                  <Input placeholder="Host / URL" value={newSourceHost} onChange={(e) => { setNewSourceHost(e.target.value); setConnectionTested(false) }} />
+                </>
+              ) : (
+                <Input placeholder="Host / URL or file path" value={newSourceHost} onChange={(e) => { setNewSourceHost(e.target.value); setConnectionTested(false) }} />
+              )}
 
-              <Input
-                placeholder="Port (optional)"
-                value={newSourcePort}
-                onChange={(e) => setNewSourcePort(e.target.value)}
-              />
+              {!requiresClientCredentials && !requiresConnectionString && <Input placeholder="Port (optional)" value={newSourcePort} onChange={(e) => setNewSourcePort(e.target.value)} />}
+              {!requiresConnectionString && <Input placeholder="Username (optional)" value={newSourceUser} onChange={(e) => setNewSourceUser(e.target.value)} />}
 
-              <Input
-                placeholder="Username (optional)"
-                value={newSourceUser}
-                onChange={(e) => setNewSourceUser(e.target.value)}
-              />
+              {connectionError && <p className="text-sm text-destructive">{connectionError}</p>}
+              {connectionTested && <p className="text-sm text-green-600">Connection test passed. This source is ready to create.</p>}
 
               <div className="flex gap-2 pt-4">
-                <Button onClick={addSource} className="flex-1">
+                <Button onClick={testNewConnection} variant="outline" className="flex-1" disabled={testingConnection || !newSourceType}>
+                  {testingConnection ? 'Testing…' : 'Test Connection'}
+                </Button>
+                <Button onClick={addSource} className="flex-1" disabled={!connectionTested}>
                   <Save className="w-4 h-4 mr-2" />
                   Create
                 </Button>

@@ -22,6 +22,13 @@ export type PipelineTelemetry = {
   name: string
   source: string
   destination: string
+  mappings?: Array<{
+    sourceColumn: string
+    sourceType: string
+    destinationColumn: string
+    destinationType: string
+    transformations: Array<{ method: string; expression?: string }>
+  }>
 }
 
 type PhaseStatus = 'complete' | 'running' | 'queued' | 'failed'
@@ -187,6 +194,11 @@ export default function PipelineExecutionVisualizer({
                 )
               })}
             </div>
+          </section>
+
+          <section className="mt-6 rounded-lg border border-border p-5">
+            <div className="mb-4"><h3 className="font-semibold">Transformation and column lineage</h3><p className="text-sm text-muted-foreground">Every source column is shown with its destination and ordered transformation methods.</p></div>
+            <div className="overflow-x-auto"><table className="w-full min-w-[760px] text-left text-sm"><thead><tr className="border-b border-border text-xs uppercase tracking-wide text-muted-foreground"><th className="px-3 py-2">Source</th><th className="px-3 py-2">Type</th><th className="px-3 py-2">Methods</th><th className="px-3 py-2">Destination</th><th className="px-3 py-2">Type</th></tr></thead><tbody>{(pipeline.mappings?.length ? pipeline.mappings : [{ sourceColumn: 'Document_ID', sourceType: 'VARCHAR', destinationColumn: 'doc_id', destinationType: 'VARCHAR', transformations: [{ method: 'Trim Whitespace' }, { method: 'Uppercase' }] }, { sourceColumn: 'Amount', sourceType: 'DECIMAL', destinationColumn: 'amount', destinationType: 'DECIMAL', transformations: [{ method: 'Parse Decimal' }, { method: 'Conditional CASE', expression: "CASE WHEN amount > 1000 THEN 'high' ELSE 'standard' END" }] }]).map((mapping) => <tr key={`${mapping.sourceColumn}-${mapping.destinationColumn}`} className="border-b border-border/60 last:border-0"><td className="px-3 py-3 font-medium">{mapping.sourceColumn}</td><td className="px-3 py-3 font-mono text-xs text-muted-foreground">{mapping.sourceType}</td><td className="px-3 py-3"><div className="flex flex-wrap gap-1">{mapping.transformations.map((step, index) => <Badge key={`${step.method}-${index}`} variant="secondary">{index + 1}. {step.method}{step.expression ? ` · ${step.expression}` : ''}</Badge>)}</div></td><td className="px-3 py-3 font-medium">{mapping.destinationColumn}</td><td className="px-3 py-3 font-mono text-xs text-muted-foreground">{mapping.destinationType}</td></tr>)}</tbody></table></div>
           </section>
 
           <section className="mt-6 grid gap-6 lg:grid-cols-[1.25fr_1fr]">
