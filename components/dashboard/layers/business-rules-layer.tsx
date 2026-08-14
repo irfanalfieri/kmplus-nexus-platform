@@ -198,7 +198,7 @@ export default function BusinessRulesLayer() {
               />
 
               <div className="grid grid-cols-2 gap-4">
-                <Select value={formData.ruleType} onValueChange={(val) => setFormData({ ...formData, ruleType: val })}>
+                <Select value={formData.ruleType} onValueChange={(val) => val && setFormData({ ...formData, ruleType: val })}>
                   <SelectTrigger>
                     <SelectValue placeholder="Rule type" />
                   </SelectTrigger>
@@ -210,7 +210,7 @@ export default function BusinessRulesLayer() {
                   </SelectContent>
                 </Select>
 
-                <Select value={formData.priority} onValueChange={(val) => setFormData({ ...formData, priority: val })}>
+                <Select value={formData.priority} onValueChange={(val) => val && setFormData({ ...formData, priority: val })}>
                   <SelectTrigger>
                     <SelectValue placeholder="Priority" />
                   </SelectTrigger>
@@ -271,7 +271,7 @@ export default function BusinessRulesLayer() {
               />
 
               <div className="grid grid-cols-2 gap-4">
-                <Select value={formData.ruleType} onValueChange={(val) => setFormData({ ...formData, ruleType: val })}>
+                <Select value={formData.ruleType} onValueChange={(val) => val && setFormData({ ...formData, ruleType: val })}>
                   <SelectTrigger>
                     <SelectValue placeholder="Rule type" />
                   </SelectTrigger>
@@ -283,7 +283,7 @@ export default function BusinessRulesLayer() {
                   </SelectContent>
                 </Select>
 
-                <Select value={formData.priority} onValueChange={(val) => setFormData({ ...formData, priority: val })}>
+                <Select value={formData.priority} onValueChange={(val) => val && setFormData({ ...formData, priority: val })}>
                   <SelectTrigger>
                     <SelectValue placeholder="Priority" />
                   </SelectTrigger>

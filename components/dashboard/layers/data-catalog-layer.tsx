@@ -157,7 +157,7 @@ export default function DataCatalogLayer() {
                 onChange={(e) => setNewItemName(e.target.value)}
               />
 
-              <Select value={newItemType} onValueChange={setNewItemType}>
+              <Select value={newItemType} onValueChange={(value) => value && setNewItemType(value)}>
                 <SelectTrigger>
                   <SelectValue placeholder="Data type" />
                 </SelectTrigger>
@@ -168,7 +168,7 @@ export default function DataCatalogLayer() {
                 </SelectContent>
               </Select>
 
-              <Select value={newItemSource} onValueChange={setNewItemSource}>
+              <Select value={newItemSource} onValueChange={(value) => value && setNewItemSource(value)}>
                 <SelectTrigger>
                   <SelectValue placeholder="Source system" />
                 </SelectTrigger>
@@ -181,7 +181,7 @@ export default function DataCatalogLayer() {
                 </SelectContent>
               </Select>
 
-              <Select value={newItemClassification} onValueChange={setNewItemClassification}>
+              <Select value={newItemClassification} onValueChange={(value) => value && setNewItemClassification(value)}>
                 <SelectTrigger>
                   <SelectValue placeholder="Classification" />
                 </SelectTrigger>
@@ -216,7 +216,7 @@ export default function DataCatalogLayer() {
               className="pl-10"
             />
           </div>
-          <Select value={filterClassification} onValueChange={setFilterClassification}>
+          <Select value={filterClassification} onValueChange={(value) => value && setFilterClassification(value)}>
             <SelectTrigger className="w-48">
               <SelectValue />
             </SelectTrigger>
