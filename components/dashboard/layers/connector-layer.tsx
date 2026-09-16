@@ -1,140 +1,135 @@
 'use client'
 
-import { useState } from 'react'
-import { Plus, Download, Check } from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
+import { Download, Check, Lock } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { getConnectorMarketplace, purchaseConnector } from '@/app/actions/connectors'
 
-const CONNECTORS = [
-  {
-    id: 'conn_1',
-    name: 'SAP Connector',
-    category: 'Enterprise',
-    version: '2.1.0',
-    installed: true,
-    description: 'Connect to SAP ERP systems',
-  },
-  {
-    id: 'conn_2',
-    name: 'Oracle Connector',
-    category: 'Database',
-    version: '1.8.5',
-    installed: true,
-    description: 'Oracle database connectivity',
-  },
-  {
-    id: 'conn_3',
-    name: 'MySQL Connector',
-    category: 'Database',
-    version: '1.5.2',
-    installed: true,
-    description: 'MySQL and MariaDB support',
-  },
-  {
-    id: 'conn_4',
-    name: 'REST API Connector',
-    category: 'API',
-    version: '3.0.1',
-    installed: true,
-    description: 'Generic REST API integration',
-  },
-  {
-    id: 'conn_5',
-    name: 'Salesforce Connector',
-    category: 'SaaS',
-    version: '2.3.0',
-    installed: false,
-    description: 'Salesforce CRM integration',
-  },
-  {
-    id: 'conn_6',
-    name: 'Snowflake Connector',
-    category: 'Data Warehouse',
-    version: '1.9.2',
-    installed: false,
-    description: 'Snowflake data warehouse',
-  },
-]
+type MarketplaceConnector = Awaited<ReturnType<typeof getConnectorMarketplace>>[number]
 
 export default function ConnectorLayer() {
-  const [connectors, setConnectors] = useState(CONNECTORS)
-  const [installingId, setInstallingId] = useState<string | null>(null)
+  const [connectors, setConnectors] = useState<MarketplaceConnector[]>([])
+  const [loading, setLoading] = useState(true)
+  const [installingSlug, setInstallingSlug] = useState<string | null>(null)
+  const [error, setError] = useState('')
 
-  const handleInstall = (id: string) => {
-    setInstallingId(id)
-    setTimeout(() => {
-      setConnectors(
-        connectors.map((c) =>
-          c.id === id ? { ...c, installed: true } : c
-        )
-      )
-      setInstallingId(null)
-    }, 1500)
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      setConnectors(await getConnectorMarketplace())
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load connectors')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const handleInstall = async (slug: string) => {
+    setInstallingSlug(slug)
+    setError('')
+    try {
+      await purchaseConnector(slug)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Purchase failed')
+    } finally {
+      setInstallingSlug(null)
+    }
   }
 
   return (
     <div className="space-y-6">
-      <div className="bg-card rounded-lg border border-border p-6">
-        <h2 className="text-2xl font-bold mb-2">Layer 2: Connector Marketplace</h2>
-        <p className="text-muted-foreground mb-6">
-          Browse and manage available connectors for data integration.
+      <div className="rounded-lg border border-border bg-card p-6">
+        <h2 className="mb-2 text-2xl font-bold">Layer 2: Connector Marketplace</h2>
+        <p className="mb-2 text-muted-foreground">
+          Purchase and install connectors to unlock source types in Data Source Manager.
+        </p>
+        <p className="mb-6 text-sm text-muted-foreground">
+          Only installed connectors appear when adding a data source. Premium connectors require purchase before install.
         </p>
 
-        <div className="grid grid-cols-2 gap-4">
-          {connectors.map((connector) => (
-            <div
-              key={connector.id}
-              className="p-4 bg-muted/30 rounded-lg border border-border/50 hover:bg-muted/50 transition-colors"
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <div className="font-semibold">{connector.name}</div>
-                  <div className="text-xs text-muted-foreground mt-1">
-                    {connector.category} • v{connector.version}
-                  </div>
-                  <div className="text-sm text-muted-foreground mt-2">
-                    {connector.description}
-                  </div>
+        {error && (
+          <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+            {error}
+          </div>
+        )}
+
+        {loading ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">Loading marketplace…</p>
+        ) : (
+          <div className="grid grid-cols-2 gap-4">
+            {connectors.map((connector) => (
+              <div
+                key={connector.slug}
+                className="rounded-lg border border-border/50 bg-muted/30 p-4 transition-colors hover:bg-muted/50"
+              >
+                <div className="font-semibold">{connector.name}</div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {connector.category} · v{connector.version}
+                  {connector.premium ? ' · Premium' : ' · Included'}
+                </div>
+                <div className="mt-2 text-sm text-muted-foreground">{connector.description}</div>
+                <div className="mt-4 flex items-center gap-2">
+                  {connector.installed ? (
+                    <div className="flex flex-1 items-center justify-center gap-1 rounded bg-green-100 px-3 py-1 text-xs font-medium text-green-800">
+                      <Check className="h-3 w-3" />
+                      Installed
+                    </div>
+                  ) : connector.locked ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="flex-1"
+                      onClick={() => void handleInstall(connector.slug)}
+                      disabled={installingSlug === connector.slug}
+                    >
+                      <Download className="mr-1 h-3 w-3" />
+                      {installingSlug === connector.slug ? 'Purchasing…' : 'Purchase & Install'}
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="flex-1"
+                      onClick={() => void handleInstall(connector.slug)}
+                      disabled={installingSlug === connector.slug}
+                    >
+                      <Download className="mr-1 h-3 w-3" />
+                      {installingSlug === connector.slug ? 'Installing…' : 'Install'}
+                    </Button>
+                  )}
+                  {connector.locked && !connector.installed && (
+                    <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                      <Lock className="h-3 w-3" />
+                      Locked
+                    </span>
+                  )}
                 </div>
               </div>
-              <div className="mt-4 flex items-center gap-2">
-                {connector.installed ? (
-                  <div className="flex-1 px-3 py-1 bg-green-100 text-green-800 text-xs rounded font-medium flex items-center justify-center gap-1">
-                    <Check className="w-3 h-3" />
-                    Installed
-                  </div>
-                ) : (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="flex-1"
-                    onClick={() => handleInstall(connector.id)}
-                    disabled={installingId === connector.id}
-                  >
-                    <Download className="w-3 h-3 mr-1" />
-                    {installingId === connector.id ? 'Installing...' : 'Install'}
-                  </Button>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-3 gap-4">
-        <div className="bg-card rounded-lg border border-border p-4">
+        <div className="rounded-lg border border-border bg-card p-4">
           <div className="text-sm font-medium text-muted-foreground">Installed Connectors</div>
-          <div className="text-2xl font-bold mt-2">
+          <div className="mt-2 text-2xl font-bold">
             {connectors.filter((c) => c.installed).length}
           </div>
         </div>
-        <div className="bg-card rounded-lg border border-border p-4">
+        <div className="rounded-lg border border-border bg-card p-4">
           <div className="text-sm font-medium text-muted-foreground">Available</div>
-          <div className="text-2xl font-bold mt-2">{connectors.length}</div>
+          <div className="mt-2 text-2xl font-bold">{connectors.length}</div>
         </div>
-        <div className="bg-card rounded-lg border border-border p-4">
-          <div className="text-sm font-medium text-muted-foreground">Categories</div>
-          <div className="text-2xl font-bold mt-2">
-            {new Set(connectors.map((c) => c.category)).size}
+        <div className="rounded-lg border border-border bg-card p-4">
+          <div className="text-sm font-medium text-muted-foreground">Premium</div>
+          <div className="mt-2 text-2xl font-bold">
+            {connectors.filter((c) => c.premium).length}
           </div>
         </div>
       </div>

@@ -1,10 +1,11 @@
 'use client'
 
 import { useState } from 'react'
-import { X, Eye, EyeOff, CheckCircle2, AlertCircle, Loader } from 'lucide-react'
+import { X, Eye, EyeOff, CheckCircle2, Loader } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
+import { updateSupabaseSourceCredentials } from '@/app/actions/supabase-source'
 
 interface DataSourceAuthModalProps {
   isOpen: boolean
@@ -12,7 +13,7 @@ interface DataSourceAuthModalProps {
   sourceName: string
   sourceType: string
   onClose: () => void
-  onSuccess: (credentials: Record<string, string>) => void
+  onSuccess: () => void
 }
 
 export default function DataSourceAuthModal({
@@ -66,29 +67,64 @@ export default function DataSourceAuthModal({
       csv: [
         { label: 'File Path (optional)', type: 'text', required: false },
       ],
+      supabase: [
+        { label: 'Project URL', type: 'text', required: true },
+        { label: 'Secret Key', type: 'password', required: false },
+        { label: 'Publishable Key', type: 'password', required: false },
+        { label: 'Database URL (optional)', type: 'password', required: false },
+        { label: 'Schema', type: 'text', required: false },
+      ],
     }
     return fieldMap[type.toLowerCase()] || []
   }
 
-  const handleTestConnection = () => {
+  const handleTestConnection = async () => {
     setStep('testing')
     setTestMessage('Testing connection...')
-    
+
+    if (sourceType.toLowerCase() === 'supabase') {
+      try {
+        const secretKey = credentials['Secret Key'] ?? ''
+        const publishableKey = credentials['Publishable Key'] ?? ''
+        const result = await updateSupabaseSourceCredentials(sourceId, {
+          projectUrl: credentials['Project URL'] ?? '',
+          apiKey: secretKey || publishableKey,
+          publishableKey: publishableKey || undefined,
+          databaseUrl: credentials['Database URL (optional)'] || undefined,
+          schema: credentials['Schema'] || 'public',
+        })
+
+        if (!result.ok) {
+          setStep('credentials')
+          setTestMessage(result.message)
+          return
+        }
+
+        setTestMessage(
+          `Connected. Found ${result.scan.tables.length} tables in schema "${credentials['Schema'] || 'public'}".`
+        )
+        setStep('success')
+      } catch (error) {
+        setStep('credentials')
+        setTestMessage(error instanceof Error ? error.message : 'Connection failed.')
+      }
+      return
+    }
+
     setTimeout(() => {
-      const isValid = Object.values(credentials).some(v => v.trim() !== '')
+      const isValid = Object.values(credentials).some((v) => v.trim() !== '')
       if (isValid) {
         setTestMessage('Connection successful! Sample data loaded.')
-        setTimeout(() => {
-          setStep('success')
-        }, 1500)
+        setTimeout(() => setStep('success'), 1500)
       } else {
+        setStep('credentials')
         setTestMessage('Connection failed. Please check your credentials.')
       }
     }, 2000)
   }
 
   const handleConfirm = () => {
-    onSuccess(credentials)
+    onSuccess()
     onClose()
   }
 
