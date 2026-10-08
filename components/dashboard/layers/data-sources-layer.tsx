@@ -1,7 +1,7 @@
 'use client'
 
-import { useState } from 'react'
-import { Plus, Trash2, CheckCircle2, AlertCircle, Plug, X, Save, Edit, Lock, Eye } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Plus, Trash2, CheckCircle2, AlertCircle, X, Save, Edit, Eye, Lock } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -12,247 +12,278 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import DataSourceAuthModal from '@/components/modals/data-source-auth-modal'
-import SampleDataPreviewModal from '@/components/modals/sample-data-preview-modal'
+import ConnectorCredentialForm from '@/components/connectors/connector-credential-form'
+import SchemaExplorerModal from '@/components/modals/schema-explorer-modal'
+import { CONNECTOR_CATALOG, getConnectorDefinition } from '@/lib/connectors/catalog'
+import { REST_DEFAULTS, validateRestCredentials } from '@/lib/connectors/rest-client'
+import { validateSalesforceCredentials } from '@/lib/connectors/salesforce/oauth'
+import { SALESFORCE_DEFAULTS } from '@/components/connectors/salesforce-connector-form'
+import type { SchemaScanResult } from '@/lib/connectors/types'
+import { createDataSource, deleteDataSource, getDataSources } from '@/app/actions/data-sources'
+import { getInstalledConnectorSlugs } from '@/app/actions/connectors'
+import { previewRestConnection, testAndScanDataSource } from '@/app/actions/connector-source'
+import type { RestRequestPreview } from '@/lib/connectors/rest-client'
 
-const MOCK_DATA_SOURCES: Array<{ id: string; name: string; type: string; sourceType: string; role?: 'source' | 'destination'; status: string; lastConnected: string }> = [
-  {
-    id: 'src_1',
-    name: 'SAP ERP System',
-    type: 'enterprise',
-    sourceType: 'sap',
-    status: 'connected',
-    lastConnected: '2 hours ago',
-  },
-  {
-    id: 'src_2',
-    name: 'Oracle Database',
-    type: 'database',
-    sourceType: 'oracle',
-    status: 'connected',
-    lastConnected: '5 minutes ago',
-  },
-  {
-    id: 'src_3',
-    name: 'MySQL Production',
-    type: 'database',
-    sourceType: 'mysql',
-    status: 'connected',
-    lastConnected: '10 minutes ago',
-  },
-  {
-    id: 'src_4',
-    name: 'REST API Gateway',
-    type: 'api',
-    sourceType: 'rest',
-    status: 'connected',
-    lastConnected: 'Just now',
-  },
-  {
-    id: 'src_5',
-    name: 'CSV File Uploads',
-    type: 'file',
-    sourceType: 'csv',
-    status: 'disconnected',
-    lastConnected: '3 days ago',
-  },
-]
+type DataSourceRow = {
+  id: string
+  name: string
+  type: string
+  sourceType: string
+  role?: 'source' | 'destination'
+  status: string
+  lastConnected: string | Date | null
+  config?: Record<string, unknown> | null
+}
+
+function formatLastConnected(value: string | Date | null) {
+  if (!value) return 'Never'
+  if (typeof value === 'string') return value
+  const diffMs = Date.now() - value.getTime()
+  const minutes = Math.floor(diffMs / 60000)
+  if (minutes < 1) return 'Just now'
+  if (minutes < 60) return `${minutes} min ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`
+  return value.toLocaleDateString()
+}
+
+function credentialsValid(slug: string, values: Record<string, string>) {
+  if (slug === 'rest') return validateRestCredentials(values)
+  if (slug === 'salesforce') return validateSalesforceCredentials(values)
+  const def = getConnectorDefinition(slug)
+  if (!def) return false
+  return def.credentialFields
+    .filter((f) => f.required)
+    .every((f) => Boolean(values[f.key]?.trim()))
+}
+
+function defaultCredentialsForConnector(slug: string): Record<string, string> {
+  if (slug === 'rest') {
+    return Object.fromEntries(
+      Object.entries(REST_DEFAULTS).map(([key, value]) => [key, String(value)])
+    )
+  }
+  if (slug === 'salesforce') {
+    return { ...SALESFORCE_DEFAULTS }
+  }
+  return {}
+}
 
 export default function DataSourcesLayer() {
-  const [sources, setSources] = useState(MOCK_DATA_SOURCES)
+  const [sources, setSources] = useState<DataSourceRow[]>([])
+  const [installedSlugs, setInstalledSlugs] = useState<string[]>([])
+  const [loading, setLoading] = useState(true)
   const [showAddForm, setShowAddForm] = useState(false)
   const [newSourceRole, setNewSourceRole] = useState<'source' | 'destination'>('source')
   const [newSourceName, setNewSourceName] = useState('')
   const [newSourceType, setNewSourceType] = useState('')
-  const [newSourceHost, setNewSourceHost] = useState('')
-  const [newSourcePort, setNewSourcePort] = useState('')
-  const [newSourceUser, setNewSourceUser] = useState('')
-  const [newConnectionString, setNewConnectionString] = useState('')
-  const [newClientId, setNewClientId] = useState('')
-  const [newClientSecret, setNewClientSecret] = useState('')
+  const [credentialValues, setCredentialValues] = useState<Record<string, string>>({})
   const [connectionTested, setConnectionTested] = useState(false)
   const [testingConnection, setTestingConnection] = useState(false)
   const [connectionError, setConnectionError] = useState('')
+  const [connectionMessage, setConnectionMessage] = useState('')
+  const [pendingSchemaScan, setPendingSchemaScan] = useState<SchemaScanResult | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
-  const [editHost, setEditHost] = useState('')
-  const [editPort, setEditPort] = useState('')
-  const [authModalOpen, setAuthModalOpen] = useState(false)
-  const [previewModalOpen, setPreviewModalOpen] = useState(false)
+  const [explorerOpen, setExplorerOpen] = useState(false)
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null)
-  const [authorizedSources, setAuthorizedSources] = useState<Set<string>>(new Set())
+  const [restPreview, setRestPreview] = useState<RestRequestPreview | null>(null)
+  const [restSending, setRestSending] = useState(false)
 
-  const requiresConnectionString = ['oracle', 'mysql', 'postgresql'].includes(newSourceType)
-  const requiresClientCredentials = ['rest', 'sap'].includes(newSourceType)
-  const connectionFieldsValid = requiresConnectionString
-    ? Boolean(newConnectionString.trim())
-    : requiresClientCredentials
-      ? Boolean(newClientId.trim() && newClientSecret.trim())
-      : Boolean(newSourceHost.trim())
+  const installedConnectors = useMemo(
+    () => CONNECTOR_CATALOG.filter((c) => installedSlugs.includes(c.slug)),
+    [installedSlugs]
+  )
+
+  const selectedConnector = newSourceType ? getConnectorDefinition(newSourceType) : undefined
+  const fieldsValid = newSourceType ? credentialsValid(newSourceType, credentialValues) : false
+
+  const loadAll = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [rows, slugs] = await Promise.all([getDataSources(), getInstalledConnectorSlugs()])
+      setInstalledSlugs(slugs)
+      setSources(
+        rows.map((row) => ({
+          id: row.id,
+          name: row.name,
+          type: row.type,
+          sourceType: row.sourceType,
+          role: (row.config as { role?: 'source' | 'destination' })?.role,
+          status: row.status ?? 'disconnected',
+          lastConnected: row.lastConnected,
+          config: row.config as Record<string, unknown> | null,
+        }))
+      )
+    } catch {
+      setSources([])
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadAll()
+  }, [loadAll])
+
+  const resetForm = () => {
+    setNewSourceName('')
+    setNewSourceType('')
+    setCredentialValues({})
+    setConnectionTested(false)
+    setConnectionError('')
+    setConnectionMessage('')
+    setPendingSchemaScan(null)
+    setRestPreview(null)
+  }
+
+  const sendRestPreview = async () => {
+    if (!fieldsValid) {
+      setConnectionError('Fill required fields before sending.')
+      return
+    }
+    setRestSending(true)
+    setConnectionError('')
+    try {
+      const preview = await previewRestConnection(credentialValues)
+      setRestPreview(preview)
+      if (!preview.ok) setConnectionError(preview.message)
+    } catch (err) {
+      setConnectionError(err instanceof Error ? err.message : 'Request failed')
+    } finally {
+      setRestSending(false)
+    }
+  }
 
   const testNewConnection = async () => {
+    if (!newSourceType || !fieldsValid) {
+      setConnectionError('Fill all required connector fields before testing.')
+      return
+    }
+
     setTestingConnection(true)
     setConnectionError('')
-    await new Promise((resolve) => setTimeout(resolve, 700))
-    if (!connectionFieldsValid) {
-      setConnectionError(requiresConnectionString ? 'Enter a connection string before testing.' : requiresClientCredentials ? 'Enter both client ID and client secret before testing.' : 'Enter a host or URL before testing.')
-      setConnectionTested(false)
-    } else {
+    setConnectionMessage('')
+    setConnectionTested(false)
+    setPendingSchemaScan(null)
+    setRestPreview(null)
+
+    try {
+      const result = await testAndScanDataSource(newSourceType, credentialValues)
+      if ('preview' in result && result.preview) {
+        setRestPreview(result.preview as RestRequestPreview)
+      }
+      if (!result.ok) {
+        setConnectionError(result.message)
+        return
+      }
+
+      setPendingSchemaScan(result.scan)
+      setConnectionMessage(
+        `Connected. Found ${result.scan.tables.length} objects via ${result.scan.method}.`
+      )
       setConnectionTested(true)
+    } catch (err) {
+      setConnectionError(err instanceof Error ? err.message : 'Connection test failed')
+    } finally {
+      setTestingConnection(false)
     }
-    setTestingConnection(false)
   }
 
-  const addSource = () => {
-    if (newSourceName && newSourceType && connectionFieldsValid && connectionTested) {
-      setSources([
-        ...sources,
-        {
-          id: `src_${Date.now()}`,
-          name: newSourceName,
-          type: newSourceType,
-          sourceType: newSourceType.toLowerCase(),
+  const addSource = async () => {
+    if (!newSourceName || !newSourceType || !fieldsValid || !connectionTested) return
+
+    try {
+      const connector = getConnectorDefinition(newSourceType)
+      await createDataSource({
+        name: newSourceName,
+        type: connector?.category.toLowerCase() ?? newSourceType,
+        sourceType: newSourceType,
+        config: {
           role: newSourceRole,
-          status: 'disconnected',
-          lastConnected: 'Never',
+          ...(pendingSchemaScan ? { schemaScan: pendingSchemaScan } : {}),
         },
-      ])
-      setNewSourceName('')
-      setNewSourceType('')
-      setNewSourceHost('')
-      setNewSourcePort('')
-      setNewSourceUser('')
-      setNewConnectionString('')
-      setNewClientId('')
-      setNewClientSecret('')
-      setConnectionTested(false)
-      setConnectionError('')
+        credentials: credentialValues,
+      })
+
+      resetForm()
       setShowAddForm(false)
+      await loadAll()
+    } catch (err) {
+      setConnectionError(err instanceof Error ? err.message : 'Failed to create data source')
     }
   }
 
-  const startEdit = (id: string) => {
-    const source = sources.find((s) => s.id === id)
-    if (source) {
-      setEditingId(id)
-      setEditName(source.name)
-      setEditHost('')
-      setEditPort('')
+  const handleDelete = async (id: string) => {
+    try {
+      await deleteDataSource(id)
+      await loadAll()
+    } catch (err) {
+      setConnectionError(err instanceof Error ? err.message : 'Failed to delete source')
     }
-  }
-
-  const saveEdit = () => {
-    if (editingId && editName.trim()) {
-      setSources(
-        sources.map((s) =>
-          s.id === editingId ? { ...s, name: editName } : s
-        )
-      )
-      setEditingId(null)
-    }
-  }
-
-  const deleteSource = (id: string) => {
-    setSources(sources.filter((s) => s.id !== id))
-  }
-
-  const toggleConnection = (id: string) => {
-    setSources(
-      sources.map((s) =>
-        s.id === id
-          ? {
-              ...s,
-              status: s.status === 'connected' ? 'disconnected' : 'connected',
-              lastConnected:
-                s.status === 'connected' ? '3 days ago' : 'Just now',
-            }
-          : s
-      )
-    )
-  }
-
-  const openAuthModal = (id: string) => {
-    setSelectedSourceId(id)
-    setAuthModalOpen(true)
-  }
-
-  const handleAuthSuccess = (credentials: Record<string, string>) => {
-    if (selectedSourceId) {
-      setAuthorizedSources(new Set([...authorizedSources, selectedSourceId]))
-      setSources(
-        sources.map((s) =>
-          s.id === selectedSourceId
-            ? { ...s, status: 'connected', lastConnected: 'Just now' }
-            : s
-        )
-      )
-      setAuthModalOpen(false)
-      setTimeout(() => {
-        setPreviewModalOpen(true)
-      }, 500)
-    }
-  }
-
-  const handlePreviewClose = () => {
-    setPreviewModalOpen(false)
-    setSelectedSourceId(null)
   }
 
   const selectedSource = selectedSourceId ? sources.find((s) => s.id === selectedSourceId) : null
+  const selectedSchemaScan = selectedSource?.config?.schemaScan as SchemaScanResult | undefined
 
   return (
     <div className="space-y-6">
-      <DataSourceAuthModal
-        isOpen={authModalOpen}
+      <SchemaExplorerModal
+        isOpen={explorerOpen}
         sourceId={selectedSourceId || ''}
         sourceName={selectedSource?.name || ''}
         sourceType={selectedSource?.sourceType || ''}
+        initialScan={selectedSchemaScan ?? null}
         onClose={() => {
-          setAuthModalOpen(false)
+          setExplorerOpen(false)
           setSelectedSourceId(null)
+          void loadAll()
         }}
-        onSuccess={handleAuthSuccess}
+        onProceed={() => setExplorerOpen(false)}
       />
 
-      <SampleDataPreviewModal
-        isOpen={previewModalOpen}
-        sourceName={selectedSource?.name || ''}
-        sourceType={selectedSource?.sourceType || ''}
-        onClose={handlePreviewClose}
-        onProceed={() => {
-          setPreviewModalOpen(false)
-        }}
-      />
-
-      <div className="bg-card rounded-lg border border-border p-6">
-        <div className="flex items-center justify-between mb-6">
+      <div className="rounded-lg border border-border bg-card p-6">
+        <div className="mb-6 flex items-center justify-between">
           <div>
             <h2 className="text-2xl font-bold">Layer 1: Data Source Manager</h2>
-            <p className="text-muted-foreground mt-2">
-              Manage connections to enterprise systems, databases, APIs, and file sources.
+            <p className="mt-2 text-muted-foreground">
+              Add sources using installed connectors from the marketplace.
             </p>
           </div>
           <div className="flex gap-2">
-            <Button onClick={() => { setNewSourceRole('source'); setShowAddForm(!showAddForm) }} variant="outline" className="px-4">
-              <Plus className="w-4 h-4 mr-2" /> Add Source
+            <Button
+              variant="outline"
+              onClick={() => {
+                setNewSourceRole('source')
+                setShowAddForm(true)
+              }}
+            >
+              <Plus className="mr-2 h-4 w-4" /> Add Source
             </Button>
-            <Button onClick={() => { setNewSourceRole('destination'); setShowAddForm(true) }} className="px-4">
-              <Plus className="w-4 h-4 mr-2" /> Add Destination
+            <Button
+              onClick={() => {
+                setNewSourceRole('destination')
+                setShowAddForm(true)
+              }}
+            >
+              <Plus className="mr-2 h-4 w-4" /> Add Destination
             </Button>
           </div>
         </div>
 
         {showAddForm && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-card rounded-lg border border-border p-6 max-w-md w-full space-y-4">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold">Add New {newSourceRole === 'destination' ? 'Destination' : 'Data'} Source</h3>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setShowAddForm(false)}
-                >
-                  <X className="w-4 h-4" />
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+            <div
+              className={`max-h-[90vh] w-full space-y-4 overflow-y-auto rounded-lg border border-border bg-card p-6 ${
+                newSourceType === 'rest' ? 'max-w-4xl' : newSourceType === 'salesforce' ? 'max-w-xl' : 'max-w-lg'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-semibold">
+                  Add New {newSourceRole === 'destination' ? 'Destination' : 'Data'} Source
+                </h3>
+                <Button size="sm" variant="ghost" onClick={() => { setShowAddForm(false); resetForm() }}>
+                  <X className="h-4 w-4" />
                 </Button>
               </div>
 
@@ -262,55 +293,82 @@ export default function DataSourcesLayer() {
                 onChange={(e) => setNewSourceName(e.target.value)}
               />
 
-              <Select value={newSourceType} onValueChange={(value) => { setNewSourceType(value || ''); setConnectionTested(false) }}>
+              <Select
+                value={newSourceType}
+                onValueChange={(value) => {
+                  setNewSourceType(value || '')
+                  setCredentialValues(value ? defaultCredentialsForConnector(value) : {})
+                  setConnectionTested(false)
+                  setConnectionError('')
+                  setConnectionMessage('')
+                  setPendingSchemaScan(null)
+                  setRestPreview(null)
+                }}
+              >
                 <SelectTrigger>
-                  <SelectValue placeholder="Source type" />
+                  <SelectValue placeholder="Connector / source type" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="sap">SAP ERP</SelectItem>
-                  <SelectItem value="oracle">Oracle Database</SelectItem>
-                  <SelectItem value="mysql">MySQL Database</SelectItem>
-                  <SelectItem value="rest">REST API</SelectItem>
-                  <SelectItem value="csv">CSV Upload</SelectItem>
-                  <SelectItem value="postgresql">PostgreSQL</SelectItem>
+                  {installedConnectors.map((c) => (
+                    <SelectItem key={c.slug} value={c.slug}>
+                      {c.name}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
 
-              {requiresConnectionString ? (
-                <Input
-                  placeholder="Database connection string"
-                  value={newConnectionString}
-                  onChange={(e) => { setNewConnectionString(e.target.value); setConnectionTested(false) }}
-                />
-              ) : requiresClientCredentials ? (
-                <>
-                  <Input placeholder="Client ID" value={newClientId} onChange={(e) => { setNewClientId(e.target.value); setConnectionTested(false) }} />
-                  <Input type="password" placeholder="Client secret" value={newClientSecret} onChange={(e) => { setNewClientSecret(e.target.value); setConnectionTested(false) }} />
-                  <Input placeholder="Host / URL" value={newSourceHost} onChange={(e) => { setNewSourceHost(e.target.value); setConnectionTested(false) }} />
-                </>
-              ) : (
-                <Input placeholder="Host / URL or file path" value={newSourceHost} onChange={(e) => { setNewSourceHost(e.target.value); setConnectionTested(false) }} />
+              {installedConnectors.length === 0 && (
+                <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Lock className="h-4 w-4" />
+                  Install connectors from Layer 2: Connector Marketplace first.
+                </p>
               )}
 
-              {!requiresClientCredentials && !requiresConnectionString && <Input placeholder="Port (optional)" value={newSourcePort} onChange={(e) => setNewSourcePort(e.target.value)} />}
-              {!requiresConnectionString && <Input placeholder="Username (optional)" value={newSourceUser} onChange={(e) => setNewSourceUser(e.target.value)} />}
+              {selectedConnector && (
+                <div className="space-y-3 rounded-lg border border-border/60 bg-muted/20 p-4">
+                  <p className="text-sm font-medium">
+                    {selectedConnector.name}
+                    {newSourceType === 'rest'
+                      ? ' — scheme, auth & connection'
+                      : newSourceType === 'salesforce'
+                        ? ' — OAuth web login'
+                        : ' credentials'}
+                  </p>
+                  <ConnectorCredentialForm
+                    connectorSlug={newSourceType}
+                    fields={selectedConnector.credentialFields}
+                    values={credentialValues}
+                    onChange={(key, value) => {
+                      setCredentialValues((prev) => ({ ...prev, [key]: value }))
+                      setConnectionTested(false)
+                      setRestPreview(null)
+                    }}
+                    restPreview={restPreview}
+                    restSending={restSending}
+                    onRestSend={newSourceType === 'rest' ? () => void sendRestPreview() : undefined}
+                  />
+                </div>
+              )}
 
               {connectionError && <p className="text-sm text-destructive">{connectionError}</p>}
-              {connectionTested && <p className="text-sm text-green-600">Connection test passed. This source is ready to create.</p>}
+              {connectionTested && connectionMessage && (
+                <p className="text-sm text-green-600">{connectionMessage}</p>
+              )}
 
-              <div className="flex gap-2 pt-4">
-                <Button onClick={testNewConnection} variant="outline" className="flex-1" disabled={testingConnection || !newSourceType}>
-                  {testingConnection ? 'Testing…' : 'Test Connection'}
-                </Button>
-                <Button onClick={addSource} className="flex-1" disabled={!connectionTested}>
-                  <Save className="w-4 h-4 mr-2" />
-                  Create
-                </Button>
+              <div className="flex gap-2 pt-2">
                 <Button
-                  onClick={() => setShowAddForm(false)}
                   variant="outline"
                   className="flex-1"
+                  disabled={testingConnection || !newSourceType}
+                  onClick={() => void testNewConnection()}
                 >
+                  {testingConnection ? 'Testing…' : 'Test Connection'}
+                </Button>
+                <Button className="flex-1" disabled={!connectionTested} onClick={() => void addSource()}>
+                  <Save className="mr-2 h-4 w-4" />
+                  Create
+                </Button>
+                <Button variant="outline" className="flex-1" onClick={() => { setShowAddForm(false); resetForm() }}>
                   Cancel
                 </Button>
               </div>
@@ -318,121 +376,70 @@ export default function DataSourcesLayer() {
           </div>
         )}
 
-        <div className="mb-5 rounded-lg border border-primary/20 bg-primary/5 p-4">
-          <div className="flex items-center justify-between"><div><h3 className="font-semibold">Destinations</h3><p className="text-sm text-muted-foreground">Where final pipeline data is stored. KMPlus Nexus is always available by default.</p></div><span className="rounded-full bg-primary/10 px-3 py-1 text-xs text-primary">KMPlus Nexus · Default</span></div>
-          <div className="mt-3 flex flex-wrap gap-2">{sources.filter((source) => (source as any).role === 'destination').map((source) => <Badge key={source.id} variant="outline">{source.name} · {source.status}</Badge>)}<Badge variant="secondary">KMPlus Nexus</Badge></div>
-        </div>
-
-        <div className="grid gap-3">
-          {sources.map((source) => (
-            <div
-              key={source.id}
-              className="flex items-center justify-between p-4 bg-muted/30 rounded-lg border border-border/50 hover:bg-muted/50 transition-colors"
-            >
-              <div className="flex-1">
-                {editingId === source.id ? (
-                  <div className="space-y-2">
-                    <Input
-                      value={editName}
-                      onChange={(e) => setEditName(e.target.value)}
-                      placeholder="Source name"
-                    />
-                    <div className="flex gap-2">
-                      <Button size="sm" onClick={saveEdit}>
-                        <Save className="w-4 h-4 mr-1" />
-                        Save
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => setEditingId(null)}
-                      >
-                        Cancel
-                      </Button>
-                    </div>
+        {loading ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">Loading data sources…</p>
+        ) : sources.length === 0 ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">
+            No data sources yet. Install a connector, then add your first source.
+          </p>
+        ) : (
+          <div className="grid gap-3">
+            {sources.map((source) => (
+              <div
+                key={source.id}
+                className="flex items-center justify-between rounded-lg border border-border/50 bg-muted/30 p-4"
+              >
+                <div>
+                  <div className="font-medium">{source.name}</div>
+                  <div className="text-sm text-muted-foreground">
+                    {getConnectorDefinition(source.sourceType)?.name ?? source.sourceType.toUpperCase()} · Last:{' '}
+                    {formatLastConnected(source.lastConnected)}
+                    {source.config?.schemaScan
+                      ? ` · ${(source.config.schemaScan as SchemaScanResult).tables.length} objects`
+                      : null}
                   </div>
-                ) : (
-                  <>
-                    <div className="font-medium">{source.name}</div>
-                    <div className="text-sm text-muted-foreground">
-                      Type: {source.sourceType.toUpperCase()} • Last: {source.lastConnected}
-                    </div>
-                  </>
-                )}
-              </div>
-              {editingId !== source.id && (
+                </div>
                 <div className="flex items-center gap-3">
                   {source.status === 'connected' ? (
-                    <div className="flex items-center gap-1 text-xs text-green-600">
-                      <CheckCircle2 className="w-4 h-4" />
-                      Connected
-                    </div>
+                    <span className="flex items-center gap-1 text-xs text-green-600">
+                      <CheckCircle2 className="h-4 w-4" /> Connected
+                    </span>
                   ) : (
-                    <div className="flex items-center gap-1 text-xs text-orange-600">
-                      <AlertCircle className="w-4 h-4" />
-                      Disconnected
-                    </div>
+                    <span className="flex items-center gap-1 text-xs text-orange-600">
+                      <AlertCircle className="h-4 w-4" /> Disconnected
+                    </span>
                   )}
-                  {authorizedSources.has(source.id) && (
+                  {source.status === 'connected' && (
                     <Button
+                      size="sm"
                       variant="outline"
-                      size="sm"
-                      onClick={() => setPreviewModalOpen(true)}
-                      title="View sample data"
-                      className="gap-1"
+                      onClick={() => {
+                        setSelectedSourceId(source.id)
+                        setExplorerOpen(true)
+                      }}
                     >
-                      <Eye className="w-4 h-4" />
-                      <span className="text-xs">Sample Data</span>
-                    </Button>
-                  )}
-                  {!authorizedSources.has(source.id) && source.status === 'disconnected' && (
-                    <Button
-                      size="sm"
-                      onClick={() => openAuthModal(source.id)}
-                      className="gap-1"
-                    >
-                      <Lock className="w-4 h-4" />
-                      <span className="text-xs">Authorize</span>
+                      <Eye className="mr-1 h-4 w-4" />
+                      Schema & Data
                     </Button>
                   )}
                   <Button
-                    variant="ghost"
                     size="sm"
-                    onClick={() => startEdit(source.id)}
-                    title="Edit source"
+                    variant="ghost"
+                    onClick={() => {
+                      setEditingId(source.id)
+                      setEditName(source.name)
+                    }}
                   >
-                    <Edit className="w-4 h-4" />
+                    <Edit className="h-4 w-4" />
                   </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => deleteSource(source.id)}
-                    title="Delete source"
-                  >
-                    <Trash2 className="w-4 h-4" />
+                  <Button size="sm" variant="ghost" onClick={() => void handleDelete(source.id)}>
+                    <Trash2 className="h-4 w-4" />
                   </Button>
                 </div>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="grid grid-cols-3 gap-4">
-        <div className="bg-card rounded-lg border border-border p-4">
-          <div className="text-sm font-medium text-muted-foreground">Connected Sources</div>
-          <div className="text-2xl font-bold mt-2">
-            {sources.filter((s) => s.status === 'connected').length}
+              </div>
+            ))}
           </div>
-        </div>
-        <div className="bg-card rounded-lg border border-border p-4">
-          <div className="text-sm font-medium text-muted-foreground">Total Sources</div>
-          <div className="text-2xl font-bold mt-2">{sources.length}</div>
-        </div>
-        <div className="bg-card rounded-lg border border-border p-4">
-          <div className="text-sm font-medium text-muted-foreground">Data Types</div>
-          <div className="text-2xl font-bold mt-2">5+</div>
-        </div>
+        )}
       </div>
     </div>
   )

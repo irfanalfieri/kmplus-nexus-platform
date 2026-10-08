@@ -25,16 +25,15 @@ export const session = pgTable('session', {
 export const account = pgTable('account', {
   id: text('id').primaryKey(),
   userId: text('userId').notNull(),
-  type: text('type').notNull(),
-  provider: text('provider').notNull(),
-  providerAccountId: text('providerAccountId').notNull(),
+  accountId: text('accountId').notNull(),
+  providerId: text('providerId').notNull(),
   refreshToken: text('refreshToken'),
   accessToken: text('accessToken'),
-  expiresAt: integer('expiresAt'),
-  tokenType: text('tokenType'),
+  accessTokenExpiresAt: timestamp('accessTokenExpiresAt'),
+  refreshTokenExpiresAt: timestamp('refreshTokenExpiresAt'),
   scope: text('scope'),
   idToken: text('idToken'),
-  sessionState: text('sessionState'),
+  password: text('password'),
   createdAt: timestamp('createdAt').notNull().defaultNow(),
   updatedAt: timestamp('updatedAt').notNull().defaultNow(),
 })
@@ -42,8 +41,8 @@ export const account = pgTable('account', {
 export const verification = pgTable('verification', {
   id: text('id').primaryKey(),
   identifier: text('identifier').notNull(),
-  token: text('token').notNull().unique(),
-  expires: timestamp('expires').notNull(),
+  value: text('value').notNull(),
+  expiresAt: timestamp('expiresAt').notNull(),
   createdAt: timestamp('createdAt').defaultNow(),
   updatedAt: timestamp('updatedAt').defaultNow(),
 })
@@ -63,7 +62,17 @@ export const dataSources = pgTable('data_sources', {
   updatedAt: timestamp('updatedAt').notNull().defaultNow(),
 })
 
-// Layer 2: Connector Marketplace
+// Layer 2: Connector Marketplace — per-user purchased/installed plugins
+export const connectorInstalls = pgTable('connector_installs', {
+  id: text('id').primaryKey(),
+  userId: text('userId').notNull(),
+  connectorSlug: text('connectorSlug').notNull(),
+  purchased: boolean('purchased').notNull().default(false),
+  installedAt: timestamp('installedAt'),
+  createdAt: timestamp('createdAt').notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt').notNull().defaultNow(),
+})
+
 export const connectors = pgTable('connectors', {
   id: text('id').primaryKey(),
   userId: text('userId').notNull(),
