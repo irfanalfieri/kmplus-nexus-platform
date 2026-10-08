@@ -13,6 +13,7 @@ import {
 } from '@/lib/connectors/runtime'
 import { parseRestConfig, previewRestRequest } from '@/lib/connectors/rest-client'
 import { resolveSalesforceAuth } from '@/lib/connectors/salesforce/oauth'
+import { decryptCredentials, encryptCredentials } from '@/lib/security/credentials'
 import { and, eq } from 'drizzle-orm'
 import { headers } from 'next/headers'
 import { revalidatePath } from 'next/cache'
@@ -23,9 +24,8 @@ async function getUserId() {
   return session.user.id
 }
 
-function parseCredentials(raw: unknown): ConnectorCredentials {
-  if (!raw || typeof raw !== 'object') return {}
-  const entries = Object.entries(raw as Record<string, unknown>)
+function parseCredentials(sourceId: string, stored: unknown): ConnectorCredentials {
+  const entries = Object.entries(decryptCredentials(sourceId, stored))
   return Object.fromEntries(
     entries.map(([key, value]) => [key, value == null ? '' : String(value)])
   )
@@ -62,7 +62,7 @@ export async function scanDataSourceSchema(sourceId: string) {
   if (!isConnectorSlug(source.sourceType)) throw new Error('Unsupported source type')
 
   await assertConnectorInstalled(source.sourceType)
-  let credentials = parseCredentials(source.credentials)
+  let credentials = parseCredentials(source.id, source.credentials)
 
   if (source.sourceType === 'salesforce') {
     const auth = await resolveSalesforceAuth(credentials)
@@ -75,7 +75,7 @@ export async function scanDataSourceSchema(sourceId: string) {
     .update(dataSources)
     .set({
       config: { ...(source.config as Record<string, unknown>), schemaScan: scan },
-      credentials,
+      credentials: encryptCredentials(sourceId, credentials),
       status: 'connected',
       lastConnected: new Date(),
       updatedAt: new Date(),
@@ -92,7 +92,7 @@ export async function getDataSourceTableSample(sourceId: string, tableName: stri
   if (!isConnectorSlug(source.sourceType)) throw new Error('Unsupported source type')
 
   await assertConnectorInstalled(source.sourceType)
-  const credentials = parseCredentials(source.credentials)
+  const credentials = parseCredentials(source.id, source.credentials)
   return sampleConnectorTable(source.sourceType as ConnectorSlug, credentials, tableName, limit)
 }
 

@@ -5,6 +5,7 @@ import { db } from '@/lib/db'
 import { dataSources, auditLogs } from '@/lib/db/schema'
 import { assertConnectorInstalled } from '@/app/actions/connectors'
 import { isConnectorSlug } from '@/lib/connectors/catalog'
+import { decryptCredentials, encryptCredentials } from '@/lib/security/credentials'
 import { eq, and, desc } from 'drizzle-orm'
 import { headers } from 'next/headers'
 import { revalidatePath } from 'next/cache'
@@ -17,8 +18,20 @@ async function getUserId() {
 
 export async function getDataSources() {
   const userId = await getUserId()
+  // Never send credentials to the client.
   return db
-    .select()
+    .select({
+      id: dataSources.id,
+      userId: dataSources.userId,
+      name: dataSources.name,
+      type: dataSources.type,
+      sourceType: dataSources.sourceType,
+      config: dataSources.config,
+      status: dataSources.status,
+      lastConnected: dataSources.lastConnected,
+      createdAt: dataSources.createdAt,
+      updatedAt: dataSources.updatedAt,
+    })
     .from(dataSources)
     .where(eq(dataSources.userId, userId))
     .orderBy(desc(dataSources.createdAt))
@@ -41,7 +54,7 @@ export async function createDataSource(data: any) {
     type: data.type,
     sourceType: data.sourceType,
     config: data.config || {},
-    credentials: data.credentials || {},
+    credentials: encryptCredentials(id, data.credentials || {}),
     status: hasSchemaScan ? 'connected' : 'disconnected',
     lastConnected: hasSchemaScan ? new Date() : undefined,
   })
@@ -73,7 +86,7 @@ export async function testConnection(id: string) {
     const { testConnectorConnection, scanConnectorSchema } = await import('@/lib/connectors/runtime')
     await assertConnectorInstalled(source.sourceType)
     const credentials = Object.fromEntries(
-      Object.entries((source.credentials ?? {}) as Record<string, unknown>).map(([k, v]) => [
+      Object.entries(decryptCredentials(source.id, source.credentials)).map(([k, v]) => [
         k,
         v == null ? '' : String(v),
       ])

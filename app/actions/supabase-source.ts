@@ -10,6 +10,7 @@ import {
   testSupabaseConnection,
 } from '@/lib/supabase/connector'
 import type { SupabaseCredentials } from '@/lib/supabase/types'
+import { decryptCredentials, encryptCredentials } from '@/lib/security/credentials'
 import { and, eq } from 'drizzle-orm'
 import { headers } from 'next/headers'
 import { revalidatePath } from 'next/cache'
@@ -20,8 +21,8 @@ async function getUserId() {
   return session.user.id
 }
 
-function parseCredentials(raw: unknown): SupabaseCredentials {
-  const value = raw as Record<string, string | undefined>
+function parseCredentials(sourceId: string, stored: unknown): SupabaseCredentials {
+  const value = decryptCredentials(sourceId, stored) as Record<string, string | undefined>
   const secretKey = value.apiKey?.trim() ?? value.secretKey?.trim() ?? ''
   const publishableKey = value.publishableKey?.trim() || undefined
   return {
@@ -62,7 +63,7 @@ export async function scanSupabaseSourceSchema(sourceId: string) {
     throw new Error('Source is not a Supabase connection')
   }
 
-  const credentials = parseCredentials(source.credentials)
+  const credentials = parseCredentials(source.id, source.credentials)
   const scan = await scanSupabaseSchema(credentials)
 
   await db
@@ -94,7 +95,7 @@ export async function getSupabaseTableSampleAction(
     throw new Error('Source is not a Supabase connection')
   }
 
-  const credentials = parseCredentials(source.credentials)
+  const credentials = parseCredentials(source.id, source.credentials)
   return fetchSupabaseTableSample(credentials, tableName, limit)
 }
 
@@ -114,7 +115,7 @@ export async function updateSupabaseSourceCredentials(
   await db
     .update(dataSources)
     .set({
-      credentials,
+      credentials: encryptCredentials(sourceId, credentials as unknown as Record<string, unknown>),
       config: { schemaScan: scan },
       status: 'connected',
       lastConnected: new Date(),
