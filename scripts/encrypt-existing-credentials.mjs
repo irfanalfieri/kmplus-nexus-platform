@@ -12,13 +12,15 @@ import pg from 'pg'
 import { decryptCredentials, encryptCredentials, isEncryptedCredentials } from '../lib/security/credentials.ts'
 
 const apply = process.argv.includes('--apply')
-const connectionString = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL
+const connectionString = process.env.DATABASE_URL
 if (!connectionString) {
   console.error('DATABASE_URL is not set.')
   process.exit(1)
 }
 
-const client = new pg.Client({ connectionString })
+// Same TLS handling as lib/db/index.ts.
+const ca = process.env.DATABASE_CA_CERT?.replace(/\\n/g, '\n')
+const client = new pg.Client({ connectionString, ssl: ca ? { ca } : { rejectUnauthorized: false } })
 await client.connect()
 
 const { rows } = await client.query('select "id", "credentials" from "data_sources"')

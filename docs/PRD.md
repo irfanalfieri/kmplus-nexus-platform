@@ -545,7 +545,7 @@ Nexus doesn't expose raw source systems. It publishes **standardized business do
 3. Server actions take `data: any`. Add **zod** validation for every action input.
 4. `getUserId()` is copy-pasted in every action file. Extract it to `lib/auth/session.ts` and later replace it with `requireWorkspaceRole(role)`.
 5. There are both `package-lock.json` and `pnpm-lock.yaml`. Vercel uses pnpm, so **use pnpm only** and delete `package-lock.json`.
-6. No migrations folder is committed (`drizzle/`). The production DB drifted from `schema.ts` (missing `connector_installs`, lowercase columns), which crashed the Connectors page. `scripts/db-repair-schema.mjs` fixes the drift; long term, generate and commit Drizzle migrations.
+6. ~~No migrations committed~~ Done: `drizzle/0000_init.sql` + `0001_enable_rls.sql`. Production moved from Neon (which had drifted and crashed the Connectors page) to Supabase on 2026-10-08. `scripts/db-repair-schema.mjs` remains as a drift check.
 7. No automated tests apart from the live scripts in `scripts/`.
 
 ---
@@ -558,7 +558,7 @@ Nexus doesn't expose raw source systems. It publishes **standardized business do
 | Framework | Next.js 16 (App Router), React 19, TypeScript |
 | UI | Tailwind CSS v4, shadcn/ui (`components/ui`), Base UI, lucide-react icons |
 | Auth | Better Auth (email/password) on Postgres |
-| Metadata DB | PostgreSQL via Drizzle ORM (`lib/db/schema.ts`), `pg` Pool |
+| Metadata DB | Supabase PostgreSQL (Tokyo, transaction pooler, RLS on all tables) via Drizzle ORM (`lib/db/schema.ts`), `pg` Pool |
 | Mutations | Next.js **Server Actions** in `app/actions/*` |
 | Connectors | Driver modules in `lib/connectors/drivers/*`, dispatched by `lib/connectors/runtime.ts` |
 | Hosting | Vercel (auto-deploy on push to `main`); originally scaffolded with v0 |

@@ -9,7 +9,7 @@
  * Dry run (prints SQL):  node --experimental-strip-types scripts/db-repair-schema.mjs
  * Apply:                 node --experimental-strip-types scripts/db-repair-schema.mjs --apply
  *
- * Requires DATABASE_URL (use the unpooled URL for Neon).
+ * Requires DATABASE_URL (Supabase transaction pooler URL works).
  */
 import pg from 'pg'
 import { is, SQL } from 'drizzle-orm'
@@ -17,7 +17,7 @@ import { PgDialect, PgTable, getTableConfig } from 'drizzle-orm/pg-core'
 import * as schema from '../lib/db/schema.ts'
 
 const apply = process.argv.includes('--apply')
-const connectionString = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL
+const connectionString = process.env.DATABASE_URL
 if (!connectionString) {
   console.error('DATABASE_URL is not set.')
   process.exit(1)
@@ -44,7 +44,9 @@ function columnDef(col, { forAdd = false, tableHasRows = false } = {}) {
   return parts.join(' ')
 }
 
-const client = new pg.Client({ connectionString })
+// Same TLS handling as lib/db/index.ts.
+const ca = process.env.DATABASE_CA_CERT?.replace(/\\n/g, '\n')
+const client = new pg.Client({ connectionString, ssl: ca ? { ca } : { rejectUnauthorized: false } })
 await client.connect()
 
 const statements = []
