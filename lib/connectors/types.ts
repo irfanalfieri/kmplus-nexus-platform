@@ -2,6 +2,7 @@ export type ConnectorSlug =
   | 'sap'
   | 'oracle'
   | 'mysql'
+  | 'postgres'
   | 'rest'
   | 'salesforce'
   | 'snowflake'

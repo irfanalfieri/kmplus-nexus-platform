@@ -17,6 +17,8 @@ export async function testConnectorConnection(
       return supabase.testSupabaseConnector(credentials)
     case 'mysql':
       return mysql.testMysqlConnection(credentials)
+    case 'postgres':
+      return postgres.testPostgresConnection(credentials)
     case 'oracle':
       return oracle.testOracleConnection(credentials)
     case 'rest':
@@ -41,6 +43,8 @@ export async function scanConnectorSchema(
       return supabase.scanSupabaseConnector(credentials)
     case 'mysql':
       return mysql.scanMysqlSchema(credentials)
+    case 'postgres':
+      return postgres.scanPostgresSchema(credentials)
     case 'oracle':
       return oracle.scanOracleSchema(credentials)
     case 'rest':
@@ -67,6 +71,8 @@ export async function sampleConnectorTable(
       return supabase.sampleSupabaseTable(credentials, tableName, limit)
     case 'mysql':
       return mysql.sampleMysqlTable(credentials, tableName, limit)
+    case 'postgres':
+      return postgres.samplePostgresTable(credentials, tableName, limit)
     case 'oracle':
       return oracle.sampleOracleTable(credentials, tableName, limit)
     case 'rest':

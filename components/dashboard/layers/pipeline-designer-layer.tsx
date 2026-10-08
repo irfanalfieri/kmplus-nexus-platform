@@ -1,537 +1,293 @@
 'use client'
 
-import { useState } from 'react'
-import { Plus, Play, Trash2, Edit, X, Save, Settings, TestTube, Activity } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Database, Edit, History, Loader2, Play, Plus, Trash2, Workflow } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import PipelineTestModal from '@/components/modals/pipeline-test-modal'
-import ColumnMappingModal from '@/components/modals/column-mapping-modal'
-import PipelineExecutionVisualizer from '@/components/modals/pipeline-execution-visualizer'
+import { deletePipeline, getBuilderOptions, getDatasetPreview, listPipelines, runPipelineNow, setPipelineEnabled } from '@/app/actions/pipelines'
+import { DEFAULT_SCHEDULE, definitionSchema, scheduleSchema, type PipelineStep } from '@/lib/pipelines/definition'
+import { describeSchedule } from '@/lib/pipelines/schedule'
+import { stepLabel } from '@/lib/pipelines/engine'
+import PipelineEditor, { blankPipeline, SampleTable, type EditablePipeline } from '@/components/pipelines/pipeline-editor'
+import RunHistory, { formatWhen, statusBadge } from '@/components/pipelines/run-history'
+import type { BuilderOptions } from '@/components/pipelines/step-editors'
 
-const DATA_SOURCES = ['SAP ERP System', 'Oracle Database', 'MySQL Production', 'REST API Gateway', 'CSV File Uploads']
-const DESTINATIONS = ['KMPlus Nexus', 'Oracle Database', 'MySQL Production', 'Snowflake Warehouse', 'Data Catalog']
-const SCHEMAS: Record<string, Array<{ name: string; type: string }>> = {
-  'SAP ERP System': [{ name: 'employee_id', type: 'VARCHAR' }, { name: 'department', type: 'VARCHAR' }, { name: 'effective_date', type: 'DATE' }],
-  'REST API Gateway': [{ name: 'event_id', type: 'VARCHAR' }, { name: 'amount', type: 'DECIMAL' }, { name: 'created_at', type: 'TIMESTAMP' }],
-  'Oracle Database': [{ name: 'employee_id', type: 'VARCHAR' }, { name: 'department_name', type: 'VARCHAR' }, { name: 'loaded_at', type: 'TIMESTAMP' }],
-  'KMPlus Nexus': [{ name: 'employee_id', type: 'VARCHAR' }, { name: 'department', type: 'VARCHAR' }, { name: 'effective_date', type: 'DATE' }],
-  'MySQL Production': [{ name: 'id', type: 'BIGINT' }, { name: 'payload', type: 'JSON' }, { name: 'created_at', type: 'DATETIME' }],
-  'Snowflake Warehouse': [{ name: 'EMPLOYEE_ID', type: 'TEXT' }, { name: 'DEPARTMENT', type: 'TEXT' }, { name: 'LOADED_AT', type: 'TIMESTAMP_NTZ' }],
-  'Data Catalog': [{ name: 'dataset_id', type: 'VARCHAR' }, { name: 'record_count', type: 'INTEGER' }],
+type PipelineRow = Awaited<ReturnType<typeof listPipelines>>[number]
+
+function toEditable(p: PipelineRow): EditablePipeline {
+  const def = definitionSchema.safeParse(p.config)
+  return {
+    id: p.id,
+    name: p.name,
+    description: p.description ?? '',
+    enabled: p.enabled ?? false,
+    schedule: scheduleSchema.safeParse(p.schedule ?? {}).data ?? DEFAULT_SCHEDULE,
+    steps: def.success ? def.data.steps : blankPipeline().steps,
+  }
 }
-const TRANSFORMATIONS = ['None', 'Mapping', 'Filtering', 'Aggregation', 'Cleansing']
-const SCHEDULES = ['Manual', 'Hourly', 'Daily', 'Weekly', 'Monthly']
-
-const MOCK_PIPELINES: Array<{ id: string; name: string; description: string; source: string; destination: string; status: string; enabled: boolean; lastRun: string; nextRun: string; transformations?: string[] }> = [
-  {
-    id: 'pipe_1',
-    name: 'Daily SAP to Oracle Sync',
-    description: 'Synchronize customer data from SAP to Oracle',
-    source: 'SAP ERP System',
-    destination: 'Oracle Database',
-    status: 'active',
-    enabled: true,
-    lastRun: '2 hours ago',
-    nextRun: 'in 4 hours',
-  },
-  {
-    id: 'pipe_2',
-    name: 'REST API Data Ingestion',
-    description: 'Pull data from REST APIs and store in MySQL',
-    source: 'REST API Gateway',
-    destination: 'MySQL Production',
-    status: 'active',
-    enabled: true,
-    lastRun: '30 minutes ago',
-    nextRun: 'in 30 minutes',
-  },
-  {
-    id: 'pipe_3',
-    name: 'CSV File Processing',
-    description: 'Process uploaded CSV files',
-    source: 'CSV File Uploads',
-    destination: 'Oracle Database',
-    status: 'draft',
-    enabled: false,
-    lastRun: 'Never',
-    nextRun: 'Manual',
-  },
-  {
-    id: 'pipe_4',
-    name: 'Data Quality Check Pipeline',
-    description: 'Run data quality validations',
-    source: 'Oracle Database',
-    destination: 'Data Catalog',
-    status: 'active',
-    enabled: true,
-    lastRun: '1 hour ago',
-    nextRun: 'in 1 hour',
-  },
-]
 
 export default function PipelineDesignerLayer() {
-  const [pipelines, setPipelines] = useState(MOCK_PIPELINES)
-  const [showNewForm, setShowNewForm] = useState(false)
-  const [newName, setNewName] = useState('')
-  const [newDescription, setNewDescription] = useState('')
-  const [newSource, setNewSource] = useState('')
-  const [newDestination, setNewDestination] = useState('')
-  const [newTransformation, setNewTransformation] = useState('None')
-  const [newTransformations, setNewTransformations] = useState<string[]>(['Cleansing'])
-  const [newSchedule, setNewSchedule] = useState('Manual')
-  const [schemaTable, setSchemaTable] = useState('')
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [configuringId, setConfiguringId] = useState<string | null>(null)
-  const [editName, setEditName] = useState('')
-  const [editDescription, setEditDescription] = useState('')
-  const [editSource, setEditSource] = useState('')
-  const [editDestination, setEditDestination] = useState('')
-  const [editTransformation, setEditTransformation] = useState('')
-  const [editSchedule, setEditSchedule] = useState('')
-  const [runningId, setRunningId] = useState<string | null>(null)
-  const [testingPipelineId, setTestingPipelineId] = useState<string | null>(null)
-  const [mappingPipelineId, setMappingPipelineId] = useState<string | null>(null)
-  const [visualizingPipelineId, setVisualizingPipelineId] = useState<string | null>(null)
-  const [pipelineMappings, setPipelineMappings] = useState<Record<string, any[]>>({})
+  const [items, setItems] = useState<PipelineRow[]>([])
+  const [options, setOptions] = useState<BuilderOptions>({ dataSources: [], datasets: [] })
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState<{ id: string; kind: 'ok' | 'warn' | 'err'; text: string } | null>(null)
+  const [editing, setEditing] = useState<EditablePipeline | null>(null)
+  const [historyFor, setHistoryFor] = useState<PipelineRow | null>(null)
+  const [running, setRunning] = useState<string | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [preview, setPreview] = useState<{ name: string; rows: Record<string, unknown>[] } | null>(null)
 
-  const addPipeline = () => {
-    if (newName && newSource && newDestination) {
-      setPipelines([
-        ...pipelines,
-        {
-          id: `pipe_${Date.now()}`,
-          name: newName,
-          description: newDescription || 'New pipeline',
-          source: newSource,
-          destination: newDestination,
-          transformations: newTransformations,
-          status: 'draft',
-          enabled: false,
-          lastRun: 'Never',
-          nextRun: newSchedule,
-        },
-      ])
-      setNewName('')
-      setNewDescription('')
-      setNewSource('')
-      setNewDestination('')
-      setNewTransformation('None')
-      setNewSchedule('Manual')
-      setShowNewForm(false)
+  const load = useCallback(async () => {
+    try {
+      const [rows, opts] = await Promise.all([listPipelines(), getBuilderOptions()])
+      setItems(rows)
+      setOptions(opts)
+      setError('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load pipelines')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const sourceName = useCallback((id: string) => options.dataSources.find((d) => d.id === id)?.name ?? 'missing source', [options])
+
+  const stats = useMemo(() => {
+    const ran = items.filter((p) => p.lastRunStatus)
+    return {
+      total: items.length,
+      scheduled: items.filter((p) => p.enabled && p.nextRunAt).length,
+      healthy: ran.filter((p) => p.lastRunStatus === 'success').length,
+      failing: ran.filter((p) => p.lastRunStatus === 'failed').length,
+    }
+  }, [items])
+
+  const run = async (p: PipelineRow) => {
+    setRunning(p.id)
+    setNotice(null)
+    try {
+      const outcome = await runPipelineNow(p.id)
+      setNotice({
+        id: p.id,
+        kind: outcome.status === 'success' ? 'ok' : outcome.status === 'failed' ? 'err' : 'warn',
+        text: outcome.status === 'skipped' ? outcome.message : `${outcome.status === 'failed' ? 'Run failed' : 'Run finished'}: ${outcome.message}`,
+      })
+      await load()
+    } catch (err) {
+      setNotice({ id: p.id, kind: 'err', text: err instanceof Error ? err.message : 'Run failed' })
+    } finally {
+      setRunning(null)
     }
   }
 
-  const startConfigureEdit = (id: string) => {
-    const pipeline = pipelines.find((p) => p.id === id)
-    if (pipeline) {
-      setConfiguringId(id)
-      setEditName(pipeline.name)
-      setEditDescription(pipeline.description)
-      setEditSource(pipeline.source)
-      setEditDestination(pipeline.destination)
-      setEditSchedule(pipeline.nextRun)
+  const toggle = async (p: PipelineRow) => {
+    try {
+      await setPipelineEnabled(p.id, !p.enabled)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Update failed')
     }
   }
 
-  const saveConfiguration = () => {
-    if (configuringId && editName.trim() && editSource && editDestination) {
-      setPipelines(
-        pipelines.map((p) =>
-          p.id === configuringId
-            ? {
-                ...p,
-                name: editName,
-                description: editDescription,
-                source: editSource,
-                destination: editDestination,
-                nextRun: editSchedule,
-              }
-            : p
-        )
-      )
-      setConfiguringId(null)
+  const remove = async (id: string) => {
+    try {
+      await deletePipeline(id)
+      setConfirmDelete(null)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Delete failed')
     }
   }
 
-
-
-  const runPipeline = (id: string) => {
-    setRunningId(id)
-    setTimeout(() => {
-      setPipelines(
-        pipelines.map((p) =>
-          p.id === id
-            ? {
-                ...p,
-                status: 'active',
-                enabled: true,
-                lastRun: 'Just now',
-                nextRun: 'in 1 hour',
-              }
-            : p
-        )
-      )
-      setRunningId(null)
-    }, 1200)
+  const openPreview = async (name: string) => {
+    try {
+      const res = await getDatasetPreview(name)
+      setPreview({ name, rows: res.rows })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Preview failed')
+    }
   }
-
-  const togglePipeline = (id: string) => {
-    setPipelines(
-      pipelines.map((p) => (p.id === id ? { ...p, enabled: !p.enabled } : p))
-    )
-  }
-
-  const deletePipeline = (id: string) => {
-    setPipelines(pipelines.filter((p) => p.id !== id))
-  }
-
-  const testingPipeline = pipelines.find((p) => p.id === testingPipelineId)
-  const mappingPipeline = pipelines.find((p) => p.id === mappingPipelineId)
 
   return (
     <div className="space-y-6">
-      <PipelineExecutionVisualizer
-        isOpen={!!visualizingPipelineId}
-        pipeline={visualizingPipelineId ? (() => { const current = pipelines.find((p) => p.id === visualizingPipelineId); return current ? { ...current, mappings: pipelineMappings[current.id] } : null })() : null}
-        onClose={() => setVisualizingPipelineId(null)}
-      />
+      {editing && (
+        <PipelineEditor
+          initial={editing}
+          options={options}
+          onClose={() => setEditing(null)}
+          onSaved={async () => {
+            setEditing(null)
+            await load()
+          }}
+        />
+      )}
+      {historyFor && (
+        <RunHistory
+          pipelineId={historyFor.id}
+          pipelineName={historyFor.name}
+          currentVersion={items.find((p) => p.id === historyFor.id)?.version ?? historyFor.version ?? 1}
+          onClose={() => setHistoryFor(null)}
+          onRestored={load}
+        />
+      )}
 
-      <PipelineTestModal
-        isOpen={!!testingPipelineId}
-        pipelineName={testingPipeline?.name || ''}
-        sourceType={testingPipeline?.source?.split(' ')[0] || ''}
-        onClose={() => setTestingPipelineId(null)}
-        onSuccess={() => {
-          setTestingPipelineId(null)
-          setMappingPipelineId(testingPipelineId)
-        }}
-      />
-
-      <ColumnMappingModal
-        isOpen={!!mappingPipelineId}
-        pipelineName={mappingPipeline?.name || ''}
-        onClose={() => setMappingPipelineId(null)}
-        onSave={(payload) => {
-          if (mappingPipelineId) setPipelineMappings((current) => ({ ...current, [mappingPipelineId]: payload.mappings }))
-          setMappingPipelineId(null)
-        }}
-      />
-
-      <div className="bg-card rounded-lg border border-border p-6">
-        <div className="flex items-center justify-between mb-6">
+      <div className="rounded-xl border border-border bg-card p-6">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <h2 className="text-2xl font-bold">Layer 3: Pipeline Designer</h2>
-            <p className="text-muted-foreground mt-2">
-              Create and manage data integration pipelines with visual workflow design.
-            </p>
+            <div className="mb-2 flex items-center gap-2">
+              <Workflow className="h-5 w-5 text-primary" />
+              <Badge variant="outline">Layer 4</Badge>
+            </div>
+            <h2 className="text-2xl font-bold">Pipelines</h2>
+            <p className="mt-1 text-muted-foreground">Read from a data source, filter, map and validate rows, then write to a Nexus dataset or back into a database.</p>
           </div>
-          <Button onClick={() => setShowNewForm(!showNewForm)} className="px-6">
-            <Plus className="w-4 h-4 mr-2" />
-            New Pipeline
+          <Button onClick={() => setEditing(blankPipeline())} disabled={loading}>
+            <Plus className="mr-2 h-4 w-4" /> New pipeline
           </Button>
         </div>
+      </div>
 
-        {showNewForm && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-card rounded-lg border border-border p-6 max-w-2xl w-full space-y-4">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold">Create New Pipeline</h3>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setShowNewForm(false)}
-                >
-                  <X className="w-4 h-4" />
-                </Button>
-              </div>
-
-              <Input
-                placeholder="Pipeline name"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-              />
-
-              <Input
-                placeholder="Description (optional)"
-                value={newDescription}
-                onChange={(e) => setNewDescription(e.target.value)}
-              />
-
-              <div className="grid grid-cols-2 gap-4">
-                <Select value={newSource} onValueChange={(value) => value && setNewSource(value)}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Source" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {DATA_SOURCES.map((src) => (
-                      <SelectItem key={src} value={src}>
-                        {src}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-
-                <Select value={newDestination} onValueChange={(value) => value && setNewDestination(value)}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Destination" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {DESTINATIONS.map((dst) => (
-                      <SelectItem key={dst} value={dst}>
-                        {dst}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="rounded-lg border border-border bg-muted/20 p-4"><div className="mb-3 flex items-center justify-between"><div><div className="font-medium">Schema and destination mapping</div><div className="text-xs text-muted-foreground">Source and destination columns are read from the connected schemas.</div></div><select value={schemaTable} onChange={(e) => setSchemaTable(e.target.value)} className="rounded-md border border-input bg-background p-2 text-sm"><option value="">Select destination table</option><option>employee_master</option><option>organization</option><option>kpi_daily</option></select></div>{newSource && newDestination && <div className="grid gap-2 md:grid-cols-2"><div className="rounded border border-border p-3"><div className="mb-2 text-xs font-semibold uppercase text-muted-foreground">{newSource} · source</div>{(SCHEMAS[newSource] || []).map((column) => <div key={column.name} className="flex justify-between border-b border-border/50 py-1 text-sm"><span>{column.name}</span><span className="font-mono text-xs text-muted-foreground">{column.type}</span></div>)}</div><div className="rounded border border-border p-3"><div className="mb-2 text-xs font-semibold uppercase text-muted-foreground">{newDestination} · destination</div>{(SCHEMAS[newDestination] || []).map((column) => <div key={column.name} className="flex justify-between border-b border-border/50 py-1 text-sm"><span>{column.name}</span><span className="font-mono text-xs text-muted-foreground">{column.type}</span></div>)}</div></div>}</div>
-
-              <div className="rounded-lg border border-border p-4"><div className="mb-2 font-medium">Transformation methods</div><div className="grid gap-2 sm:grid-cols-2">{TRANSFORMATIONS.filter((method) => method !== 'None').map((method) => <label key={method} className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm"><input type="checkbox" checked={newTransformations.includes(method)} onChange={() => setNewTransformations((items) => items.includes(method) ? items.filter((item) => item !== method) : [...items, method])} />{method}</label>)}</div><div className="mt-2 text-xs text-muted-foreground">Methods execute in selected sequence and can be combined in one pipeline.</div></div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <Select value={newTransformation} onValueChange={(value) => value && setNewTransformation(value)}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Transformation" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {TRANSFORMATIONS.map((trans) => (
-                      <SelectItem key={trans} value={trans}>
-                        {trans}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-
-                <Select value={newSchedule} onValueChange={(value) => value && setNewSchedule(value)}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Schedule" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {SCHEDULES.map((sch) => (
-                      <SelectItem key={sch} value={sch}>
-                        {sch}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="flex gap-2 pt-4">
-                <Button onClick={addPipeline} className="flex-1">
-                  <Save className="w-4 h-4 mr-2" />
-                  Create
-                </Button>
-                <Button
-                  onClick={() => setShowNewForm(false)}
-                  variant="outline"
-                  className="flex-1"
-                >
-                  Cancel
-                </Button>
-              </div>
-            </div>
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        {[
+          ['Pipelines', stats.total],
+          ['Scheduled', stats.scheduled],
+          ['Last run OK', stats.healthy],
+          ['Last run failed', stats.failing],
+        ].map(([label, value]) => (
+          <div key={label} className="rounded-xl border border-border bg-card p-4">
+            <div className="text-sm text-muted-foreground">{label}</div>
+            <div className="mt-1 text-2xl font-bold">{value}</div>
           </div>
-        )}
+        ))}
+      </div>
 
-        {configuringId && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-card rounded-lg border border-border p-6 max-w-2xl w-full space-y-4">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold">Configure Pipeline</h3>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setConfiguringId(null)}
-                >
-                  <X className="w-4 h-4" />
-                </Button>
-              </div>
+      {error && <p className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
 
-              <Input
-                placeholder="Pipeline name"
-                value={editName}
-                onChange={(e) => setEditName(e.target.value)}
-              />
-
-              <Input
-                placeholder="Description"
-                value={editDescription}
-                onChange={(e) => setEditDescription(e.target.value)}
-              />
-
-              <div className="grid grid-cols-2 gap-4">
-                <Select value={editSource} onValueChange={(value) => value && setEditSource(value)}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Source" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {DATA_SOURCES.map((src) => (
-                      <SelectItem key={src} value={src}>
-                        {src}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-
-                <Select value={editDestination} onValueChange={(value) => value && setEditDestination(value)}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Destination" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {DATA_SOURCES.map((dst) => (
-                      <SelectItem key={dst} value={dst}>
-                        {dst}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <Select value={editSchedule} onValueChange={(value) => value && setEditSchedule(value)}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Schedule" />
-                </SelectTrigger>
-                <SelectContent>
-                  {SCHEDULES.map((sch) => (
-                    <SelectItem key={sch} value={sch}>
-                      {sch}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              <div className="flex gap-2 pt-4">
-                <Button onClick={saveConfiguration} className="flex-1">
-                  <Save className="w-4 h-4 mr-2" />
-                  Save Configuration
-                </Button>
-                <Button
-                  onClick={() => setConfiguringId(null)}
-                  variant="outline"
-                  className="flex-1"
-                >
-                  Cancel
-                </Button>
-              </div>
-            </div>
+      <div className="space-y-3">
+        {loading ? (
+          <div className="flex items-center justify-center rounded-xl border border-border bg-card p-10 text-muted-foreground">
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading pipelines…
           </div>
-        )}
-
-        <div className="grid gap-4">
-          {pipelines.map((pipeline) => (
-            <div
-              key={pipeline.id}
-              className="p-4 bg-muted/30 rounded-lg border border-border/50 hover:bg-muted/50 transition-colors"
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <div className="font-semibold">{pipeline.name}</div>
-                    <Badge variant={pipeline.enabled ? 'default' : 'secondary'}>
-                      {pipeline.status}
-                    </Badge>
+        ) : items.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-border bg-card p-10 text-center">
+            <Workflow className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
+            <p className="font-medium">No pipelines yet</p>
+            <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
+              {options.dataSources.length
+                ? 'Create your first pipeline to move data from a connected source into a Nexus dataset or another database.'
+                : 'Connect a data source first (Data Sources tab), then create a pipeline that reads from it.'}
+            </p>
+            <Button className="mt-4" onClick={() => setEditing(blankPipeline())}>
+              <Plus className="mr-2 h-4 w-4" /> New pipeline
+            </Button>
+          </div>
+        ) : (
+          items.map((p) => {
+            const def = definitionSchema.safeParse(p.config)
+            const steps: PipelineStep[] = def.success ? def.data.steps : []
+            const src = steps[0]?.type === 'source' ? steps[0] : null
+            const dst = steps[steps.length - 1]?.type === 'destination' ? steps[steps.length - 1] : null
+            const schedule = scheduleSchema.safeParse(p.schedule ?? {}).data ?? DEFAULT_SCHEDULE
+            return (
+              <div key={p.id} className="rounded-xl border border-border bg-card p-4">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-semibold">{p.name}</span>
+                      {statusBadge(p.lastRunStatus)}
+                      <Badge variant="outline">v{p.version}</Badge>
+                    </div>
+                    {p.description && <p className="mt-1 text-sm text-muted-foreground">{p.description}</p>}
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {src ? `${sourceName(src.dataSourceId)} · ${src.table}` : 'No source'} →{' '}
+                      {steps.slice(1, -1).map((s) => stepLabel(s)).join(' → ') || 'no transforms'} →{' '}
+                      {dst?.type === 'destination' ? (dst.kind === 'dataset' ? `dataset ${dst.datasetName}` : `${sourceName(dst.dataSourceId)} · ${dst.table}`) : 'No destination'}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {describeSchedule(schedule)}
+                      {schedule.type !== 'manual' && (p.enabled ? ` · next ${formatWhen(p.nextRunAt)}` : ' · paused')} · last run {formatWhen(p.lastRunAt)}
+                    </p>
                   </div>
-                  <div className="text-sm text-muted-foreground mb-2">
-                    {pipeline.description}
-                  </div>
-                  <div className="text-xs text-muted-foreground space-y-1">
-                    <div>Source: {pipeline.source} → Destination: {pipeline.destination}</div>
-                    <div>Last run: {pipeline.lastRun} • Next: {pipeline.nextRun}</div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => startConfigureEdit(pipeline.id)}
-                    title="Configure pipeline"
-                  >
-                    <Settings className="w-4 h-4" />
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setVisualizingPipelineId(pipeline.id)}
-                    title="Visualize pipeline execution"
-                  >
-                    <Activity className="w-4 h-4 mr-1" />
-                    Observe
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setTestingPipelineId(pipeline.id)}
-                    title="Test pipeline"
-                  >
-                    <TestTube className="w-4 h-4" />
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setMappingPipelineId(pipeline.id)}
-                    title="Edit column mapping"
-                  >
-                    <Edit className="w-4 h-4 mr-1" />
-                    Map
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => runPipeline(pipeline.id)}
-                    disabled={runningId === pipeline.id}
-                    title="Run pipeline"
-                  >
-                    <Play className="w-4 h-4" />
-                    {runningId === pipeline.id && (
-                      <span className="ml-1 text-xs">Running...</span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {schedule.type !== 'manual' && (
+                      <label className="flex items-center gap-2 rounded-md border border-border px-2 py-1 text-xs">
+                        <input type="checkbox" checked={p.enabled ?? false} onChange={() => toggle(p)} />
+                        Scheduled
+                      </label>
                     )}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => deletePipeline(pipeline.id)}
-                    title="Delete pipeline"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </Button>
+                    <Button size="sm" onClick={() => run(p)} disabled={running !== null}>
+                      {running === p.id ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Play className="mr-1 h-4 w-4" />}
+                      {running === p.id ? 'Running…' : 'Run now'}
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setEditing(toEditable(p))}>
+                      <Edit className="mr-1 h-4 w-4" /> Edit
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setHistoryFor(p)}>
+                      <History className="mr-1 h-4 w-4" /> History
+                    </Button>
+                    {confirmDelete === p.id ? (
+                      <span className="flex items-center gap-1 text-xs">
+                        Delete &ldquo;{p.name}&rdquo; and its run history?
+                        <Button size="sm" variant="destructive" onClick={() => remove(p.id)}>Delete</Button>
+                        <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(null)}>Cancel</Button>
+                      </span>
+                    ) : (
+                      <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(p.id)} aria-label={`Delete ${p.name}`}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </div>
                 </div>
+                {notice?.id === p.id && (
+                  <p
+                    className={`mt-3 rounded-md p-2 text-sm ${
+                      notice.kind === 'ok' ? 'bg-green-500/10 text-green-700 dark:text-green-400' : notice.kind === 'warn' ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300' : 'bg-destructive/10 text-destructive'
+                    }`}
+                  >
+                    {notice.text}
+                  </p>
+                )}
               </div>
-            </div>
-          ))}
-        </div>
+            )
+          })
+        )}
       </div>
 
-      <div className="grid grid-cols-4 gap-4">
-        <div className="bg-card rounded-lg border border-border p-4">
-          <div className="text-sm font-medium text-muted-foreground">Total Pipelines</div>
-          <div className="text-2xl font-bold mt-2">{pipelines.length}</div>
-        </div>
-        <div className="bg-card rounded-lg border border-border p-4">
-          <div className="text-sm font-medium text-muted-foreground">Active</div>
-          <div className="text-2xl font-bold mt-2">
-            {pipelines.filter((p) => p.enabled).length}
+      {options.datasets.length > 0 && (
+        <div className="rounded-xl border border-border bg-card p-5">
+          <div className="mb-3 flex items-center gap-2">
+            <Database className="h-4 w-4 text-primary" />
+            <h3 className="font-semibold">Nexus datasets</h3>
+            <span className="text-xs text-muted-foreground">Outputs written by your pipelines</span>
           </div>
-        </div>
-        <div className="bg-card rounded-lg border border-border p-4">
-          <div className="text-sm font-medium text-muted-foreground">Draft</div>
-          <div className="text-2xl font-bold mt-2">
-            {pipelines.filter((p) => p.status === 'draft').length}
+          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+            {options.datasets.map((d) => (
+              <button key={d.name} onClick={() => openPreview(d.name)} className={`rounded-lg border p-3 text-left text-sm hover:bg-muted/40 ${preview?.name === d.name ? 'border-primary' : 'border-border'}`}>
+                <div className="font-mono font-medium">{d.name}</div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {(d.rowCount ?? 0).toLocaleString()} rows · {d.columns.length} columns · loaded {formatWhen(d.lastLoadedAt)}
+                </div>
+              </button>
+            ))}
           </div>
+          {preview && (
+            <div className="mt-3">
+              <div className="flex items-center justify-between text-sm">
+                <span>
+                  Latest rows in <span className="font-mono">{preview.name}</span>
+                </span>
+                <Button size="sm" variant="ghost" onClick={() => setPreview(null)}>Close</Button>
+              </div>
+              {preview.rows.length ? <SampleTable rows={preview.rows} /> : <p className="text-sm text-muted-foreground">The dataset is empty.</p>}
+            </div>
+          )}
         </div>
-        <div className="bg-card rounded-lg border border-border p-4">
-          <div className="text-sm font-medium text-muted-foreground">Success Rate</div>
-          <div className="text-2xl font-bold mt-2">98%</div>
-        </div>
-      </div>
+      )}
     </div>
   )
 }

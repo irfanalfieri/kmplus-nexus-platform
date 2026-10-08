@@ -270,41 +270,41 @@ Pre-built connectors, installable in one click.
 
 **Every connector must implement:** `test`, `scan`, `sample`. From Phase 1 it must also implement `read` (full + incremental), and `write` (insert/upsert) where the target supports it. See §14.3.
 
-### Layer 3 — Data Mapping Studio (Phase 2; basic mapping pulled into Phase 1) · 🎭
+### Layer 3 — Data Mapping Studio (Phase 2; basic mapping pulled into Phase 1) · 🟡
 
 Visual field mapping instead of SQL.
 
 | ID | Requirement | Pri | Status |
 |---|---|:-:|:-:|
-| MP-1 | Two-pane mapper: source columns ↔ target (domain or destination) columns; drag-and-drop or dropdown | P0 | 🎭 (column-mapping modal exists) |
-| MP-2 | Auto-map by exact/similar name (`EMP_ID` → `employee_code` via synonym list) | P0 | ⬜ |
-| MP-3 | Type conversion with explicit error behavior (fail row / null / default) | P0 | ⬜ |
-| MP-4 | Built-in transforms: Trim, Upper, Lower, Title Case, Replace, Regex extract/replace, Date parse/format (with timezone), Number format, Concatenate, Split, Substring, Lookup (table), Null handling (coalesce), Default value, Conditional (IF/CASE), Hash (for masking) | P0 for the first 10, P1 rest | ⬜ |
-| MP-5 | Transform chaining per field (`Trim → Upper → Lookup`) | P0 | ⬜ |
+| MP-1 | Two-pane mapper: source columns ↔ target (domain or destination) columns; drag-and-drop or dropdown | P0 | 🟡 (Map step in the pipeline editor: column dropdowns per field; no drag-and-drop) |
+| MP-2 | Auto-map by exact/similar name (`EMP_ID` → `employee_code` via synonym list) | P0 | 🟡 (Auto-map by name + type from the schema scan; no synonyms yet) |
+| MP-3 | Type conversion with explicit error behavior (fail row / null / default) | P0 | ✅ (failed conversions reject the row with a reason) |
+| MP-4 | Built-in transforms: Trim, Upper, Lower, Title Case, Replace, Regex extract/replace, Date parse/format (with timezone), Number format, Concatenate, Split, Substring, Lookup (table), Null handling (coalesce), Default value, Conditional (IF/CASE), Hash (for masking) | P0 for the first 10, P1 rest | 🟡 (trim, upper/lower/title case, replace, regex replace, default if empty, prefix, suffix, substring, format date, round, to number (id-ID + en-US), to boolean. Missing: concatenate, split, lookup, conditional, hash) |
+| MP-5 | Transform chaining per field (`Trim → Upper → Lookup`) | P0 | ✅ |
 | MP-6 | Lookup tables: user-uploaded or dataset-backed (e.g., `ORG_CODE → org_name`) | P1 | ⬜ |
 | MP-7 | Nested objects / JSON flatten + build (for REST sources and destinations) | P1 | ⬜ |
 | MP-8 | Relationship mapping (FK resolution: `MANAGER_ID` → `employee.id`) | P1 | ⬜ |
-| MP-9 | Live preview: apply the mapping to sample rows and show before/after | P0 | ⬜ |
+| MP-9 | Live preview: apply the mapping to sample rows and show before/after | P0 | ✅ (Test on sample shows rows after every step) |
 | MP-10 | Mappings saved as reusable **mapping templates** (e.g., "SAP PA0001 → Employee") | P1 | ⬜ |
 
 **Mapping must be stored as declarative JSON, not code.** That keeps it versionable, diffable, AI-generatable, and safe to run. See §12.2.
 
-### Layer 4 — Pipeline Designer (Phase 1) · 🎭
+### Layer 4 — Pipeline Designer (Phase 1) · ✅ step-list version
 
 The visual workflow engine (inspired by NiFi, Power Automate, n8n, and Node-RED).
 
 | ID | Requirement | Pri | Status |
 |---|---|:-:|:-:|
-| PD-1 | Canvas with nodes and edges (DAG); add, connect, configure, and delete nodes | P0 | 🎭 (linear step list, mock pipelines) |
-| PD-2 | Pipelines persisted to the DB with a versioned definition (`nodes`, `edges`, `settings`) | P0 | 🟡 (server actions exist; UI uses `MOCK_PIPELINES`) |
-| PD-3 | **Real execution engine**: runs the DAG, streams batches between nodes, records per-node stats | P0 | ⬜ (`executePipeline` writes random numbers via `setTimeout`) |
-| PD-4 | Test run on a sample (N rows) with per-node output preview, no writes to destinations | P0 | 🎭 |
-| PD-5 | Validation before save: no cycles, every node configured, types compatible | P0 | ⬜ |
-| PD-6 | Write modes on Save: insert, upsert (on key), replace (truncate+load), soft-delete missing | P0 | ⬜ |
+| PD-1 | Canvas with nodes and edges (DAG); add, connect, configure, and delete nodes | P0 | 🟡 (ordered step list: Source → Filter/Map/Validate* → Destination; DAG canvas is Phase 2) |
+| PD-2 | Pipelines persisted to the DB with a versioned definition (`nodes`, `edges`, `settings`) | P0 | ✅ (`pipelines.config` + `pipeline_versions`, zod schema in `lib/pipelines/definition.ts`) |
+| PD-3 | **Real execution engine**: runs the DAG, streams batches between nodes, records per-node stats | P0 | ✅ (`lib/pipelines/engine.ts`, in-memory batches, per-step stats; runs inside the request, 300 s cap) |
+| PD-4 | Test run on a sample (N rows) with per-node output preview, no writes to destinations | P0 | ✅ |
+| PD-5 | Validation before save: no cycles, every node configured, types compatible | P0 | ✅ (structure, required fields, upsert keys) |
+| PD-6 | Write modes on Save: insert, upsert (on key), replace (truncate+load), soft-delete missing | P0 | 🟡 (datasets: append/upsert/replace; external DBs: insert/upsert, never truncate; no soft-delete) |
 | PD-7 | Incremental sync using a watermark column, with a full-resync option | P0 | ⬜ |
 | PD-8 | Templates: "HRIS → Employee", "AD → Users", "CSV → Dataset", "Dataset → Power BI" | P1 | ⬜ |
 | PD-9 | Sub-pipelines / reusable components (call another pipeline as a node) | P2 | ⬜ |
-| PD-10 | Per-pipeline settings: timeout, retries (count + backoff), concurrency (1 = no overlap), batch size, error threshold (abort if > X% rows fail) | P0 | ⬜ |
+| PD-10 | Per-pipeline settings: timeout, retries (count + backoff), concurrency (1 = no overlap), batch size, error threshold (abort if > X% rows fail) | P0 | 🟡 (no overlap, max rows, abort-on-invalid; no retries/threshold yet) |
 
 **Node catalog**
 
@@ -330,14 +330,14 @@ The visual workflow engine (inspired by NiFi, Power Automate, n8n, and Node-RED)
 | AI Processing | LLM classify/extract/summarize a field (with cost limits) | 4 |
 | Approval | Pause the run until a human approves (e.g., before bulk deletes) | 3 |
 
-### Layer 5 — Scheduling & Automation (Phase 1) · 🎭
+### Layer 5 — Scheduling & Automation (Phase 1) · 🟡
 
 | ID | Requirement | Pri | Status |
 |---|---|:-:|:-:|
-| SC-1 | Trigger types: Manual, Hourly, Daily, Weekly, Monthly, CRON, Webhook (signed URL), Event (another pipeline finished / dataset updated), API (`POST /api/v1/pipelines/:id/runs`) | P0 for manual/presets/cron; P1 webhook/API; P2 event | ⬜ |
-| SC-2 | Timezone per schedule (default **Asia/Jakarta**) with a human-readable preview ("Every weekday at 01:00 WIB"), plus the next 5 run times | P0 | ⬜ |
-| SC-3 | No overlapping runs by default; queue or skip policy | P0 | ⬜ |
-| SC-4 | Pause/resume schedule; maintenance windows / blackout dates | P1 | ⬜ |
+| SC-1 | Trigger types: Manual, Hourly, Daily, Weekly, Monthly, CRON, Webhook (signed URL), Event (another pipeline finished / dataset updated), API (`POST /api/v1/pipelines/:id/runs`) | P0 for manual/presets/cron; P1 webhook/API; P2 event | 🟡 (manual, hourly, daily, weekly, monthly, cron via Supabase pg_cron → `/api/cron/pipelines`) |
+| SC-2 | Timezone per schedule (default **Asia/Jakarta**) with a human-readable preview ("Every weekday at 01:00 WIB"), plus the next 5 run times | P0 | ✅ (Asia/Jakarta, next 3 runs shown) |
+| SC-3 | No overlapping runs by default; queue or skip policy | P0 | ✅ (skip; atomic claim per tick) |
+| SC-4 | Pause/resume schedule; maintenance windows / blackout dates | P1 | 🟡 (pause/resume) |
 | SC-5 | Pipeline chaining: run B after A succeeds | P1 | ⬜ |
 | SC-6 | Event triggers from source systems (e.g., SAP event → run immediately) via inbound webhook | P1 | ⬜ |
 
@@ -347,7 +347,7 @@ The visual workflow engine (inspired by NiFi, Power Automate, n8n, and Node-RED)
 |---|---|:-:|:-:|
 | MN-1 | Today's jobs summary: successful / running / failed / queued, plus a trend over 7/30 days | P0 | 🎭 |
 | MN-2 | Pipeline health list: 🟢 Healthy · 🟡 Delayed (missed SLA / running long) · 🔴 Failed · ⚪ Paused | P0 | 🎭 |
-| MN-3 | Run detail: timeline per node, rows in/out/error per node, duration, logs, error message, stack trace (admin only) | P0 | ⬜ |
+| MN-3 | Run detail: timeline per node, rows in/out/error per node, duration, logs, error message, stack trace (admin only) | P0 | 🟡 (Pipelines → History: per-step counts, timings, error, rejected rows) |
 | MN-4 | Actions: Retry run, Retry from failed node, Replay quarantined rows, Cancel running, Download logs | P0 retry/cancel; P1 others | ⬜ |
 | MN-5 | Alerts: on failure, on delay (SLA breach), on error rate > threshold; channels email/Teams/Slack/webhook; per-pipeline subscribers | P0 email; P1 others | ⬜ |
 | MN-6 | Root-cause hints: classify errors (auth, network, schema drift, validation, timeout, rate limit) with suggested fixes; AI-assisted in Phase 4 | P1 | ⬜ |
@@ -444,7 +444,7 @@ Example rules: `IF employment_status = 'Active' → Import`; `IF department = 'F
 | VC-1 | Every save of a pipeline/mapping/rule creates an immutable version (v1, v2, …) with author, timestamp, and a change note | P0 | 🟡 (table exists, not wired) |
 | VC-2 | Draft vs. published: schedules run only the *published* version; editing creates a draft | P0 | ⬜ |
 | VC-3 | Visual diff between versions (nodes added/removed/changed, mapping changes) | P1 | 🎭 |
-| VC-4 | Rollback = publish an older version as a new version (history is never rewritten) | P0 | 🎭 |
+| VC-4 | Rollback = publish an older version as a new version (history is never rewritten) | P0 | ✅ (pipelines; Pipelines → History → Versions) |
 | VC-5 | Export/import pipelines as JSON (for moving between workspaces/environments and templates) | P1 | ⬜ |
 
 ### Cross-cutting: Nexus Data API (added; required for the "platform" promise)
@@ -526,8 +526,8 @@ Nexus doesn't expose raw source systems. It publishes **standardized business do
 | Data Sources | ✅/🟡 | CRUD via server actions; real test + schema scan + sample via connector drivers; Schema Explorer & Sample Preview modals; credentials encrypted at rest and stripped from client payloads | No dependency checks; no health checks; no key rotation |
 | Connector Marketplace | 🟡 | Catalog in code (`lib/connectors/catalog.ts`); per-user installs/purchase flags in DB | Purchase is a flag, with no billing; Postgres driver not in catalog |
 | Connector drivers | 🟡 | SAP (OData), Oracle, MySQL, Postgres, REST (Postman-style form), Salesforce (OAuth), Snowflake, Supabase: **test / scan / sample** | No `read` (full/incremental) or `write` yet, so pipelines can't move real data |
-| Pipeline Designer | 🎭 | Server actions for CRUD exist (`app/actions/pipelines.ts`); test/mapping/visualizer modals | UI uses `MOCK_PIPELINES`; execution is simulated (`setTimeout` + random numbers); no DAG canvas |
-| Scheduler | ⬜ | `pipelines.schedule` JSONB column | No scheduler or worker |
+| Pipeline Designer | ✅ | Step-list builder (`components/pipelines/*`), real engine (`lib/pipelines/*`), test on sample, run now, run history with rejected rows, versions + restore, write to Nexus datasets (`nexus_data` schema) or back into Postgres/MySQL/Supabase (destination role only) | No DAG/branching, joins, incremental watermark, retries, notifications; reads capped at 100k rows per run |
+| Scheduler | ✅ | Supabase pg_cron job `nexus-pipeline-tick` (every minute, only calls Vercel when a pipeline is due) → `/api/cron/pipelines` (Bearer `CRON_SECRET`, secret in Supabase Vault) | No webhook/API/event triggers |
 | Monitoring | 🎭 | `execution_logs` table | UI is hardcoded `PIPELINE_HEALTH`/`CATALOG` arrays |
 | Data Mapping | 🎭 | `data_mappings` table, column mapping modal | No transform engine |
 | Data Quality | 🎭 | `data_quality_metrics` table | No rule engine or quarantine |
@@ -549,6 +549,12 @@ Nexus doesn't expose raw source systems. It publishes **standardized business do
 7. No automated tests apart from the live scripts in `scripts/`.
 
 ---
+
+### Pipeline runtime notes (2026-10-08)
+- Runs execute inside the request (manual runs: dashboard server action; scheduled: cron route), both with `maxDuration = 300`. Fine for tens of thousands of rows; larger loads need the worker in ADR-1.
+- Source reads are capped by the Source step's *max rows* (≤ 100k). Postgres/MySQL/Supabase read in 1,000-row batches; SAP/Salesforce/REST/Snowflake/Oracle use the connector's capped read.
+- Writing into a customer database requires the data source to have been added with **Add Destination** (role `destination`), the table must already exist, and writes run in one transaction.
+- Up to 500 rejected rows per run are kept in `pipeline_run_rejects`.
 
 ## 11. Architecture
 

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "nexus-dev",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["-y", "pnpm@10", "dev"],
+      "port": 3000
+    }
+  ]
+}

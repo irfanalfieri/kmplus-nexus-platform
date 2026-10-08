@@ -1,4 +1,4 @@
-import { pgTable, text, boolean, timestamp, integer, jsonb, numeric, primaryKey } from 'drizzle-orm/pg-core'
+import { pgTable, text, boolean, timestamp, integer, jsonb, numeric, index, uniqueIndex } from 'drizzle-orm/pg-core'
 
 // Better Auth tables (required)
 export const user = pgTable('user', {
@@ -101,9 +101,13 @@ export const pipelines = pgTable('pipelines', {
   schedule: jsonb('schedule'),
   enabled: boolean('enabled').default(false),
   version: integer('version').default(1),
+  lastRunAt: timestamp('lastRunAt'),
+  lastRunStatus: text('lastRunStatus'),
+  /** Next scheduled run (UTC); null when manual or disabled. Indexed for the scheduler tick. */
+  nextRunAt: timestamp('nextRunAt'),
   createdAt: timestamp('createdAt').notNull().defaultNow(),
   updatedAt: timestamp('updatedAt').notNull().defaultNow(),
-})
+}, (t) => [index('pipelines_next_run_idx').on(t.nextRunAt)])
 
 // Pipeline Steps
 export const pipelineSteps = pgTable('pipeline_steps', {
@@ -123,7 +127,11 @@ export const executionLogs = pgTable('execution_logs', {
   id: text('id').primaryKey(),
   userId: text('userId').notNull(),
   pipelineId: text('pipelineId').notNull(),
+  /** running | success | partial | failed */
   status: text('status').notNull(),
+  /** manual | schedule */
+  trigger: text('trigger'),
+  pipelineVersion: integer('pipelineVersion'),
   recordsProcessed: integer('recordsProcessed').default(0),
   recordsSuccess: integer('recordsSuccess').default(0),
   recordsError: integer('recordsError').default(0),
@@ -134,7 +142,34 @@ export const executionLogs = pgTable('execution_logs', {
   executionDetails: jsonb('executionDetails'),
   createdAt: timestamp('createdAt').notNull().defaultNow(),
   updatedAt: timestamp('updatedAt').notNull().defaultNow(),
-})
+}, (t) => [index('execution_logs_pipeline_idx').on(t.pipelineId, t.createdAt)])
+
+// Rows rejected by a run's Validate step (capped per run) so users can inspect them.
+export const pipelineRunRejects = pgTable('pipeline_run_rejects', {
+  id: text('id').primaryKey(),
+  runId: text('runId').notNull(),
+  pipelineId: text('pipelineId').notNull(),
+  userId: text('userId').notNull(),
+  row: jsonb('row').notNull(),
+  errors: jsonb('errors').notNull(),
+  createdAt: timestamp('createdAt').notNull().defaultNow(),
+}, (t) => [index('pipeline_run_rejects_run_idx').on(t.runId)])
+
+// Nexus-managed datasets: pipeline outputs stored as physical tables in the nexus_data schema.
+export const nexusDatasets = pgTable('nexus_datasets', {
+  id: text('id').primaryKey(),
+  userId: text('userId').notNull(),
+  name: text('name').notNull(),
+  /** Physical table name inside the nexus_data schema. */
+  tableName: text('tableName').notNull().unique(),
+  /** [{ name, type }] */
+  columns: jsonb('columns').notNull(),
+  pipelineId: text('pipelineId'),
+  rowCount: integer('rowCount').default(0),
+  lastLoadedAt: timestamp('lastLoadedAt'),
+  createdAt: timestamp('createdAt').notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt').notNull().defaultNow(),
+}, (t) => [uniqueIndex('nexus_datasets_user_name_idx').on(t.userId, t.name)])
 
 // Layer 6: Data Mapping Studio
 export const dataMappings = pgTable('data_mappings', {

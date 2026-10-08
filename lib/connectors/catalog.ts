@@ -48,6 +48,19 @@ export const CONNECTOR_CATALOG: ConnectorDefinition[] = [
     ],
   },
   {
+    slug: 'postgres',
+    name: 'PostgreSQL Connector',
+    category: 'Database',
+    version: '1.0.0',
+    description: 'PostgreSQL with schema introspection; can be a pipeline destination (insert/upsert)',
+    includedByDefault: true,
+    premium: false,
+    credentialFields: [
+      { key: 'connectionString', label: 'Connection String', type: 'password', required: true, placeholder: 'postgresql://user:pass@host:5432/db' },
+      { key: 'schema', label: 'Schema', type: 'text', required: false, placeholder: 'public' },
+    ],
+  },
+  {
     slug: 'rest',
     name: 'REST API Connector',
     category: 'API',

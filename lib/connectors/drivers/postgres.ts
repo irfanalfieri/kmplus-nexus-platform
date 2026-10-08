@@ -1,4 +1,4 @@
-import { Pool } from 'pg'
+import { Pool, types } from 'pg'
 import type { ConnectionTestResult, ConnectorCredentials, SchemaScanResult } from '../types'
 import { mapSqlType } from '../sql-introspect'
 
@@ -6,11 +6,32 @@ function getConnectionString(credentials: ConnectorCredentials) {
   return credentials.connectionString?.trim() ?? ''
 }
 
+const PG_DATE_OID = 1082
+
+/**
+ * Keep DATE columns as 'yyyy-MM-dd' strings. pg's default turns them into a
+ * Date at the server's local midnight, which shifts the day when the process
+ * isn't running in UTC.
+ */
+const externalTypes = {
+  getTypeParser: ((oid: number, format?: 'text' | 'binary') =>
+    oid === PG_DATE_OID ? (value: string) => value : types.getTypeParser(oid, format)) as typeof types.getTypeParser,
+}
+
+/**
+ * Pool for a user's Postgres. TLS is on for anything but localhost (managed
+ * hosts require it); an sslmode in the connection string takes precedence.
+ */
+export function createPgPool(connectionString: string) {
+  const local = /@(localhost|127\.0\.0\.1)[:/]/.test(connectionString)
+  return new Pool({ connectionString, max: 1, ssl: local ? undefined : { rejectUnauthorized: false }, types: externalTypes })
+}
+
 export async function testPostgresConnection(credentials: ConnectorCredentials): Promise<ConnectionTestResult> {
   const connectionString = getConnectionString(credentials)
   if (!connectionString) return { ok: false, message: 'Connection string is required.' }
 
-  const pool = new Pool({ connectionString, max: 1 })
+  const pool = createPgPool(connectionString)
   try {
     await pool.query('SELECT 1 AS ok')
     return { ok: true, message: 'Connected to PostgreSQL.' }
@@ -24,7 +45,7 @@ export async function testPostgresConnection(credentials: ConnectorCredentials):
 export async function scanPostgresSchema(credentials: ConnectorCredentials): Promise<SchemaScanResult> {
   const connectionString = getConnectionString(credentials)
   const schema = credentials.schema?.trim() || 'public'
-  const pool = new Pool({ connectionString, max: 1 })
+  const pool = createPgPool(connectionString)
 
   try {
     const columnsResult = await pool.query<{
@@ -85,9 +106,10 @@ export async function samplePostgresTable(
   tableName: string,
   limit = 25
 ) {
-  const pool = new Pool({ connectionString: getConnectionString(credentials), max: 1 })
+  const pool = createPgPool(getConnectionString(credentials))
+  const schema = credentials.schema?.trim() || 'public'
   try {
-    const quoted = `"${tableName.replace(/"/g, '""')}"`
+    const quoted = `"${schema.replace(/"/g, '""')}"."${tableName.replace(/"/g, '""')}"`
     const countResult = await pool.query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM ${quoted}`)
     const dataResult = await pool.query(`SELECT * FROM ${quoted} LIMIT $1`, [limit])
     const rows = dataResult.rows as Record<string, unknown>[]
