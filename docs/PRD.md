@@ -349,7 +349,7 @@ The visual workflow engine (inspired by NiFi, Power Automate, n8n, and Node-RED)
 | MN-2 | Pipeline health list: 🟢 Healthy · 🟡 Delayed (missed SLA / running long) · 🔴 Failed · ⚪ Paused | P0 | ✅ (+ rejected rows, never run; 7-day success rate) |
 | MN-3 | Run detail: timeline per node, rows in/out/error per node, duration, logs, error message, stack trace (admin only) | P0 | 🟡 (Pipelines → History: per-step counts, timings, error, rejected rows) |
 | MN-4 | Actions: Retry run, Retry from failed node, Replay quarantined rows, Cancel running, Download logs | P0 retry/cancel; P1 others | 🟡 (automatic retries; manual re-run; no cancel/replay yet) |
-| MN-5 | Alerts: on failure, on delay (SLA breach), on error rate > threshold; channels email/Teams/Slack/webhook; per-pipeline subscribers | P0 email; P1 others | 🟡 (on failure or rejects; in-app bell + email via Resend (`RESEND_API_KEY`); no SLA/delay alerts or Teams/Slack yet) |
+| MN-5 | Alerts: on failure, on delay (SLA breach), on error rate > threshold; channels email/Teams/Slack/webhook; per-pipeline subscribers | P0 email; P1 others | 🟡 (in-app bell on failure or rejects; email deferred, see tech debt #8; no SLA/delay alerts or Teams/Slack yet) |
 | MN-6 | Root-cause hints: classify errors (auth, network, schema drift, validation, timeout, rate limit) with suggested fixes; AI-assisted in Phase 4 | P1 | ⬜ |
 | MN-7 | Log retention: 30 days of detailed logs, 1 year of run summaries (configurable per plan) | P1 | ⬜ |
 
@@ -546,7 +546,8 @@ Nexus doesn't expose raw source systems. It publishes **standardized business do
 4. ~~Copy-pasted `getUserId()`~~ Done: `requireUserId()` in `lib/auth/session.ts`; replace with `requireWorkspaceRole(role)` when workspaces land.
 5. There are both `package-lock.json` and `pnpm-lock.yaml`. Vercel uses pnpm, so **use pnpm only** and delete `package-lock.json`.
 6. ~~No migrations committed~~ Done: `drizzle/0000_init.sql` + `0001_enable_rls.sql`. Production moved from Neon (which had drifted and crashed the Connectors page) to Supabase on 2026-10-08. `scripts/db-repair-schema.mjs` remains as a drift check.
-7. No automated tests apart from the live scripts in `scripts/`.
+7. Tests are scripts, not a test runner: `scripts/engine-tests.ts` (pure engine tests) and `scripts/connector-harness.ts` (live connector checks). No CI runs them yet, and server actions/UI have no automated tests.
+8. **Email alerts are deferred (decision 2026-10-09).** The code path exists (`lib/notifications.ts`, Resend) but no `RESEND_API_KEY` is configured, so only in-app (bell) alerts are active and notifications show "email not configured". To finish: create a Resend account, verify a sending domain (e.g. kmplus.co.id), set `RESEND_API_KEY` + `ALERT_FROM_EMAIL` on Vercel, send a test alert, then consider Teams/Slack/WhatsApp channels (MN-5).
 
 ---
 
