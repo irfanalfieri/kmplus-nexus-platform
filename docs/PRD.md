@@ -531,26 +531,40 @@ Nexus doesn't expose raw source systems. It publishes **standardized business do
 | Pipeline Designer | ✅ | Step-list builder (`components/pipelines/*`), real engine (`lib/pipelines/*`), test on sample, run now, run history with rejected rows, versions + restore, write to Nexus datasets (`nexus_data` schema) or back into Postgres/MySQL/Supabase (destination role only) | No DAG/branching, joins, incremental watermark, retries, notifications; reads capped at 100k rows per run |
 | Scheduler | ✅ | Supabase pg_cron job `nexus-pipeline-tick` (every minute, only calls Vercel when a pipeline is due) → `/api/cron/pipelines` (Bearer `CRON_SECRET`, secret in Supabase Vault) | No webhook/API/event triggers |
 | Monitoring | ✅ | Today's outcomes, 7-day chart, pipeline health, recent runs, produced datasets (auto-refresh 30 s); notification bell | No SLA config, no cancel/replay |
-| Data Mapping | 🎭 | `data_mappings` table, column mapping modal | No transform engine |
+| Data Mapping | 🟡 | Map & transform step inside pipelines (14 transforms, auto-map, type conversion) | No standalone studio, lookups, templates; old `data_mappings` table unused |
 | Data Quality | 🎭 | `data_quality_metrics` table | No rule engine or quarantine |
 | Data Catalog | 🎭 | `data_catalog` table | UI mock data |
 | Business Rules | 🎭 | `business_rules` table, UI builder | Not persisted or evaluated |
 | Analytics / Dashboards | 🎭 | `dashboards` table | Placeholder UI |
 | Version Control | 🎭 | `pipeline_versions` table | Not written on save |
-| Governance | 🎭 | `audit_logs` (partially written), `governance_policies` table | RBAC/tenants/policies are UI state only |
+| Governance | 🟡 | Workspaces, roles and server-side permissions (real, in Settings); audit log on all mutations | Policies (masking, retention, row-level) are still a preview page; see TD-15 |
 | AI Assistant | 🎭 | — | Mock UI |
 | Data API | ⬜ | — | — |
 
-**Known tech debt to fix early**
-1. ~~Encrypt `data_sources.credentials`~~ Done (AES-256-GCM, `NEXUS_ENCRYPTION_KEY`). Next: key rotation (`kid` in the envelope) and a per-workspace data key.
-2. ~~Timestamp IDs~~ Done: `newId(prefix)` in `lib/auth/session.ts` (UUID). Mock-only layers still use `Date.now()` client-side.
-3. ~~Unvalidated server actions~~ Done: every action in `app/actions/*` validates input with zod.
-4. ~~Copy-pasted `getUserId()`~~ Done: `requireUserId()` in `lib/auth/session.ts`; replace with `requireWorkspaceRole(role)` when workspaces land.
-5. ~~Two lockfiles~~ Done: `package-lock.json` removed; `packageManager` pins pnpm 10.34.6.
-6. ~~No migrations committed~~ Done: `drizzle/0000_init.sql` + `0001_enable_rls.sql`. Production moved from Neon (which had drifted and crashed the Connectors page) to Supabase on 2026-10-08. `scripts/db-repair-schema.mjs` remains as a drift check.
-7. Tests are scripts, not a test runner: `scripts/engine-tests.ts` (pure engine tests, run in CI) and `scripts/connector-harness.ts` (live connector checks, run manually). CI (`.github/workflows/ci.yml`) runs install, type-check, engine tests and build. Server actions/UI have no automated tests.
-9. **Dev database shares the production Postgres server** (separate `nexus_dev` database: isolated data, shared compute) because the Supabase free plan allows 2 projects per owner. Move it to its own project when upgrading. Dev/preview have no scheduler (pg_cron runs only in the production `postgres` database).
-8. **Email alerts are deferred (decision 2026-10-09).** The code path exists (`lib/notifications.ts`, Resend) but no `RESEND_API_KEY` is configured, so only in-app (bell) alerts are active and notifications show "email not configured". To finish: create a Resend account, verify a sending domain (e.g. kmplus.co.id), set `RESEND_API_KEY` + `ALERT_FROM_EMAIL` on Vercel, send a test alert, then consider Teams/Slack/WhatsApp channels (MN-5).
+**Tech debt register** (reviewed 2026-10-09). Priority: **P1** before the first customer pilot · **P2** before GA · **P3** when convenient. Mark items done here when fixed.
+
+| # | Area | Debt | Risk if left | Pri | Fix |
+|---|---|---|---|:-:|---|
+| TD-1 | Security | **DB certificates are not verified.** App DB and user-database pools use TLS with `rejectUnauthorized: false`. | Man-in-the-middle on the DB connection is possible in theory | P1 | Set `DATABASE_CA_CERT` (Supabase CA) on Vercel; add an optional CA field for customer Postgres sources |
+| TD-2 | Security | **No email verification, MFA or SSO.** Anyone can sign up with any address (invite links are bound to the email to compensate). | Account impersonation; enterprise buyers will require SSO | P1 (verification) · P2 (SSO/MFA) | Turn on Better Auth email verification once email works (TD-4); SAML/OIDC in Phase 2 |
+| TD-3 | Security | **No encryption key rotation.** One `NEXUS_ENCRYPTION_KEY` per environment; losing or changing it makes stored credentials unreadable. | Key compromise means re-entering every credential | P2 | Add `kid` to the envelope, support old+new keys, re-encrypt script; later a per-workspace data key |
+| TD-4 | Platform | **Email delivery is deferred** (decision 2026-10-09). Alerts are bell-only and invite links must be sent manually. | Failures go unnoticed outside the app; manual invites | P1 | Resend account + verified domain, set `RESEND_API_KEY` / `ALERT_FROM_EMAIL`, send invites by email, then Teams/Slack/WhatsApp (MN-5) |
+| TD-5 | Platform | **Pipelines run inside the web request** (300 s, max 100k rows per run). | Large HR syncs time out | P1 for big customers | Background worker + job queue (ADR-1); keep the request path for small runs |
+| TD-6 | Platform | **Dev database shares the production Postgres server** (`nexus_dev` database) because the free plan allows 2 projects per owner; dev and preview have no scheduler. | Heavy dev load could slow production | P2 | Move dev to its own Supabase project when upgrading |
+| TD-7 | Platform | **Vercel Hobby plan limits:** 300 s functions, daily-only Vercel cron (worked around with Supabase pg_cron). Hobby is for non-commercial use. | Customer use needs a paid plan | P1 before customers | Upgrade to Vercel Pro (and Supabase Pro for backups/PITR) |
+| TD-8 | Quality | **Type errors don't fail the build** (`ignoreBuildErrors: true` in `next.config.mjs`), although type-check is now clean and runs in CI. | A broken type can still deploy if CI is skipped | P2 | Remove the flag |
+| TD-9 | Quality | **No automated tests for server actions, permissions or UI.** Engine tests run in CI; the connector harness is manual and depends on public demo servers. | Regressions in auth/permissions slip through | P2 | Integration tests against `nexus_dev` for `requireWorkspace` and key actions; scheduled connector-harness run |
+| TD-10 | Connectors | **Not yet proven on real accounts:** Oracle, Snowflake, Salesforce, Supabase (REST path) and live Talenta (response format not public). | First customer finds the bug | P1 for the connectors a pilot uses | Run the harness with real credentials (env vars already supported) |
+| TD-11 | Connectors | **REST and Salesforce credentials can't be edited** after creation (custom forms); others can. | Re-create the data source to change them | P3 | Support custom forms in the edit dialog |
+| TD-12 | Code | **Leftover mock code:** six unreachable mock screens (`ai-advanced`, `business-rules`, `data-catalog`, `data-mapping`, `data-quality`, `version-control` layers), nine unused mock tables (`connectors`, `pipeline_steps`, `data_mappings`, `data_catalog`, `business_rules`, `data_quality_metrics`, `dashboards`, `governance_policies`, `integration_configs`), and the Analytics/Governance preview pages. | Confusion about what is real; dead code | P3 | Delete or rebuild each when its layer is implemented |
+| TD-13 | Code | **Stale scripts:** `scripts/test-persisted-source.mjs` and `scripts/uninstall-all-connectors.mjs` predate workspaces (no `workspaceId`) and will fail. | Misleading tooling | P3 | Update or delete |
+| TD-14 | Data | **App timestamps are `timestamp without time zone`** (stored as UTC by Drizzle). Raw SQL or other tools may read them as local time. | Off-by-hours bugs in reports/integrations | P3 | Migrate to `timestamptz` |
+| TD-15 | Governance | **Audit log is incomplete:** no IP/user agent, no read/export/login events. | Weak for UU PDP / audit requests | P2 | Capture request metadata in `audit()`; log dataset previews and exports |
+| TD-16 | Process | **Migration 0003 was edited after it was applied** (made a no-op outside the pg_cron database; result identical). | Precedent for editing applied migrations | P3 | Rule: never edit an applied migration; add a new one instead |
+
+**Accepted risks** (owner's decision): the production database password was shared in a chat transcript (2026-10-08/09); rotate it before customer data arrives.
+
+**Resolved:** credentials encrypted at rest · UUID ids · zod validation on all actions · shared `requireWorkspace` · single pnpm lockfile · committed migrations + tracked runner · workspaces & server-side RBAC · CI (type-check, engine tests, build) · dev database separated from production data.
 
 ---
 
