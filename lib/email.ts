@@ -1,11 +1,11 @@
 import nodemailer, { type Transporter } from 'nodemailer'
 
 /**
- * Outgoing email over SMTP (TD-4). Works with any SMTP provider; we use
- * Brevo's free tier (smtp-relay.brevo.com:587, 300 emails/day).
+ * Outgoing email over SMTP (TD-4). Works with any SMTP provider; we use the
+ * company mail server (mail.kmplus.co.id:465, mailbox noreply@kmplus.co.id).
  *
  *   SMTP_HOST, SMTP_PORT (587 STARTTLS or 465 TLS), SMTP_USER, SMTP_PASSWORD
- *   EMAIL_FROM   e.g. "KMPlus Nexus <nexus@kmplus.co.id>" (a sender verified at the provider)
+ *   EMAIL_FROM   e.g. "KMPlus Nexus <noreply@kmplus.co.id>" (must be the SMTP_USER mailbox)
  *
  * Without SMTP_HOST, development prints emails to the server console and
  * production refuses to send (emailEnabled() is false, so sign-up verification
@@ -15,7 +15,8 @@ import nodemailer, { type Transporter } from 'nodemailer'
 let transporter: Transporter | null = null
 
 export function smtpConfigured() {
-  return Boolean(process.env.SMTP_HOST && process.env.EMAIL_FROM)
+  // A login without its password counts as not configured, so verification isn't required before mail can go out.
+  return Boolean(process.env.SMTP_HOST && process.env.EMAIL_FROM && (!process.env.SMTP_USER || process.env.SMTP_PASSWORD))
 }
 
 /** True when emails actually reach people, or are printed in local development. */

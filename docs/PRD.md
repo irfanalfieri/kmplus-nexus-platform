@@ -539,7 +539,7 @@ Nexus doesn't expose raw source systems. It publishes **standardized business do
 | Analytics / Dashboards | 🎭 | Preview page | No dashboards |
 | Version Control | ✅ | `pipeline_versions` written on every save; history and restore in the run-history dialog | No diff view |
 | Governance | 🟡 | Workspaces, roles and server-side permissions; audit log of every change, data view (previews, samples, rejected rows, test runs), run and login, with IP and user agent; audit viewer in Settings (`audit:view`) | Policies (masking, retention, row-level) are still a preview page |
-| Email | 🟡 | SMTP mailer (`lib/email.ts`, Brevo free tier) for verification, invites and alerts; dev prints emails to the console | Production SMTP credentials not set yet (TD-18) |
+| Email | 🟡 | SMTP mailer (`lib/email.ts`, company mail server `mail.kmplus.co.id` as `noreply@kmplus.co.id`) for verification, invites and alerts; dev prints emails to the console | Production SMTP credentials not set yet (TD-18) |
 | AI Assistant | 🎭 | — | Mock UI |
 | Data API | ⬜ | — | — |
 
@@ -552,7 +552,7 @@ Nexus doesn't expose raw source systems. It publishes **standardized business do
 | TD-7 | Platform | **Vercel Hobby plan limits:** 300 s functions, daily-only Vercel cron (worked around with Supabase pg_cron). Hobby is for non-commercial use. | Customer use needs a paid plan | P1 before customers | Upgrade to Vercel Pro (and Supabase Pro for backups/PITR) |
 | TD-10 | Connectors | **Not yet proven on real accounts:** Oracle, Snowflake, Salesforce, Supabase (REST path) and live Talenta (response format not public). | First customer finds the bug | P1 for the connectors a pilot uses | Run the harness with real credentials (env vars already supported) |
 | TD-17 | Platform | **Worker delivery is at-least-once.** If a function dies between writing a chunk and checkpointing it, the chunk is written again on resume. Upsert destinations are unaffected. | Duplicate rows in *append* destinations after a crash | P2 | Idempotency key column for append writes, or write + checkpoint in one transaction for Nexus datasets |
-| TD-18 | Platform | **Production SMTP not configured.** Until `SMTP_*` / `EMAIL_FROM` are set on Vercel, production skips email verification (2FA still applies), invites are copy-paste and alerts are bell-only. | Unverified sign-ups; missed failure alerts | P1 | Set the Brevo SMTP variables (sender domain verified with SPF/DKIM) and redeploy |
+| TD-18 | Platform | **Production SMTP not configured.** Until `SMTP_*` / `EMAIL_FROM` are set on Vercel, production skips email verification (2FA still applies), invites are copy-paste and alerts are bell-only. | Unverified sign-ups; missed failure alerts | P1 | Host, port, user and sender are set in Vercel; add `SMTP_PASSWORD` (noreply@kmplus.co.id mailbox) and redeploy |
 | TD-19 | Security | **No 2FA recovery flow.** A user who loses both their authenticator and backup codes is locked out; admins can't reset 2FA and users can't regenerate backup codes in the app. | Support load; locked-out admins | P1 | Settings → Security: regenerate backup codes, re-enroll; admin "reset 2FA" with audit entry |
 | TD-20 | Code | **Analytics and Governance preview pages** still show sample data. | Confusion about what is real | P3 | Rebuild when those layers are implemented |
 
