@@ -33,8 +33,10 @@ function transport() {
       secure: port === 465,
       requireTLS: port !== 465,
       auth: process.env.SMTP_USER ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD } : undefined,
-      connectionTimeout: 10_000,
-      socketTimeout: 15_000,
+      // mail.kmplus.co.id is sometimes slow to accept connections.
+      connectionTimeout: 20_000,
+      greetingTimeout: 20_000,
+      socketTimeout: 30_000,
     })
   }
   return transporter
