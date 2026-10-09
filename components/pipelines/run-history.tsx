@@ -88,7 +88,12 @@ export default function RunHistory({ pipelineId, pipelineName, currentVersion, o
     }
   }
 
-  const details = (selected?.executionDetails ?? {}) as { steps?: StepStat[]; destination?: { target: string; rowCount?: number } }
+  const details = (selected?.executionDetails ?? {}) as {
+    steps?: StepStat[]
+    destination?: { target: string; rowCount?: number }
+    attempts?: { attempt: number; error?: string; at: string }[]
+    watermark?: { column: string; value: string | null }
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-stretch justify-center bg-black/50 p-0 sm:p-4" role="dialog" aria-modal="true" aria-label="Pipeline history">
@@ -154,6 +159,24 @@ export default function RunHistory({ pipelineId, pipelineName, currentVersion, o
                     </p>
                   )}
                   {selected.errorMessage && <p className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{selected.errorMessage}</p>}
+                  {details.attempts && details.attempts.length > 1 && (
+                    <div className="rounded-md border border-border p-3 text-sm">
+                      <div className="mb-1 font-medium">{details.attempts.length} attempts</div>
+                      <ul className="space-y-0.5 text-xs text-muted-foreground">
+                        {details.attempts.map((a) => (
+                          <li key={a.attempt}>
+                            #{a.attempt} · {formatWhen(a.at)} · {a.error ? <span className="text-destructive">{a.error}</span> : 'succeeded'}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {details.watermark && (
+                    <p className="text-xs text-muted-foreground">
+                      Incremental on <span className="font-mono">{details.watermark.column}</span>:{' '}
+                      {details.watermark.value ? <>read up to <span className="font-mono">{details.watermark.value}</span></> : 'no new rows'}
+                    </p>
+                  )}
                   {details.steps && details.steps.length > 0 && (
                     <table className="w-full text-sm">
                       <thead>

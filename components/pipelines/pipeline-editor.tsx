@@ -1,17 +1,19 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { ArrowDown, ArrowUp, Database, Filter, FlaskConical, Loader2, Save, ShieldCheck, Shuffle, Trash2, Upload, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, BellRing, Database, Filter, FlaskConical, Loader2, Save, ShieldCheck, Shuffle, Trash2, Upload, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import {
   DEFAULT_SCHEDULE,
+  DEFAULT_SETTINGS,
   definitionSchema,
   describeDefinitionError,
   newStepId,
   scheduleSchema,
   type PipelineSchedule,
+  type PipelineSettings,
   type PipelineStep,
 } from '@/lib/pipelines/definition'
 import { describeSchedule, formatInTimezone, nextRunTimes } from '@/lib/pipelines/schedule'
@@ -34,7 +36,10 @@ export interface EditablePipeline {
   description: string
   steps: PipelineStep[]
   schedule: PipelineSchedule
+  settings: PipelineSettings
   enabled: boolean
+  /** Incremental sync position of the saved pipeline (display only). */
+  syncPosition?: string | null
 }
 
 export function blankPipeline(): EditablePipeline {
@@ -43,8 +48,9 @@ export function blankPipeline(): EditablePipeline {
     description: '',
     enabled: false,
     schedule: DEFAULT_SCHEDULE,
+    settings: DEFAULT_SETTINGS,
     steps: [
-      { id: newStepId(), type: 'source', dataSourceId: '', table: '', maxRows: 10000 },
+      { id: newStepId(), type: 'source', dataSourceId: '', table: '', maxRows: 10000, mode: 'full', watermarkColumn: '' },
       { id: newStepId(), type: 'destination', kind: 'dataset', datasetName: '', mode: 'replace', keys: [] },
     ],
   }
@@ -103,7 +109,7 @@ export default function PipelineEditor({
   const [openSample, setOpenSample] = useState<string | null>(null)
 
   const columns = useMemo(() => columnsPerStep(draft.steps, options), [draft.steps, options])
-  const validation = useMemo(() => definitionSchema.safeParse({ steps: draft.steps }), [draft.steps])
+  const validation = useMemo(() => definitionSchema.safeParse({ steps: draft.steps, settings: draft.settings }), [draft.steps, draft.settings])
   const scheduleCheck = useMemo(() => scheduleSchema.safeParse(draft.schedule), [draft.schedule])
   const upcoming = useMemo(() => (scheduleCheck.success ? nextRunTimes(scheduleCheck.data, 3) : []), [scheduleCheck])
 
@@ -132,7 +138,7 @@ export default function PipelineEditor({
     setTesting(true)
     setTest(null)
     try {
-      const res = await testPipeline({ steps: draft.steps })
+      const res = await testPipeline({ steps: draft.steps, settings: draft.settings }, draft.id)
       if (!res.ok) setError(res.message)
       else setTest(res.result)
     } catch (err) {
@@ -154,7 +160,7 @@ export default function PipelineEditor({
         id: draft.id,
         name: draft.name,
         description: draft.description,
-        definition: { steps: draft.steps },
+        definition: { steps: draft.steps, settings: draft.settings },
         schedule: draft.schedule,
         enabled: draft.enabled,
       })
@@ -251,10 +257,18 @@ export default function PipelineEditor({
             </Button>
           </div>
 
+          <SettingsSection settings={draft.settings} onChange={(patch) => setDraft((d) => ({ ...d, settings: { ...d.settings, ...patch } }))} />
+
           <ScheduleSection schedule={draft.schedule} enabled={draft.enabled} upcoming={upcoming} onChange={setSchedule} onEnabled={(enabled) => setDraft({ ...draft, enabled })} />
 
           {test && !test.error && (
             <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm">
+              {test.watermark && (
+                <div className="mb-1 text-xs text-muted-foreground">
+                  Incremental: reading rows after {draft.syncPosition ? `${test.watermark.column} > ${draft.syncPosition}` : 'the beginning (first sync)'}
+                  {test.watermark.value ? ` · a run would advance the position to ${test.watermark.value}` : ' · no new rows'}
+                </div>
+              )}
               Test run on a sample: read {test.rowsRead} rows, {test.steps[test.steps.length - 1]?.rowsOut ?? 0} would be written
               {test.rejectedCount > 0 && `, ${test.rejectedCount} rejected`}. Nothing was written.
               {test.rejects.length > 0 && (
@@ -281,6 +295,62 @@ export default function PipelineEditor({
         </footer>
       </div>
     </div>
+  )
+}
+
+function SettingsSection({ settings, onChange }: { settings: PipelineSettings; onChange: (patch: Partial<PipelineSettings>) => void }) {
+  const [emails, setEmails] = useState(settings.alertEmails.join(', '))
+  return (
+    <section className="rounded-lg border border-border p-3">
+      <div className="mb-3 flex items-center gap-2 font-medium">
+        <BellRing className="h-4 w-4 text-primary" /> Retries & alerts
+      </div>
+      <div className="grid gap-3 md:grid-cols-4">
+        <label className="text-sm">
+          <span className="mb-1 block text-xs font-medium text-muted-foreground">Retries on failure</span>
+          <NativeSelect value={String(settings.retries)} onChange={(v) => onChange({ retries: Number(v) })}>
+            {[0, 1, 2, 3].map((n) => (
+              <option key={n} value={n}>
+                {n === 0 ? 'No retries' : `${n} retr${n === 1 ? 'y' : 'ies'}`}
+              </option>
+            ))}
+          </NativeSelect>
+        </label>
+        <label className="text-sm">
+          <span className="mb-1 block text-xs font-medium text-muted-foreground">First retry after</span>
+          <NativeSelect value={String(settings.retryDelaySeconds)} onChange={(v) => onChange({ retryDelaySeconds: Number(v) })} disabled={!settings.retries}>
+            {[5, 15, 30, 60].map((n) => (
+              <option key={n} value={n}>
+                {n} seconds (then doubles)
+              </option>
+            ))}
+          </NativeSelect>
+        </label>
+        <label className="text-sm">
+          <span className="mb-1 block text-xs font-medium text-muted-foreground">Email alerts</span>
+          <NativeSelect value={settings.alertOn} onChange={(v) => onChange({ alertOn: v as PipelineSettings['alertOn'] })}>
+            <option value="failure">When a run fails</option>
+            <option value="failure_or_rejects">When it fails or rejects rows</option>
+            <option value="never">Never (bell only)</option>
+          </NativeSelect>
+        </label>
+        <label className="text-sm">
+          <span className="mb-1 block text-xs font-medium text-muted-foreground">Send alerts to</span>
+          <Input
+            value={emails}
+            disabled={settings.alertOn === 'never'}
+            placeholder="Your account email"
+            onChange={(e) => {
+              setEmails(e.target.value)
+              onChange({ alertEmails: e.target.value.split(/[,s]+/).map((x) => x.trim()).filter(Boolean) })
+            }}
+          />
+        </label>
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">
+        Retries apply to connection and write errors, not to bad data or configuration. Failed runs always appear under the bell icon.
+      </p>
+    </section>
   )
 }
 

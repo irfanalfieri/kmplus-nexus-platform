@@ -7,6 +7,8 @@ import * as rest from './drivers/rest'
 import * as sap from './drivers/sap'
 import * as salesforce from './drivers/salesforce'
 import * as snowflake from './drivers/snowflake'
+import * as talenta from './drivers/talenta'
+import * as ldap from './drivers/ldap'
 
 export async function testConnectorConnection(
   slug: ConnectorSlug,
@@ -29,6 +31,10 @@ export async function testConnectorConnection(
       return salesforce.testSalesforceConnection(credentials)
     case 'snowflake':
       return snowflake.testSnowflakeConnection(credentials)
+    case 'talenta':
+      return talenta.testTalentaConnection(credentials)
+    case 'ldap':
+      return ldap.testLdapConnection(credentials)
     default:
       return { ok: false, message: `Unsupported connector: ${slug}` }
   }
@@ -55,6 +61,10 @@ export async function scanConnectorSchema(
       return salesforce.scanSalesforceSchema(credentials)
     case 'snowflake':
       return snowflake.scanSnowflakeSchema(credentials)
+    case 'talenta':
+      return talenta.scanTalentaSchema(credentials)
+    case 'ldap':
+      return ldap.scanLdapSchema(credentials)
     default:
       throw new Error(`Unsupported connector: ${slug}`)
   }
@@ -83,6 +93,10 @@ export async function sampleConnectorTable(
       return salesforce.sampleSalesforceObject(credentials, tableName, limit)
     case 'snowflake':
       return snowflake.sampleSnowflakeTable(credentials, tableName, limit)
+    case 'talenta':
+      return talenta.sampleTalentaObject(credentials, tableName, limit)
+    case 'ldap':
+      return ldap.sampleLdapObject(credentials, tableName, limit)
     default:
       throw new Error(`Unsupported connector: ${slug}`)
   }

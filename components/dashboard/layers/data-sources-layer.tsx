@@ -19,7 +19,14 @@ import { REST_DEFAULTS, validateRestCredentials } from '@/lib/connectors/rest-cl
 import { validateSalesforceCredentials } from '@/lib/connectors/salesforce/oauth'
 import { SALESFORCE_DEFAULTS } from '@/components/connectors/salesforce-connector-form'
 import type { SchemaScanResult } from '@/lib/connectors/types'
-import { createDataSource, deleteDataSource, getDataSources } from '@/app/actions/data-sources'
+import {
+  createDataSource,
+  deleteDataSource,
+  getDataSources,
+  renameDataSource,
+  setDataSourceRole,
+  testConnection,
+} from '@/app/actions/data-sources'
 import { getInstalledConnectorSlugs } from '@/app/actions/connectors'
 import { previewRestConnection, testAndScanDataSource } from '@/app/actions/connector-source'
 import type { RestRequestPreview } from '@/lib/connectors/rest-client'
@@ -85,6 +92,9 @@ export default function DataSourcesLayer() {
   const [pendingSchemaScan, setPendingSchemaScan] = useState<SchemaScanResult | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
+  const [listError, setListError] = useState('')
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const [retestingId, setRetestingId] = useState<string | null>(null)
   const [explorerOpen, setExplorerOpen] = useState(false)
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null)
   const [restPreview, setRestPreview] = useState<RestRequestPreview | null>(null)
@@ -98,8 +108,8 @@ export default function DataSourcesLayer() {
   const selectedConnector = newSourceType ? getConnectorDefinition(newSourceType) : undefined
   const fieldsValid = newSourceType ? credentialsValid(newSourceType, credentialValues) : false
 
+  // Initial state is loading; later refreshes update the list in place (no flicker).
   const loadAll = useCallback(async () => {
-    setLoading(true)
     try {
       const [rows, slugs] = await Promise.all([getDataSources(), getInstalledConnectorSlugs()])
       setInstalledSlugs(slugs)
@@ -214,13 +224,35 @@ export default function DataSourcesLayer() {
     }
   }
 
-  const handleDelete = async (id: string) => {
+  const runListAction = async (action: () => Promise<unknown>, fallback: string) => {
+    setListError('')
     try {
-      await deleteDataSource(id)
+      await action()
       await loadAll()
     } catch (err) {
-      setConnectionError(err instanceof Error ? err.message : 'Failed to delete source')
+      setListError(err instanceof Error ? err.message : fallback)
     }
+  }
+
+  const handleDelete = (id: string) =>
+    runListAction(async () => {
+      await deleteDataSource(id)
+      setConfirmDeleteId(null)
+    }, 'Failed to delete source')
+
+  const handleRename = (id: string) =>
+    runListAction(async () => {
+      await renameDataSource(id, editName)
+      setEditingId(null)
+    }, 'Rename failed')
+
+  const handleRole = (id: string, role: 'source' | 'destination') =>
+    runListAction(() => setDataSourceRole(id, role), 'Could not change role')
+
+  const handleRetest = async (id: string) => {
+    setRetestingId(id)
+    await runListAction(() => testConnection(id), 'Connection test failed')
+    setRetestingId(null)
   }
 
   const selectedSource = selectedSourceId ? sources.find((s) => s.id === selectedSourceId) : null
@@ -384,13 +416,31 @@ export default function DataSourcesLayer() {
           </p>
         ) : (
           <div className="grid gap-3">
+            {listError && (
+              <p className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{listError}</p>
+            )}
             {sources.map((source) => (
               <div
                 key={source.id}
-                className="flex items-center justify-between rounded-lg border border-border/50 bg-muted/30 p-4"
+                className="flex flex-col gap-3 rounded-lg border border-border/50 bg-muted/30 p-4 lg:flex-row lg:items-center lg:justify-between"
               >
-                <div>
-                  <div className="font-medium">{source.name}</div>
+                <div className="min-w-0 flex-1">
+                  {editingId === source.id ? (
+                    <div className="flex items-center gap-2">
+                      <Input value={editName} onChange={(e) => setEditName(e.target.value)} className="h-8 max-w-xs" aria-label="Data source name" />
+                      <Button size="sm" onClick={() => void handleRename(source.id)}>
+                        <Save className="mr-1 h-4 w-4" /> Save
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>Cancel</Button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 font-medium">
+                      {source.name}
+                      <Badge variant={source.role === 'destination' ? 'default' : 'outline'}>
+                        {source.role === 'destination' ? 'Destination' : 'Source'}
+                      </Badge>
+                    </div>
+                  )}
                   <div className="text-sm text-muted-foreground">
                     {getConnectorDefinition(source.sourceType)?.name ?? source.sourceType.toUpperCase()} · Last:{' '}
                     {formatLastConnected(source.lastConnected)}
@@ -399,7 +449,20 @@ export default function DataSourcesLayer() {
                       : null}
                   </div>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <select
+                    value={source.role ?? 'source'}
+                    onChange={(e) => void handleRole(source.id, e.target.value as 'source' | 'destination')}
+                    className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                    aria-label={`Role of ${source.name}`}
+                    title="Pipelines only write to destinations"
+                  >
+                    <option value="source">Use as source</option>
+                    <option value="destination">Use as destination</option>
+                  </select>
+                  <Button size="sm" variant="outline" disabled={retestingId === source.id} onClick={() => void handleRetest(source.id)}>
+                    {retestingId === source.id ? 'Testing…' : 'Re-test'}
+                  </Button>
                   {source.status === 'connected' ? (
                     <span className="flex items-center gap-1 text-xs text-green-600">
                       <CheckCircle2 className="h-4 w-4" /> Connected
@@ -432,9 +495,17 @@ export default function DataSourcesLayer() {
                   >
                     <Edit className="h-4 w-4" />
                   </Button>
-                  <Button size="sm" variant="ghost" onClick={() => void handleDelete(source.id)}>
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                  {confirmDeleteId === source.id ? (
+                    <span className="flex items-center gap-1 text-xs">
+                      Delete &ldquo;{source.name}&rdquo;?
+                      <Button size="sm" variant="destructive" onClick={() => void handleDelete(source.id)}>Delete</Button>
+                      <Button size="sm" variant="ghost" onClick={() => setConfirmDeleteId(null)}>Cancel</Button>
+                    </span>
+                  ) : (
+                    <Button size="sm" variant="ghost" onClick={() => setConfirmDeleteId(source.id)} aria-label={`Delete ${source.name}`}>
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  )}
                 </div>
               </div>
             ))}

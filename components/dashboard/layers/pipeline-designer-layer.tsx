@@ -1,16 +1,17 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Database, Edit, History, Loader2, Play, Plus, Trash2, Workflow } from 'lucide-react'
+import { Database, Edit, History, Loader2, Play, Plus, RotateCcw, Trash2, Workflow } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { deletePipeline, getBuilderOptions, getDatasetPreview, listPipelines, runPipelineNow, setPipelineEnabled } from '@/app/actions/pipelines'
-import { DEFAULT_SCHEDULE, definitionSchema, scheduleSchema, type PipelineStep } from '@/lib/pipelines/definition'
+import { deletePipeline, getBuilderOptions, getDatasetPreview, listPipelines, resetSyncPosition, runPipelineNow, setPipelineEnabled } from '@/app/actions/pipelines'
+import { DEFAULT_SCHEDULE, DEFAULT_SETTINGS, definitionSchema, scheduleSchema, type PipelineStep } from '@/lib/pipelines/definition'
 import { describeSchedule } from '@/lib/pipelines/schedule'
 import { stepLabel } from '@/lib/pipelines/engine'
 import PipelineEditor, { blankPipeline, SampleTable, type EditablePipeline } from '@/components/pipelines/pipeline-editor'
 import RunHistory, { formatWhen, statusBadge } from '@/components/pipelines/run-history'
 import type { BuilderOptions } from '@/components/pipelines/step-editors'
+import { NOTIFICATIONS_CHANGED } from '@/components/dashboard/notification-bell'
 
 type PipelineRow = Awaited<ReturnType<typeof listPipelines>>[number]
 
@@ -23,6 +24,8 @@ function toEditable(p: PipelineRow): EditablePipeline {
     enabled: p.enabled ?? false,
     schedule: scheduleSchema.safeParse(p.schedule ?? {}).data ?? DEFAULT_SCHEDULE,
     steps: def.success ? def.data.steps : blankPipeline().steps,
+    settings: def.success ? def.data.settings : DEFAULT_SETTINGS,
+    syncPosition: p.syncPosition,
   }
 }
 
@@ -82,6 +85,7 @@ export default function PipelineDesignerLayer() {
       setNotice({ id: p.id, kind: 'err', text: err instanceof Error ? err.message : 'Run failed' })
     } finally {
       setRunning(null)
+      window.dispatchEvent(new Event(NOTIFICATIONS_CHANGED))
     }
   }
 
@@ -91,6 +95,16 @@ export default function PipelineDesignerLayer() {
       await load()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Update failed')
+    }
+  }
+
+  const resetSync = async (p: PipelineRow) => {
+    try {
+      await resetSyncPosition(p.id)
+      setNotice({ id: p.id, kind: 'ok', text: 'Sync position reset. The next run reads every row again.' })
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Reset failed')
     }
   }
 
@@ -208,6 +222,12 @@ export default function PipelineDesignerLayer() {
                       {steps.slice(1, -1).map((s) => stepLabel(s)).join(' → ') || 'no transforms'} →{' '}
                       {dst?.type === 'destination' ? (dst.kind === 'dataset' ? `dataset ${dst.datasetName}` : `${sourceName(dst.dataSourceId)} · ${dst.table}`) : 'No destination'}
                     </p>
+                    {src?.mode === 'incremental' && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Incremental on <span className="font-mono">{src.watermarkColumn}</span> ·{' '}
+                        {p.syncPosition ? <>synced up to <span className="font-mono">{p.syncPosition}</span></> : 'first run will read everything'}
+                      </p>
+                    )}
                     <p className="mt-1 text-xs text-muted-foreground">
                       {describeSchedule(schedule)}
                       {schedule.type !== 'manual' && (p.enabled ? ` · next ${formatWhen(p.nextRunAt)}` : ' · paused')} · last run {formatWhen(p.lastRunAt)}
@@ -230,6 +250,11 @@ export default function PipelineDesignerLayer() {
                     <Button size="sm" variant="outline" onClick={() => setHistoryFor(p)}>
                       <History className="mr-1 h-4 w-4" /> History
                     </Button>
+                    {src?.mode === 'incremental' && p.syncPosition && (
+                      <Button size="sm" variant="ghost" onClick={() => void resetSync(p)} title="Forget the sync position so the next run reads every row">
+                        <RotateCcw className="mr-1 h-4 w-4" /> Reset sync
+                      </Button>
+                    )}
                     {confirmDelete === p.id ? (
                       <span className="flex items-center gap-1 text-xs">
                         Delete &ldquo;{p.name}&rdquo; and its run history?

@@ -1,11 +1,9 @@
 'use server'
 
-import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { and, desc, eq, inArray } from 'drizzle-orm'
-import { headers } from 'next/headers'
 import { revalidatePath } from 'next/cache'
-import { auth } from '@/lib/auth'
+import { newId, requireUserId } from '@/lib/auth/session'
 import { db } from '@/lib/db'
 import {
   auditLogs,
@@ -16,20 +14,17 @@ import {
   pipelineVersions,
   pipelines,
 } from '@/lib/db/schema'
-import { scheduleSchema, type PipelineSchedule } from '@/lib/pipelines/definition'
+import { definitionSchema, scheduleSchema, type PipelineSchedule } from '@/lib/pipelines/definition'
 import { assertValidSchedule, nextRunAt } from '@/lib/pipelines/schedule'
-import { executePipelineRun, parseDefinition, testRunDefinition } from '@/lib/pipelines/runner'
+import { currentWatermark, executePipelineRun, parseDefinition, testRunDefinition } from '@/lib/pipelines/runner'
 import { readDatasetSample } from '@/lib/pipelines/io'
 import type { SchemaScanResult } from '@/lib/connectors/types'
 
-async function getUserId() {
-  const session = await auth.api.getSession({ headers: await headers() })
-  if (!session?.user) throw new Error('Unauthorized')
-  return session.user.id
-}
+const getUserId = requireUserId
+const idSchema = z.string().trim().min(1).max(100)
 
 async function audit(userId: string, action: string, resourceId: string, changes?: Record<string, unknown>) {
-  await db.insert(auditLogs).values({ id: `audit_${randomUUID()}`, userId, action, resource: 'pipeline', resourceId, changes })
+  await db.insert(auditLogs).values({ id: newId('audit'), userId, action, resource: 'pipeline', resourceId, changes })
 }
 
 async function getOwned(userId: string, id: string) {
@@ -59,11 +54,18 @@ export async function listPipelines() {
       lastRunAt: pipelines.lastRunAt,
       lastRunStatus: pipelines.lastRunStatus,
       nextRunAt: pipelines.nextRunAt,
+      state: pipelines.state,
       updatedAt: pipelines.updatedAt,
     })
     .from(pipelines)
     .where(eq(pipelines.userId, userId))
     .orderBy(desc(pipelines.updatedAt))
+    .then((rows) =>
+      rows.map(({ state, ...row }) => {
+        const def = definitionSchema.safeParse(row.config)
+        return { ...row, syncPosition: def.success ? currentWatermark(def.data, state) : null }
+      })
+    )
 }
 
 /** Everything the builder needs to populate pickers (no credentials). */
@@ -100,8 +102,9 @@ export async function getBuilderOptions() {
   }
 }
 
-export async function listRuns(pipelineId: string, limit = 20) {
+export async function listRuns(rawPipelineId: string, limit = 20) {
   const userId = await getUserId()
+  const pipelineId = idSchema.parse(rawPipelineId)
   await getOwned(userId, pipelineId)
   return db
     .select()
@@ -111,8 +114,9 @@ export async function listRuns(pipelineId: string, limit = 20) {
     .limit(Math.min(limit, 100))
 }
 
-export async function getRunRejects(runId: string, limit = 100) {
+export async function getRunRejects(rawRunId: string, limit = 100) {
   const userId = await getUserId()
+  const runId = idSchema.parse(rawRunId)
   return db
     .select({ id: pipelineRunRejects.id, row: pipelineRunRejects.row, errors: pipelineRunRejects.errors })
     .from(pipelineRunRejects)
@@ -120,8 +124,9 @@ export async function getRunRejects(runId: string, limit = 100) {
     .limit(Math.min(limit, 500))
 }
 
-export async function listVersions(pipelineId: string) {
+export async function listVersions(rawPipelineId: string) {
   const userId = await getUserId()
+  const pipelineId = idSchema.parse(rawPipelineId)
   await getOwned(userId, pipelineId)
   return db
     .select({ version: pipelineVersions.version, changes: pipelineVersions.changes, createdAt: pipelineVersions.createdAt })
@@ -130,8 +135,9 @@ export async function listVersions(pipelineId: string) {
     .orderBy(desc(pipelineVersions.version))
 }
 
-export async function getDatasetPreview(name: string) {
+export async function getDatasetPreview(rawName: string) {
   const userId = await getUserId()
+  const name = z.string().trim().min(1).max(64).parse(rawName)
   const [dataset] = await db
     .select()
     .from(nexusDatasets)
@@ -180,12 +186,12 @@ export async function savePipeline(input: z.input<typeof saveInput>) {
     version = (existing.version ?? 1) + 1
     await db.update(pipelines).set({ ...common, version }).where(and(eq(pipelines.id, id), eq(pipelines.userId, userId)))
   } else {
-    id = `pipe_${randomUUID()}`
+    id = newId('pipe')
     await db.insert(pipelines).values({ id, userId, ...common, version, status: 'draft' })
   }
 
   await db.insert(pipelineVersions).values({
-    id: `pver_${randomUUID()}`,
+    id: newId('pver'),
     userId,
     pipelineId: id,
     version,
@@ -198,8 +204,10 @@ export async function savePipeline(input: z.input<typeof saveInput>) {
   return { id, version }
 }
 
-export async function setPipelineEnabled(id: string, enabled: boolean) {
+export async function setPipelineEnabled(rawId: string, rawEnabled: boolean) {
   const userId = await getUserId()
+  const id = idSchema.parse(rawId)
+  const enabled = z.boolean().parse(rawEnabled)
   const existing = await getOwned(userId, id)
   const schedule = scheduleSchema.parse(existing.schedule ?? {})
   await db
@@ -210,8 +218,9 @@ export async function setPipelineEnabled(id: string, enabled: boolean) {
   revalidatePath('/dashboard')
 }
 
-export async function deletePipeline(id: string) {
+export async function deletePipeline(rawId: string) {
   const userId = await getUserId()
+  const id = idSchema.parse(rawId)
   await getOwned(userId, id)
   const runIds = (await db.select({ id: executionLogs.id }).from(executionLogs).where(eq(executionLogs.pipelineId, id))).map((r) => r.id)
   if (runIds.length) await db.delete(pipelineRunRejects).where(inArray(pipelineRunRejects.runId, runIds))
@@ -223,8 +232,10 @@ export async function deletePipeline(id: string) {
   revalidatePath('/dashboard')
 }
 
-export async function restoreVersion(id: string, version: number) {
+export async function restoreVersion(rawId: string, rawVersion: number) {
   const userId = await getUserId()
+  const id = idSchema.parse(rawId)
+  const version = z.number().int().min(1).parse(rawVersion)
   const existing = await getOwned(userId, id)
   const [snapshot] = await db
     .select()
@@ -244,19 +255,36 @@ export async function restoreVersion(id: string, version: number) {
   })
 }
 
-export async function runPipelineNow(id: string) {
+export async function runPipelineNow(rawId: string) {
   const userId = await getUserId()
+  const id = idSchema.parse(rawId)
   const outcome = await executePipelineRun(id, userId, 'manual')
   revalidatePath('/dashboard')
   return outcome
 }
 
-/** Test run of an unsaved definition: real source data, nothing written. */
-export async function testPipeline(definition: unknown) {
+/** Test run of an unsaved definition: real source data, nothing written. Uses the saved sync position when editing. */
+export async function testPipeline(definition: unknown, rawPipelineId?: string) {
   const userId = await getUserId()
   try {
-    return { ok: true as const, result: await testRunDefinition(userId, definition, 25) }
+    let state: unknown = null
+    if (rawPipelineId) state = (await getOwned(userId, idSchema.parse(rawPipelineId))).state
+    const result = await testRunDefinition(userId, definition, 25, state)
+    // Plain JSON only (rows may hold Buffers/BigInts from drivers).
+    return { ok: true as const, result: JSON.parse(JSON.stringify(result, (_k, v) => (typeof v === 'bigint' ? v.toString() : v))) as typeof result }
   } catch (err) {
     return { ok: false as const, message: err instanceof Error ? err.message : 'Test run failed' }
   }
+}
+
+/** Forget the incremental sync position so the next run reads everything again. */
+export async function resetSyncPosition(rawId: string) {
+  const userId = await getUserId()
+  const id = idSchema.parse(rawId)
+  const existing = await getOwned(userId, id)
+  const state = { ...((existing.state as Record<string, unknown> | null) ?? {}) }
+  delete state.watermark
+  await db.update(pipelines).set({ state, updatedAt: new Date() }).where(and(eq(pipelines.id, id), eq(pipelines.userId, userId)))
+  await audit(userId, 'RESET_SYNC', id)
+  revalidatePath('/dashboard')
 }

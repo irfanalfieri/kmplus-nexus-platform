@@ -51,11 +51,18 @@ export async function scanSapSchema(credentials: ConnectorCredentials): Promise<
   if (!response.ok) throw new Error(`SAP metadata fetch failed (${response.status}).`)
 
   const xml = await response.text()
-  const entitySets = [...xml.matchAll(/EntitySet Name="([^"]+)"/g)].map((m) => m[1])
+  // <EntitySet Name="Employees" EntityType="NorthwindModel.Employee"/>: columns come from the Employee type.
+  const entitySets = [...xml.matchAll(/<EntitySet\b[^>]*>/g)]
+    .map((m) => ({
+      name: m[0].match(/Name="([^"]+)"/)?.[1] ?? '',
+      type: (m[0].match(/EntityType="([^"]+)"/)?.[1] ?? '').split('.').pop() ?? '',
+    }))
+    .filter((s) => s.name)
   const entityTypes = [...xml.matchAll(/EntityType Name="([^"]+)"/g)].map((m) => m[1])
+  const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-  const tables: SchemaTable[] = entitySets.map((name) => {
-    const typeBlock = xml.match(new RegExp(`EntityType Name="${name}"[\\s\\S]*?<\\/EntityType>`, 'i'))
+  const tables: SchemaTable[] = entitySets.map(({ name, type }) => {
+    const typeBlock = xml.match(new RegExp(`EntityType Name="${escapeRegex(type || name)}"[\\s\\S]*?<\\/EntityType>`, 'i'))
     const properties = typeBlock
       ? [...typeBlock[0].matchAll(/Property Name="([^"]+)" Type="([^"]+)"/g)].map((m) => ({
           name: m[1],
@@ -101,7 +108,14 @@ export async function sampleSapEntity(
   if (!response.ok) throw new Error(`SAP entity fetch failed (${response.status}).`)
 
   const payload = await response.json()
-  const rows = (payload?.d?.results ?? payload?.value ?? []) as Record<string, unknown>[]
+  // OData V2 returns {d:{results:[…]}} (some services {d:[…]}); V4 returns {value:[…]}.
+  const raw = (Array.isArray(payload?.d) ? payload.d : payload?.d?.results ?? payload?.value ?? []) as Record<string, unknown>[]
+  // Drop OData bookkeeping: __metadata and unexpanded navigation links ({__deferred}).
+  const rows = raw.map((row) =>
+    Object.fromEntries(
+      Object.entries(row).filter(([k, v]) => k !== '__metadata' && !(v && typeof v === 'object' && '__deferred' in (v as object)))
+    )
+  )
   return {
     tableName: entitySet,
     columns: rows.length ? Object.keys(rows[0]) : [],

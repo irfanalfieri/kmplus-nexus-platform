@@ -1,8 +1,8 @@
 'use client'
 
-import { Bell, Search, User } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { Search, User } from 'lucide-react'
 import { Input } from '@/components/ui/input'
+import NotificationBell from './notification-bell'
 
 export default function TopBar() {
   return (
@@ -18,9 +18,7 @@ export default function TopBar() {
       </div>
 
       <div className="flex items-center gap-4">
-        <Button variant="ghost" size="icon">
-          <Bell className="w-5 h-5" />
-        </Button>
+        <NotificationBell />
         <div className="w-8 h-8 bg-primary rounded-full flex items-center justify-center">
           <User className="w-4 h-4 text-primary-foreground" />
         </div>

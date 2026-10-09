@@ -113,6 +113,39 @@ export const CONNECTOR_CATALOG: ConnectorDefinition[] = [
       { key: 'schema', label: 'Schema', type: 'text', required: false, placeholder: 'public' },
     ],
   },
+  {
+    slug: 'talenta',
+    name: 'Talenta (Mekari) Connector',
+    category: 'HR',
+    version: '1.0.0',
+    description: 'Mekari Talenta HRIS via the Mekari API (HMAC). Reads employees plus any extra list endpoints you add',
+    includedByDefault: false,
+    premium: true,
+    credentialFields: [
+      { key: 'clientId', label: 'HMAC Client ID', type: 'text', required: true },
+      { key: 'clientSecret', label: 'HMAC Client Secret', type: 'password', required: true },
+      { key: 'baseUrl', label: 'API base URL', type: 'text', required: false, placeholder: 'https://api.mekari.com' },
+      { key: 'endpoints', label: 'Additional endpoints (optional, comma-separated paths)', type: 'text', required: false, placeholder: '/v2/talenta/v2/branch' },
+      { key: 'pageSize', label: 'Page size', type: 'number', required: false, placeholder: '50' },
+    ],
+  },
+  {
+    slug: 'ldap',
+    name: 'Active Directory / LDAP Connector',
+    category: 'Identity',
+    version: '1.0.0',
+    description: 'Read users, groups and OUs from Active Directory, OpenLDAP or any LDAP v3 directory (read-only)',
+    includedByDefault: true,
+    premium: false,
+    credentialFields: [
+      { key: 'url', label: 'Server URL', type: 'text', required: true, placeholder: 'ldaps://dc01.corp.example.com:636' },
+      { key: 'bindDN', label: 'Bind DN / user', type: 'text', required: false, placeholder: 'CN=svc-nexus,OU=Service,DC=corp,DC=example,DC=com' },
+      { key: 'password', label: 'Bind password', type: 'password', required: false },
+      { key: 'baseDN', label: 'Base DN', type: 'text', required: true, placeholder: 'DC=corp,DC=example,DC=com' },
+      { key: 'userFilter', label: 'User filter (optional)', type: 'text', required: false, placeholder: '(&(objectCategory=person)(objectClass=user))' },
+      { key: 'allowSelfSigned', label: 'Allow self-signed TLS (true/false)', type: 'text', required: false, placeholder: 'false' },
+    ],
+  },
 ]
 
 export function getConnectorDefinition(slug: string): ConnectorDefinition | undefined {

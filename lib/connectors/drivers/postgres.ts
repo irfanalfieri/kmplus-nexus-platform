@@ -7,15 +7,16 @@ function getConnectionString(credentials: ConnectorCredentials) {
 }
 
 const PG_DATE_OID = 1082
+const PG_TIMESTAMP_OID = 1114 // timestamp without time zone
 
 /**
- * Keep DATE columns as 'yyyy-MM-dd' strings. pg's default turns them into a
- * Date at the server's local midnight, which shifts the day when the process
- * isn't running in UTC.
+ * Keep DATE and zone-less TIMESTAMP columns as their text form. pg's default
+ * turns them into a Date in the server's local timezone, which shifts values
+ * when the process isn't running in UTC (and breaks incremental watermarks).
  */
 const externalTypes = {
   getTypeParser: ((oid: number, format?: 'text' | 'binary') =>
-    oid === PG_DATE_OID ? (value: string) => value : types.getTypeParser(oid, format)) as typeof types.getTypeParser,
+    oid === PG_DATE_OID || oid === PG_TIMESTAMP_OID ? (value: string) => value : types.getTypeParser(oid, format)) as typeof types.getTypeParser,
 }
 
 /**

@@ -25,6 +25,12 @@ export function parseDate(value: unknown, inputFormat = ''): Date | null {
     return utc(+m[3], +m[2], +m[1], +(m[4] ?? 0), +(m[5] ?? 0), +(m[6] ?? 0))
   }
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return utc(+s.slice(0, 4), +s.slice(5, 7), +s.slice(8, 10))
+  // Zone-less timestamps (e.g. Postgres "timestamp" columns) are UTC, never server-local.
+  if ((m = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2})(\.\d+)?)?$/))) {
+    const d = utc(+m[1], +m[2], +m[3], +m[4], +m[5], +(m[6] ?? 0))
+    if (d && m[7]) d.setUTCMilliseconds(Math.round(Number(m[7]) * 1000))
+    return d
+  }
   const d = new Date(s)
   return Number.isNaN(d.getTime()) ? null : d
 }

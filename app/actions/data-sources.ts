@@ -1,23 +1,24 @@
 'use server'
 
-import { auth } from '@/lib/auth'
+import { z } from 'zod'
+import { and, desc, eq } from 'drizzle-orm'
+import { revalidatePath } from 'next/cache'
 import { db } from '@/lib/db'
-import { dataSources, auditLogs } from '@/lib/db/schema'
+import { auditLogs, dataSources, pipelines } from '@/lib/db/schema'
 import { assertConnectorInstalled } from '@/app/actions/connectors'
 import { isConnectorSlug } from '@/lib/connectors/catalog'
 import { decryptCredentials, encryptCredentials } from '@/lib/security/credentials'
-import { eq, and, desc } from 'drizzle-orm'
-import { headers } from 'next/headers'
-import { revalidatePath } from 'next/cache'
+import { newId, requireUserId } from '@/lib/auth/session'
 
-async function getUserId() {
-  const session = await auth.api.getSession({ headers: await headers() })
-  if (!session?.user) throw new Error('Unauthorized')
-  return session.user.id
+const idSchema = z.string().trim().min(1).max(100)
+const roleSchema = z.enum(['source', 'destination'])
+
+async function audit(userId: string, action: string, resourceId: string, changes?: Record<string, unknown>) {
+  await db.insert(auditLogs).values({ id: newId('audit'), userId, action, resource: 'data_source', resourceId, changes })
 }
 
 export async function getDataSources() {
-  const userId = await getUserId()
+  const userId = await requireUserId()
   // Never send credentials to the client.
   return db
     .select({
@@ -37,101 +38,117 @@ export async function getDataSources() {
     .orderBy(desc(dataSources.createdAt))
 }
 
-export async function createDataSource(data: any) {
-  const userId = await getUserId()
-  const id = `src_${Date.now()}`
+const createInput = z.object({
+  name: z.string().trim().min(1, 'Name is required').max(120),
+  type: z.string().trim().min(1).max(60),
+  sourceType: z.string().trim().min(1).max(60),
+  config: z
+    .object({ role: roleSchema.default('source'), schemaScan: z.unknown().optional() })
+    .passthrough()
+    .default({ role: 'source' }),
+  credentials: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).default({}),
+})
 
-  if (isConnectorSlug(data.sourceType)) {
-    await assertConnectorInstalled(data.sourceType)
-  }
+export async function createDataSource(input: z.input<typeof createInput>) {
+  const userId = await requireUserId()
+  const data = createInput.parse(input)
+  if (!isConnectorSlug(data.sourceType)) throw new Error(`Unknown connector "${data.sourceType}".`)
+  await assertConnectorInstalled(data.sourceType)
 
-  const hasSchemaScan = Boolean((data.config as { schemaScan?: unknown })?.schemaScan)
-
+  const id = newId('src')
+  const hasSchemaScan = Boolean(data.config.schemaScan)
   await db.insert(dataSources).values({
     id,
     userId,
     name: data.name,
     type: data.type,
     sourceType: data.sourceType,
-    config: data.config || {},
-    credentials: encryptCredentials(id, data.credentials || {}),
+    config: data.config,
+    credentials: encryptCredentials(id, data.credentials),
     status: hasSchemaScan ? 'connected' : 'disconnected',
     lastConnected: hasSchemaScan ? new Date() : undefined,
   })
-
-  await db.insert(auditLogs).values({
-    id: `audit_${Date.now()}`,
-    userId,
-    action: 'CREATE',
-    resource: 'data_source',
-    resourceId: id,
-  })
-
+  await audit(userId, 'CREATE', id, { sourceType: data.sourceType, role: data.config.role })
   revalidatePath('/dashboard')
   return id
 }
 
-export async function testConnection(id: string) {
-  const userId = await getUserId()
-
+export async function testConnection(rawId: string) {
+  const userId = await requireUserId()
+  const id = idSchema.parse(rawId)
   const [source] = await db
     .select()
     .from(dataSources)
     .where(and(eq(dataSources.id, id), eq(dataSources.userId, userId)))
     .limit(1)
-
   if (!source) throw new Error('Data source not found')
+  if (!isConnectorSlug(source.sourceType)) throw new Error(`Unknown connector "${source.sourceType}".`)
 
-  if (isConnectorSlug(source.sourceType)) {
-    const { testConnectorConnection, scanConnectorSchema } = await import('@/lib/connectors/runtime')
-    await assertConnectorInstalled(source.sourceType)
-    const credentials = Object.fromEntries(
-      Object.entries(decryptCredentials(source.id, source.credentials)).map(([k, v]) => [
-        k,
-        v == null ? '' : String(v),
-      ])
-    )
+  const { testConnectorConnection, scanConnectorSchema } = await import('@/lib/connectors/runtime')
+  await assertConnectorInstalled(source.sourceType)
+  const credentials = Object.fromEntries(
+    Object.entries(decryptCredentials(source.id, source.credentials)).map(([k, v]) => [k, v == null ? '' : String(v)])
+  )
+  const test = await testConnectorConnection(source.sourceType, credentials)
+  if (!test.ok) throw new Error(test.message)
 
-    const test = await testConnectorConnection(source.sourceType, credentials)
-    if (!test.ok) throw new Error(test.message)
-
-    const scan = await scanConnectorSchema(source.sourceType, credentials)
-    await db
-      .update(dataSources)
-      .set({
-        status: 'connected',
-        lastConnected: new Date(),
-        updatedAt: new Date(),
-        config: { ...(source.config as Record<string, unknown>), schemaScan: scan },
-      })
-      .where(and(eq(dataSources.id, id), eq(dataSources.userId, userId)))
-  } else {
-    await db
-      .update(dataSources)
-      .set({ status: 'connected', lastConnected: new Date(), updatedAt: new Date() })
-      .where(and(eq(dataSources.id, id), eq(dataSources.userId, userId)))
-  }
-
-  revalidatePath('/dashboard')
-}
-
-export async function updateDataSourceConfig(id: string, config: Record<string, unknown>) {
-  const userId = await getUserId()
-
+  const scan = await scanConnectorSchema(source.sourceType, credentials)
   await db
     .update(dataSources)
-    .set({ config, updatedAt: new Date() })
+    .set({
+      status: 'connected',
+      lastConnected: new Date(),
+      updatedAt: new Date(),
+      config: { ...(source.config as Record<string, unknown>), schemaScan: scan },
+    })
     .where(and(eq(dataSources.id, id), eq(dataSources.userId, userId)))
+  revalidatePath('/dashboard')
+  return { tables: scan.tables.length }
+}
 
+export async function renameDataSource(rawId: string, rawName: string) {
+  const userId = await requireUserId()
+  const id = idSchema.parse(rawId)
+  const name = z.string().trim().min(1, 'Name is required').max(120).parse(rawName)
+  await db
+    .update(dataSources)
+    .set({ name, updatedAt: new Date() })
+    .where(and(eq(dataSources.id, id), eq(dataSources.userId, userId)))
+  await audit(userId, 'UPDATE', id, { name })
   revalidatePath('/dashboard')
 }
 
-export async function deleteDataSource(id: string) {
-  const userId = await getUserId()
-
-  await db
-    .delete(dataSources)
+/** Switches a data source between source and destination (pipelines only write to destinations). */
+export async function setDataSourceRole(rawId: string, rawRole: string) {
+  const userId = await requireUserId()
+  const id = idSchema.parse(rawId)
+  const role = roleSchema.parse(rawRole)
+  const [source] = await db
+    .select({ config: dataSources.config })
+    .from(dataSources)
     .where(and(eq(dataSources.id, id), eq(dataSources.userId, userId)))
+    .limit(1)
+  if (!source) throw new Error('Data source not found')
+  await db
+    .update(dataSources)
+    .set({ config: { ...(source.config as Record<string, unknown>), role }, updatedAt: new Date() })
+    .where(and(eq(dataSources.id, id), eq(dataSources.userId, userId)))
+  await audit(userId, 'UPDATE', id, { role })
+  revalidatePath('/dashboard')
+}
 
+export async function deleteDataSource(rawId: string) {
+  const userId = await requireUserId()
+  const id = idSchema.parse(rawId)
+  const used = await db
+    .select({ name: pipelines.name, sourceId: pipelines.sourceId, destinationId: pipelines.destinationId })
+    .from(pipelines)
+    .where(eq(pipelines.userId, userId))
+  const dependents = used.filter((p) => p.sourceId === id || p.destinationId === id).map((p) => p.name)
+  if (dependents.length) {
+    throw new Error(`Used by pipeline${dependents.length > 1 ? 's' : ''} ${dependents.map((n) => `"${n}"`).join(', ')}. Change or delete ${dependents.length > 1 ? 'them' : 'it'} first.`)
+  }
+  await db.delete(dataSources).where(and(eq(dataSources.id, id), eq(dataSources.userId, userId)))
+  await audit(userId, 'DELETE', id)
   revalidatePath('/dashboard')
 }

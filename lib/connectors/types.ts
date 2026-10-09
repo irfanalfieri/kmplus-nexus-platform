@@ -7,6 +7,8 @@ export type ConnectorSlug =
   | 'salesforce'
   | 'snowflake'
   | 'supabase'
+  | 'talenta'
+  | 'ldap'
 
 export interface CredentialField {
   key: string

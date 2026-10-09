@@ -60,6 +60,7 @@ export function columnTypeFromSql(sqlType: string): ColumnType {
 
 export function SourceEditor({ step, options, onChange }: { step: SourceStep; options: BuilderOptions; onChange: (s: SourceStep) => void }) {
   const source = options.dataSources.find((d) => d.id === step.dataSourceId)
+  const columns = source?.tables.find((t) => t.name === step.table)?.columns ?? []
   return (
     <div className="grid gap-3 md:grid-cols-[1fr_1fr_140px]">
       <div>
@@ -97,6 +98,37 @@ export function SourceEditor({ step, options, onChange }: { step: SourceStep; op
           No schema scan for this source yet. Open Data Sources and re-test the connection to load its tables, or type the name.
         </p>
       )}
+      <div className="grid gap-3 md:col-span-3 md:grid-cols-[200px_1fr]">
+        <div>
+          <FieldLabel>Sync mode</FieldLabel>
+          <NativeSelect value={step.mode} onChange={(v) => onChange({ ...step, mode: v as 'full' | 'incremental' })}>
+            <option value="full">Full: read every row each run</option>
+            <option value="incremental">Incremental: only new or changed rows</option>
+          </NativeSelect>
+        </div>
+        {step.mode === 'incremental' && (
+          <div>
+            <FieldLabel>Watermark column (always increases, e.g. updated_at or id)</FieldLabel>
+            {columns.length ? (
+              <NativeSelect value={step.watermarkColumn} onChange={(v) => onChange({ ...step, watermarkColumn: v })}>
+                <option value="">Choose a column…</option>
+                {columns.map((c) => (
+                  <option key={c.name} value={c.name}>
+                    {c.name} ({c.type})
+                  </option>
+                ))}
+              </NativeSelect>
+            ) : (
+              <Input value={step.watermarkColumn} placeholder="updated_at" onChange={(e) => onChange({ ...step, watermarkColumn: e.target.value })} />
+            )}
+            <p className="mt-1 text-xs text-muted-foreground">
+              Each run reads rows where this column is greater than the last value synced, oldest first.
+              {source && !['postgres', 'mysql', 'supabase'].includes(source.sourceType) &&
+                ' This connector filters after reading, so keep max rows above the number of new rows per run.'}
+            </p>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

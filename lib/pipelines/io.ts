@@ -10,7 +10,7 @@ import { createPgPool as externalPgPool } from '@/lib/connectors/drivers/postgre
 import type { ConnectorCredentials } from '@/lib/connectors/types'
 import type { ColumnType } from './definition'
 import type { Row } from './transforms'
-import type { OutputColumn } from './columns'
+import { compareWatermarks, type OutputColumn } from './columns'
 
 /** Data source row as stored (credentials still encrypted). */
 export interface StoredDataSource {
@@ -57,15 +57,30 @@ function mysqlConfig(creds: ConnectorCredentials): string | mysql.ConnectionOpti
 
 const BATCH = 1000
 
-export async function readSourceRows(source: StoredDataSource, table: string, maxRows: number): Promise<Row[]> {
+export interface ReadOptions {
+  /** Incremental sync: only rows with column > after, read in column order. after = null on the first run. */
+  watermark?: { column: string; after: string | null }
+}
+
+/** Configuration problems that retrying cannot fix (wrong role, missing table, unsupported connector …). */
+export class NonRetryableError extends Error {
+  readonly retryable = false
+}
+
+export async function readSourceRows(source: StoredDataSource, table: string, maxRows: number, opts: ReadOptions = {}): Promise<Row[]> {
+  const wm = opts.watermark
   const pg = pgTarget(source)
   if (pg) {
     const p = externalPgPool(pg.connectionString)
     try {
+      const where = wm?.after != null ? `WHERE ${qIdent(wm.column)} > $3` : ''
+      const order = wm ? `ORDER BY ${qIdent(wm.column)} ASC` : ''
       const rows: Row[] = []
       while (rows.length < maxRows) {
         const take = Math.min(BATCH, maxRows - rows.length)
-        const res = await p.query(`SELECT * FROM ${qIdent(pg.schema)}.${qIdent(table)} LIMIT $1 OFFSET $2`, [take, rows.length])
+        const params: unknown[] = [take, rows.length]
+        if (wm?.after != null) params.push(wm.after)
+        const res = await p.query(`SELECT * FROM ${qIdent(pg.schema)}.${qIdent(table)} ${where} ${order} LIMIT $1 OFFSET $2`, params)
         rows.push(...(res.rows as Row[]))
         if (res.rows.length < take) break
       }
@@ -78,10 +93,13 @@ export async function readSourceRows(source: StoredDataSource, table: string, ma
   if (source.sourceType === 'mysql') {
     const conn = await mysql.createConnection(mysqlConfig(credentialsOf(source)) as mysql.ConnectionOptions)
     try {
+      const where = wm?.after != null ? `WHERE ${mIdent(wm.column)} > ?` : ''
+      const order = wm ? `ORDER BY ${mIdent(wm.column)} ASC` : ''
       const rows: Row[] = []
       while (rows.length < maxRows) {
         const take = Math.min(BATCH, maxRows - rows.length)
-        const [batch] = await conn.query<mysql.RowDataPacket[]>(`SELECT * FROM ${mIdent(table)} LIMIT ? OFFSET ?`, [take, rows.length])
+        const params: unknown[] = wm?.after != null ? [wm.after, take, rows.length] : [take, rows.length]
+        const [batch] = await conn.query<mysql.RowDataPacket[]>(`SELECT * FROM ${mIdent(table)} ${where} ${order} LIMIT ? OFFSET ?`, params)
         rows.push(...(batch as Row[]))
         if (batch.length < take) break
       }
@@ -101,7 +119,10 @@ export async function readSourceRows(source: StoredDataSource, table: string, ma
     const rows: Row[] = []
     while (rows.length < maxRows) {
       const take = Math.min(BATCH, maxRows - rows.length)
-      const { data, error } = await client.from(table).select('*').range(rows.length, rows.length + take - 1)
+      let query = client.from(table).select('*')
+      if (wm?.after != null) query = query.gt(wm.column, wm.after)
+      if (wm) query = query.order(wm.column, { ascending: true })
+      const { data, error } = await query.range(rows.length, rows.length + take - 1)
       if (error) throw new Error(`Supabase read failed: ${error.message}`)
       rows.push(...((data ?? []) as Row[]))
       if ((data ?? []).length < take) break
@@ -109,10 +130,17 @@ export async function readSourceRows(source: StoredDataSource, table: string, ma
     return rows
   }
 
-  if (!isConnectorSlug(source.sourceType)) throw new Error(`Unsupported source type "${source.sourceType}".`)
-  // SAP / Salesforce / REST / Snowflake / Oracle: the connector's capped read.
+  if (!isConnectorSlug(source.sourceType)) throw new NonRetryableError(`Unsupported source type "${source.sourceType}".`)
+  // SAP / Salesforce / REST / Snowflake / Oracle / Talenta / LDAP: the connector's capped read.
+  // These APIs can't filter by watermark server-side, so filter and order here.
   const result = await sampleConnectorTable(source.sourceType, credentialsOf(source), table, maxRows)
-  return (result.rows ?? []) as Row[]
+  let rows = (result.rows ?? []) as Row[]
+  if (wm) {
+    if (rows.length && !(wm.column in rows[0])) throw new NonRetryableError(`Watermark column "${wm.column}" is not in ${table}.`)
+    if (wm.after != null) rows = rows.filter((r) => r[wm.column] != null && compareWatermarks(r[wm.column], wm.after) > 0)
+    rows.sort((a, b) => compareWatermarks(a[wm.column], b[wm.column]))
+  }
+  return rows
 }
 
 // ── Column helpers ───────────────────────────────────────────────────────────
@@ -222,7 +250,7 @@ export async function writeToDataSource(opts: {
 }): Promise<{ written: number }> {
   const { source, table, rows } = opts
   if ((source.config as { role?: string } | null)?.role !== 'destination') {
-    throw new Error(`"${source.name}" was added as a source, so Nexus won't write to it. Add the database again with Data Sources → Add Destination and pick that one.`)
+    throw new NonRetryableError(`"${source.name}" was added as a source, so Nexus won't write to it. Add the database again with Data Sources → Add Destination and pick that one.`)
   }
 
   const pg = pgTarget(source)
@@ -234,10 +262,10 @@ export async function writeToDataSource(opts: {
         `SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2`,
         [pg.schema, table]
       )
-      if (!existing.length) throw new Error(`Table ${pg.schema}.${table} doesn't exist in "${source.name}". Nexus never creates tables in your databases; create it first.`)
+      if (!existing.length) throw new NonRetryableError(`Table ${pg.schema}.${table} doesn't exist in "${source.name}". Nexus never creates tables in your databases; create it first.`)
       const present = new Set(existing.map((r) => r.column_name))
       const missing = opts.columns.filter((c) => !present.has(c.name)).map((c) => c.name)
-      if (missing.length) throw new Error(`Columns missing in ${table}: ${missing.join(', ')}. Rename them in the Map step or add them to the table.`)
+      if (missing.length) throw new NonRetryableError(`Columns missing in ${table}: ${missing.join(', ')}. Rename them in the Map step or add them to the table.`)
       await client.query('BEGIN')
       if (rows.length) {
         await insertBatches(client, `${qIdent(pg.schema)}.${qIdent(table)}`, opts.columns, rows, opts.mode === 'upsert' ? { keys: opts.keys } : undefined)
@@ -259,7 +287,7 @@ export async function writeToDataSource(opts: {
       const [cols] = await conn.query<mysql.RowDataPacket[]>(`SHOW COLUMNS FROM ${mIdent(table)}`)
       const present = new Set(cols.map((c) => String(c.Field)))
       const missing = opts.columns.filter((c) => !present.has(c.name)).map((c) => c.name)
-      if (missing.length) throw new Error(`Columns missing in ${table}: ${missing.join(', ')}.`)
+      if (missing.length) throw new NonRetryableError(`Columns missing in ${table}: ${missing.join(', ')}.`)
       await conn.beginTransaction()
       const names = opts.columns.map((c) => mIdent(c.name)).join(', ')
       for (let i = 0; i < rows.length; i += 500) {
@@ -282,7 +310,7 @@ export async function writeToDataSource(opts: {
   }
 
   if (source.sourceType === 'supabase') {
-    throw new Error(`To write into Supabase, add the Database URL to "${source.name}" (Data Sources → edit credentials).`)
+    throw new NonRetryableError(`To write into Supabase, add the Database URL to "${source.name}" (Data Sources → edit credentials).`)
   }
-  throw new Error(`Writing to ${source.sourceType} isn't supported yet. Writable connectors: PostgreSQL, MySQL, Supabase (with Database URL).`)
+  throw new NonRetryableError(`Writing to ${source.sourceType} isn't supported yet. Writable connectors: PostgreSQL, MySQL, Supabase (with Database URL).`)
 }

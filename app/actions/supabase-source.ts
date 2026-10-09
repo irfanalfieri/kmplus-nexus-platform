@@ -1,6 +1,6 @@
 'use server'
 
-import { auth } from '@/lib/auth'
+import { z } from 'zod'
 import { db } from '@/lib/db'
 import { dataSources } from '@/lib/db/schema'
 import {
@@ -12,14 +12,18 @@ import {
 import type { SupabaseCredentials } from '@/lib/supabase/types'
 import { decryptCredentials, encryptCredentials } from '@/lib/security/credentials'
 import { and, eq } from 'drizzle-orm'
-import { headers } from 'next/headers'
+import { requireUserId } from '@/lib/auth/session'
 import { revalidatePath } from 'next/cache'
 
-async function getUserId() {
-  const session = await auth.api.getSession({ headers: await headers() })
-  if (!session?.user) throw new Error('Unauthorized')
-  return session.user.id
-}
+const getUserId = requireUserId
+const idSchema = z.string().trim().min(1).max(100)
+const supabaseCredentialsSchema = z.object({
+  projectUrl: z.string().trim().url('Project URL must be a URL').max(300),
+  apiKey: z.string().trim().min(1, 'API key is required').max(5000),
+  publishableKey: z.string().trim().max(5000).optional(),
+  databaseUrl: z.string().trim().max(2000).optional(),
+  schema: z.string().trim().max(63).optional(),
+})
 
 function parseCredentials(sourceId: string, stored: unknown): SupabaseCredentials {
   const value = decryptCredentials(sourceId, stored) as Record<string, string | undefined>
@@ -45,18 +49,19 @@ async function getOwnedSource(sourceId: string, userId: string) {
   return source
 }
 
-export async function testSupabaseConnectionAction(credentials: SupabaseCredentials) {
+export async function testSupabaseConnectionAction(rawCredentials: SupabaseCredentials) {
   await getUserId()
-  return testSupabaseConnection(credentials)
+  return testSupabaseConnection(supabaseCredentialsSchema.parse(rawCredentials))
 }
 
-export async function scanSupabaseSchemaAction(credentials: SupabaseCredentials) {
+export async function scanSupabaseSchemaAction(rawCredentials: SupabaseCredentials) {
   await getUserId()
-  return scanSupabaseSchema(credentials)
+  return scanSupabaseSchema(supabaseCredentialsSchema.parse(rawCredentials))
 }
 
-export async function scanSupabaseSourceSchema(sourceId: string) {
+export async function scanSupabaseSourceSchema(rawSourceId: string) {
   const userId = await getUserId()
+  const sourceId = idSchema.parse(rawSourceId)
   const source = await getOwnedSource(sourceId, userId)
 
   if (source.sourceType !== 'supabase') {
@@ -84,11 +89,14 @@ export async function scanSupabaseSourceSchema(sourceId: string) {
 }
 
 export async function getSupabaseTableSampleAction(
-  sourceId: string,
-  tableName: string,
-  limit = 25
+  rawSourceId: string,
+  rawTableName: string,
+  rawLimit = 25
 ) {
   const userId = await getUserId()
+  const sourceId = idSchema.parse(rawSourceId)
+  const tableName = z.string().trim().min(1).max(256).parse(rawTableName)
+  const limit = z.number().int().min(1).max(500).parse(rawLimit)
   const source = await getOwnedSource(sourceId, userId)
 
   if (source.sourceType !== 'supabase') {
@@ -100,10 +108,13 @@ export async function getSupabaseTableSampleAction(
 }
 
 export async function updateSupabaseSourceCredentials(
-  sourceId: string,
-  credentials: SupabaseCredentials
+  rawSourceId: string,
+  rawCredentials: SupabaseCredentials
 ) {
   const userId = await getUserId()
+  const sourceId = idSchema.parse(rawSourceId)
+  const credentials = supabaseCredentialsSchema.parse(rawCredentials)
+  await getOwnedSource(sourceId, userId)
   const test = await testSupabaseConnection(credentials)
 
   if (!test.ok) {

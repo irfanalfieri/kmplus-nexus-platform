@@ -230,7 +230,7 @@ The central registry for every connected system.
 | DS-2 | Test the connection and show a clear success/error message (auth failed, host unreachable, timeout, SSL) | P0 | ✅ |
 | DS-3 | Schema scan on test: list tables/entities, columns, types, PKs, row counts; store the result as a snapshot | P0 | ✅ |
 | DS-4 | Sample data preview (≤ 25 rows) per table | P0 | ✅ |
-| DS-5 | Edit, rename, and delete a source; deletion is blocked if pipelines reference it (show dependents) | P0 | 🟡 (no dependency check) |
+| DS-5 | Edit, rename, and delete a source; deletion is blocked if pipelines reference it (show dependents) | P0 | ✅ (inline rename, source/destination switch, re-test; delete blocked while pipelines use it) |
 | DS-6 | **Credentials encrypted at rest**; never returned to the client after save (show `••••` + "replace") | P0 | ✅ (AES-256-GCM, `lib/security/credentials.ts`; key rotation not yet supported) |
 | DS-7 | Periodic health check (e.g., every 15 min) and status history | P1 | ⬜ |
 | DS-8 | Schema drift detection: compare the new scan with the previous one and flag added/removed/changed columns used by pipelines | P1 | ⬜ |
@@ -248,7 +248,7 @@ Pre-built connectors, installable in one click.
 |---|---|:-:|:-:|
 | CM-1 | Catalog listing with category, version, description, free/premium badge, installed state | P0 | ✅ |
 | CM-2 | Install / uninstall; free connectors are pre-installed on account creation | P0 | ✅ |
-| CM-3 | Premium connectors need a purchase (license) before install | P0 | 🟡 (purchase is simulated; no billing) |
+| CM-3 | Premium connectors need a purchase (license) before install | P0 | 🟡 (dev mode: all connectors install free; set `CONNECTOR_BILLING_ENABLED=true` to require purchase; no real billing) |
 | CM-4 | Connector detail page: docs, required permissions on the source system, supported operations (read / write / incremental / CDC) | P1 | ⬜ |
 | CM-5 | Connector versioning: upgrade notice, changelog, pinning per data source | P2 | ⬜ |
 | CM-6 | Public Connector SDK (Phase 5) | P2 | ⬜ |
@@ -257,12 +257,12 @@ Pre-built connectors, installable in one click.
 
 | Category | Connectors | Built today |
 |---|---|---|
-| HR | SAP SuccessFactors, SAP HCM (OData), Oracle HCM, Workday, **Talenta (Mekari)**, Darwinbox, LinovHR | SAP (OData) ✅ |
+| HR | SAP SuccessFactors, SAP HCM (OData), Oracle HCM, Workday, **Talenta (Mekari)**, Darwinbox, LinovHR | SAP (OData) ✅, Talenta ✅ (HMAC; verified against a mock gateway, not yet a live tenant) |
 | ERP | SAP S/4HANA, Oracle EBS | SAP (OData) ✅ |
 | CRM / SaaS | Salesforce | Salesforce (OAuth) ✅ premium |
-| Identity | Azure AD / Entra ID (Graph), Active Directory (LDAP), OpenLDAP, Google Workspace Directory, Okta | ⬜ |
+| Identity | Azure AD / Entra ID (Graph), Active Directory (LDAP), OpenLDAP, Google Workspace Directory, Okta | Active Directory / LDAP ✅ (read-only: users, groups, OUs) |
 | Productivity | Microsoft 365 / SharePoint (Graph), Google Sheets, Google Drive | ⬜ |
-| Databases | PostgreSQL, MySQL/MariaDB, SQL Server, Oracle, MongoDB, Supabase | MySQL ✅, Oracle ✅, Supabase ✅, Postgres driver ✅ (not in catalog) |
+| Databases | PostgreSQL, MySQL/MariaDB, SQL Server, Oracle, MongoDB, Supabase | MySQL ✅, Oracle ✅, Supabase ✅, PostgreSQL ✅ |
 | Warehouse | Snowflake, BigQuery | Snowflake ✅ premium |
 | Storage / Files | AWS S3, Azure Blob, GCS, SFTP, CSV/Excel upload | ⬜ |
 | Generic | REST (Postman-style), GraphQL, SOAP, Webhook (inbound) | REST ✅ |
@@ -301,10 +301,10 @@ The visual workflow engine (inspired by NiFi, Power Automate, n8n, and Node-RED)
 | PD-4 | Test run on a sample (N rows) with per-node output preview, no writes to destinations | P0 | ✅ |
 | PD-5 | Validation before save: no cycles, every node configured, types compatible | P0 | ✅ (structure, required fields, upsert keys) |
 | PD-6 | Write modes on Save: insert, upsert (on key), replace (truncate+load), soft-delete missing | P0 | 🟡 (datasets: append/upsert/replace; external DBs: insert/upsert, never truncate; no soft-delete) |
-| PD-7 | Incremental sync using a watermark column, with a full-resync option | P0 | ⬜ |
+| PD-7 | Incremental sync using a watermark column, with a full-resync option | P0 | ✅ (SQL sources filter server-side; API sources filter after reading; Reset sync = full resync) |
 | PD-8 | Templates: "HRIS → Employee", "AD → Users", "CSV → Dataset", "Dataset → Power BI" | P1 | ⬜ |
 | PD-9 | Sub-pipelines / reusable components (call another pipeline as a node) | P2 | ⬜ |
-| PD-10 | Per-pipeline settings: timeout, retries (count + backoff), concurrency (1 = no overlap), batch size, error threshold (abort if > X% rows fail) | P0 | 🟡 (no overlap, max rows, abort-on-invalid; no retries/threshold yet) |
+| PD-10 | Per-pipeline settings: timeout, retries (count + backoff), concurrency (1 = no overlap), batch size, error threshold (abort if > X% rows fail) | P0 | 🟡 (no overlap, max rows, abort-on-invalid, retries 0–3 with doubling backoff; no error-rate threshold) |
 
 **Node catalog**
 
@@ -341,15 +341,15 @@ The visual workflow engine (inspired by NiFi, Power Automate, n8n, and Node-RED)
 | SC-5 | Pipeline chaining: run B after A succeeds | P1 | ⬜ |
 | SC-6 | Event triggers from source systems (e.g., SAP event → run immediately) via inbound webhook | P1 | ⬜ |
 
-### Layer 6 — Monitoring Center (Phase 1) · 🎭
+### Layer 6 — Monitoring Center (Phase 1) · ✅
 
 | ID | Requirement | Pri | Status |
 |---|---|:-:|:-:|
-| MN-1 | Today's jobs summary: successful / running / failed / queued, plus a trend over 7/30 days | P0 | 🎭 |
-| MN-2 | Pipeline health list: 🟢 Healthy · 🟡 Delayed (missed SLA / running long) · 🔴 Failed · ⚪ Paused | P0 | 🎭 |
+| MN-1 | Today's jobs summary: successful / running / failed / queued, plus a trend over 7/30 days | P0 | ✅ (today + 7-day trend, rows written/rejected 24h) |
+| MN-2 | Pipeline health list: 🟢 Healthy · 🟡 Delayed (missed SLA / running long) · 🔴 Failed · ⚪ Paused | P0 | ✅ (+ rejected rows, never run; 7-day success rate) |
 | MN-3 | Run detail: timeline per node, rows in/out/error per node, duration, logs, error message, stack trace (admin only) | P0 | 🟡 (Pipelines → History: per-step counts, timings, error, rejected rows) |
-| MN-4 | Actions: Retry run, Retry from failed node, Replay quarantined rows, Cancel running, Download logs | P0 retry/cancel; P1 others | ⬜ |
-| MN-5 | Alerts: on failure, on delay (SLA breach), on error rate > threshold; channels email/Teams/Slack/webhook; per-pipeline subscribers | P0 email; P1 others | ⬜ |
+| MN-4 | Actions: Retry run, Retry from failed node, Replay quarantined rows, Cancel running, Download logs | P0 retry/cancel; P1 others | 🟡 (automatic retries; manual re-run; no cancel/replay yet) |
+| MN-5 | Alerts: on failure, on delay (SLA breach), on error rate > threshold; channels email/Teams/Slack/webhook; per-pipeline subscribers | P0 email; P1 others | 🟡 (on failure or rejects; in-app bell + email via Resend (`RESEND_API_KEY`); no SLA/delay alerts or Teams/Slack yet) |
 | MN-6 | Root-cause hints: classify errors (auth, network, schema drift, validation, timeout, rate limit) with suggested fixes; AI-assisted in Phase 4 | P1 | ⬜ |
 | MN-7 | Log retention: 30 days of detailed logs, 1 year of run summaries (configurable per plan) | P1 | ⬜ |
 
@@ -523,12 +523,12 @@ Nexus doesn't expose raw source systems. It publishes **standardized business do
 | Layer / area | Status | What's real | What's mock / missing |
 |---|:-:|---|---|
 | Auth | ✅ | Better Auth email/password, sessions (7 days), sign-in/up pages | SSO, MFA, workspaces, roles |
-| Data Sources | ✅/🟡 | CRUD via server actions; real test + schema scan + sample via connector drivers; Schema Explorer & Sample Preview modals; credentials encrypted at rest and stripped from client payloads | No dependency checks; no health checks; no key rotation |
-| Connector Marketplace | 🟡 | Catalog in code (`lib/connectors/catalog.ts`); per-user installs/purchase flags in DB | Purchase is a flag, with no billing; Postgres driver not in catalog |
-| Connector drivers | 🟡 | SAP (OData), Oracle, MySQL, Postgres, REST (Postman-style form), Salesforce (OAuth), Snowflake, Supabase: **test / scan / sample** | No `read` (full/incremental) or `write` yet, so pipelines can't move real data |
+| Data Sources | ✅ | CRUD, rename, source/destination switch, re-test, delete guarded by pipeline use; credentials encrypted; zod-validated actions, UUID ids | No scheduled health checks; no key rotation; credentials can't be edited after creation |
+| Connector Marketplace | ✅ | 10 connectors; install/uninstall (uninstall blocked while used); dev mode installs everything free | No billing (`CONNECTOR_BILLING_ENABLED`) |
+| Connector drivers | ✅/🟡 | SAP (OData), Oracle, MySQL, Postgres, REST, Salesforce (OAuth), Snowflake, Supabase, Talenta, AD/LDAP: test / scan / sample / pipeline read; write-back for Postgres, MySQL, Supabase. `scripts/connector-harness.ts` verifies REST, SAP, MySQL, Postgres, LDAP, Talenta (6/6 pass) | Oracle, Snowflake, Salesforce, Supabase and live Talenta not yet tested against real accounts |
 | Pipeline Designer | ✅ | Step-list builder (`components/pipelines/*`), real engine (`lib/pipelines/*`), test on sample, run now, run history with rejected rows, versions + restore, write to Nexus datasets (`nexus_data` schema) or back into Postgres/MySQL/Supabase (destination role only) | No DAG/branching, joins, incremental watermark, retries, notifications; reads capped at 100k rows per run |
 | Scheduler | ✅ | Supabase pg_cron job `nexus-pipeline-tick` (every minute, only calls Vercel when a pipeline is due) → `/api/cron/pipelines` (Bearer `CRON_SECRET`, secret in Supabase Vault) | No webhook/API/event triggers |
-| Monitoring | 🎭 | `execution_logs` table | UI is hardcoded `PIPELINE_HEALTH`/`CATALOG` arrays |
+| Monitoring | ✅ | Today's outcomes, 7-day chart, pipeline health, recent runs, produced datasets (auto-refresh 30 s); notification bell | No SLA config, no cancel/replay |
 | Data Mapping | 🎭 | `data_mappings` table, column mapping modal | No transform engine |
 | Data Quality | 🎭 | `data_quality_metrics` table | No rule engine or quarantine |
 | Data Catalog | 🎭 | `data_catalog` table | UI mock data |
@@ -541,9 +541,9 @@ Nexus doesn't expose raw source systems. It publishes **standardized business do
 
 **Known tech debt to fix early**
 1. ~~Encrypt `data_sources.credentials`~~ Done (AES-256-GCM, `NEXUS_ENCRYPTION_KEY`). Next: key rotation (`kid` in the envelope) and a per-workspace data key.
-2. IDs use `` `prefix_${Date.now()}` ``, which collides under concurrency. Switch to `crypto.randomUUID()` (keep the prefix if you want: `src_<uuid>`).
-3. Server actions take `data: any`. Add **zod** validation for every action input.
-4. `getUserId()` is copy-pasted in every action file. Extract it to `lib/auth/session.ts` and later replace it with `requireWorkspaceRole(role)`.
+2. ~~Timestamp IDs~~ Done: `newId(prefix)` in `lib/auth/session.ts` (UUID). Mock-only layers still use `Date.now()` client-side.
+3. ~~Unvalidated server actions~~ Done: every action in `app/actions/*` validates input with zod.
+4. ~~Copy-pasted `getUserId()`~~ Done: `requireUserId()` in `lib/auth/session.ts`; replace with `requireWorkspaceRole(role)` when workspaces land.
 5. There are both `package-lock.json` and `pnpm-lock.yaml`. Vercel uses pnpm, so **use pnpm only** and delete `package-lock.json`.
 6. ~~No migrations committed~~ Done: `drizzle/0000_init.sql` + `0001_enable_rls.sql`. Production moved from Neon (which had drifted and crashed the Connectors page) to Supabase on 2026-10-08. `scripts/db-repair-schema.mjs` remains as a drift check.
 7. No automated tests apart from the live scripts in `scripts/`.

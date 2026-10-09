@@ -1,33 +1,29 @@
 'use server'
 
 import { randomUUID } from 'crypto'
-import { auth } from '@/lib/auth'
-import { cookies, headers } from 'next/headers'
+import { z } from 'zod'
+import { cookies } from 'next/headers'
+import { requireUserId } from '@/lib/auth/session'
 import {
   buildSalesforceAuthorizeUrl,
   parseSalesforceLoginHost,
   signOAuthState,
 } from '@/lib/connectors/salesforce/oauth'
 
-async function getUserId() {
-  const session = await auth.api.getSession({ headers: await headers() })
-  if (!session?.user) throw new Error('Unauthorized')
-  return session.user.id
-}
+const startInput = z.object({
+  clientId: z.string().trim().min(1, 'Consumer Key is required').max(500),
+  clientSecret: z.string().trim().min(1, 'Consumer Secret is required').max(500),
+  loginHost: z.string().trim().max(200).optional(),
+})
 
 export async function startSalesforceWebAuth(input: {
   clientId: string
   clientSecret: string
   loginHost?: string
 }) {
-  const userId = await getUserId()
-  const clientId = input.clientId?.trim()
-  const clientSecret = input.clientSecret?.trim()
-  const loginHost = parseSalesforceLoginHost(input.loginHost)
-
-  if (!clientId || !clientSecret) {
-    throw new Error('Consumer Key and Consumer Secret are required.')
-  }
+  const userId = await requireUserId()
+  const { clientId, clientSecret, loginHost: rawHost } = startInput.parse(input)
+  const loginHost = parseSalesforceLoginHost(rawHost)
 
   const nonce = randomUUID()
   const exp = Date.now() + 10 * 60 * 1000

@@ -1,0 +1,137 @@
+/**
+ * Pure tests for the pipeline engine, transforms, watermarks and schedules.
+ * No database or network. Run: node scripts/run-ts.mjs scripts/engine-tests.ts
+ */
+import assert from 'node:assert/strict'
+import { compareWatermarks, maxWatermark } from '@/lib/pipelines/columns'
+import { definitionSchema, scheduleSchema, settingsSchema } from '@/lib/pipelines/definition'
+import { runEngine } from '@/lib/pipelines/engine'
+import { describeSchedule, nextRunTimes } from '@/lib/pipelines/schedule'
+import { formatDate, parseDate } from '@/lib/pipelines/transforms'
+
+let passed = 0
+async function test(name: string, fn: () => void | Promise<void>) {
+  try {
+    await fn()
+    passed++
+    console.log(`PASS  ${name}`)
+  } catch (err) {
+    console.log(`FAIL  ${name}\n      ${err instanceof Error ? err.message : err}`)
+    process.exitCode = 1
+  }
+}
+
+const hr = [
+  { PERNR: ' 00001 ', ENAME: 'AMIRA rahman', EMAIL: 'amira@kmplus.co.id', BEGDA: '20210315', SALARY: '12.500.000,50', STAT: 'Active', UPDATED: '2026-10-01 08:00:00' },
+  { PERNR: '00002', ENAME: 'daniel lee', EMAIL: 'not-an-email', BEGDA: '20190101', SALARY: '9.000.000', STAT: 'Active', UPDATED: '2026-10-03 09:30:00' },
+  { PERNR: '00003', ENAME: 'sofia chen', EMAIL: 'sofia@kmplus.co.id', BEGDA: '31/12/2020', SALARY: '15000000', STAT: 'Inactive', UPDATED: '2026-10-02 10:00:00' },
+  { PERNR: '00004', ENAME: 'budi santoso', EMAIL: 'budi@kmplus.co.id', BEGDA: 'bad-date', SALARY: '1', STAT: 'Active', UPDATED: '2026-09-30 23:59:59' },
+  { PERNR: '00001', ENAME: 'dup amira', EMAIL: 'dup@kmplus.co.id', BEGDA: '20220101', SALARY: '1', STAT: 'Active', UPDATED: '2026-10-04 07:00:00' },
+]
+
+const base = {
+  steps: [
+    { id: 'src', type: 'source', dataSourceId: 'x', table: 'PA0001' },
+    { id: 'flt', type: 'filter', conditions: [{ field: 'STAT', operator: 'equals', value: 'active' }] },
+    {
+      id: 'map',
+      type: 'map',
+      fields: [
+        { from: 'PERNR', to: 'employee_code', transforms: [{ fn: 'trim' }] },
+        { from: 'ENAME', to: 'full_name', transforms: [{ fn: 'titlecase' }] },
+        { from: 'EMAIL', to: 'email', transforms: [{ fn: 'lowercase' }] },
+        { from: 'BEGDA', to: 'hire_date', type: 'date' },
+        { from: 'SALARY', to: 'salary', type: 'numeric', transforms: [{ fn: 'to_number' }] },
+      ],
+    },
+    { id: 'val', type: 'validate', rules: [{ field: 'email', rule: 'email' }, { field: 'employee_code', rule: 'unique' }] },
+    { id: 'dst', type: 'destination', kind: 'dataset', datasetName: 'employee_master', mode: 'upsert', keys: ['employee_code'] },
+  ],
+}
+
+async function main() {
+  await test('end-to-end transform, filter, validate, write', async () => {
+    const def = definitionSchema.parse(base)
+    let written: Record<string, unknown>[] = []
+    const res = await runEngine(def, { read: async () => hr, write: async (_s, rows) => ((written = rows), { written: rows.length, target: 't' }) })
+    assert.equal(res.status, 'partial')
+    assert.equal(res.rejectedCount, 3)
+    assert.deepEqual(written[0], { employee_code: '00001', full_name: 'Amira Rahman', email: 'amira@kmplus.co.id', hire_date: '2021-03-15', salary: 12500000.5 })
+    assert.equal(res.watermark, undefined, 'full mode reports no watermark')
+  })
+
+  await test('settings default and validate', () => {
+    const def = definitionSchema.parse(base)
+    assert.deepEqual(def.settings, { retries: 2, retryDelaySeconds: 15, alertOn: 'failure', alertEmails: [] })
+    assert.equal(settingsSchema.safeParse({ alertEmails: ['not-an-email'] }).success, false)
+    assert.equal(settingsSchema.safeParse({ retries: 9 }).success, false)
+  })
+
+  await test('incremental requires a watermark column', () => {
+    const steps = structuredClone(base.steps) as Record<string, unknown>[]
+    steps[0] = { ...steps[0], mode: 'incremental' }
+    assert.equal(definitionSchema.safeParse({ steps }).success, false)
+    steps[0] = { ...steps[0], watermarkColumn: 'UPDATED' }
+    assert.equal(definitionSchema.safeParse({ steps }).success, true)
+  })
+
+  await test('incremental run reports the highest watermark read', async () => {
+    const steps = structuredClone(base.steps) as Record<string, unknown>[]
+    steps[0] = { ...steps[0], mode: 'incremental', watermarkColumn: 'UPDATED' }
+    const def = definitionSchema.parse({ steps })
+    const res = await runEngine(def, { read: async () => hr, write: async (_s, rows) => ({ written: rows.length, target: 't' }) })
+    assert.deepEqual(res.watermark, { column: 'UPDATED', value: '2026-10-04 07:00:00' })
+    const empty = await runEngine(def, { read: async () => [], write: async () => ({ written: 0, target: 't' }) })
+    assert.deepEqual(empty.watermark, { column: 'UPDATED', value: null })
+  })
+
+  await test('missing watermark column fails and is not retryable', async () => {
+    const steps = structuredClone(base.steps) as Record<string, unknown>[]
+    steps[0] = { ...steps[0], mode: 'incremental', watermarkColumn: 'NOPE' }
+    const res = await runEngine(definitionSchema.parse({ steps }), { read: async () => hr, write: async () => ({ written: 0, target: 't' }) })
+    assert.equal(res.status, 'failed')
+    assert.equal(res.retryable, false)
+  })
+
+  await test('I/O failures are retryable, config and validation failures are not', async () => {
+    const def = definitionSchema.parse(base)
+    const network = await runEngine(def, { read: async () => { throw new Error('ECONNRESET') } })
+    assert.equal(network.retryable, true)
+    const config = await runEngine(def, { read: async () => { throw Object.assign(new Error('Table missing'), { retryable: false }) } })
+    assert.equal(config.retryable, false)
+    const writeFail = await runEngine(def, { read: async () => hr, write: async () => { throw new Error('deadlock detected') } })
+    assert.equal(writeFail.retryable, true)
+    const abortSteps = structuredClone(base.steps) as Record<string, unknown>[]
+    abortSteps[3] = { ...abortSteps[3], onFail: 'abort' }
+    const abort = await runEngine(definitionSchema.parse({ steps: abortSteps }), { read: async () => hr, write: async () => ({ written: 0, target: 't' }) })
+    assert.equal(abort.status, 'failed')
+    assert.equal(abort.retryable, false)
+  })
+
+  await test('watermark ordering: numbers, timestamps, mixed formats', () => {
+    assert.ok(compareWatermarks('10', '9') > 0, 'numeric strings compare numerically')
+    assert.ok(compareWatermarks(10, '9') > 0)
+    assert.ok(compareWatermarks('2026-10-04 07:00:00', '2026-10-03T23:00:00Z') > 0)
+    assert.ok(compareWatermarks(new Date('2026-10-04T00:00:00Z'), '2026-10-03 23:59:59') > 0)
+    assert.equal(maxWatermark([{ id: 2 }, { id: 11 }, { id: null }, { id: 7 }], 'id'), '11')
+    assert.equal(maxWatermark([{ id: null }], 'id'), null)
+  })
+
+  await test('zone-less timestamps are UTC regardless of server timezone', () => {
+    const d = parseDate('2026-10-08 16:14:00')!
+    assert.equal(d.toISOString(), '2026-10-08T16:14:00.000Z')
+    assert.equal(parseDate('2026-10-08 16:14:00.250')!.toISOString(), '2026-10-08T16:14:00.250Z')
+    assert.equal(formatDate(parseDate('20210315')!), '2021-03-15')
+    assert.equal(parseDate('31/02/2021'), null, 'impossible dates are rejected')
+  })
+
+  await test('schedules in WIB', () => {
+    const s = scheduleSchema.parse({ type: 'weekly', time: '01:00', weekdays: [1, 2, 3, 4, 5] })
+    assert.equal(describeSchedule(s), 'Weekdays at 01:00 WIB')
+    assert.deepEqual(nextRunTimes(s, 2, new Date('2026-10-08T10:00:00Z')).map((d) => d.toISOString()), ['2026-10-08T18:00:00.000Z', '2026-10-11T18:00:00.000Z'])
+  })
+
+  console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`)
+}
+
+void main()

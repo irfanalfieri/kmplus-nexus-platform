@@ -105,6 +105,8 @@ export const pipelines = pgTable('pipelines', {
   lastRunStatus: text('lastRunStatus'),
   /** Next scheduled run (UTC); null when manual or disabled. Indexed for the scheduler tick. */
   nextRunAt: timestamp('nextRunAt'),
+  /** Runtime state, e.g. { watermark: { column, value } } for incremental sync. Not versioned. */
+  state: jsonb('state'),
   createdAt: timestamp('createdAt').notNull().defaultNow(),
   updatedAt: timestamp('updatedAt').notNull().defaultNow(),
 }, (t) => [index('pipelines_next_run_idx').on(t.nextRunAt)])
@@ -154,6 +156,22 @@ export const pipelineRunRejects = pgTable('pipeline_run_rejects', {
   errors: jsonb('errors').notNull(),
   createdAt: timestamp('createdAt').notNull().defaultNow(),
 }, (t) => [index('pipeline_run_rejects_run_idx').on(t.runId)])
+
+// In-app alerts (bell icon); email delivery status is tracked per row.
+export const notifications = pgTable('notifications', {
+  id: text('id').primaryKey(),
+  userId: text('userId').notNull(),
+  /** error | warning | info */
+  level: text('level').notNull(),
+  title: text('title').notNull(),
+  body: text('body'),
+  pipelineId: text('pipelineId'),
+  runId: text('runId'),
+  /** sent | skipped | failed | null (no email requested) */
+  emailStatus: text('emailStatus'),
+  readAt: timestamp('readAt'),
+  createdAt: timestamp('createdAt').notNull().defaultNow(),
+}, (t) => [index('notifications_user_idx').on(t.userId, t.createdAt)])
 
 // Nexus-managed datasets: pipeline outputs stored as physical tables in the nexus_data schema.
 export const nexusDatasets = pgTable('nexus_datasets', {

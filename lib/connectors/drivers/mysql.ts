@@ -58,7 +58,9 @@ export async function scanMysqlSchema(credentials: ConnectorCredentials): Promis
   try {
     connection = await openConnection(config)
     const [columns] = await connection.query<mysql.RowDataPacket[]>(
-      `SELECT table_schema, table_name, column_name, data_type, is_nullable
+      // MySQL 8 returns information_schema column names in uppercase unless aliased.
+      `SELECT table_schema AS table_schema, table_name AS table_name, column_name AS column_name,
+              data_type AS data_type, is_nullable AS is_nullable
        FROM information_schema.columns
        WHERE table_schema = ?
        ORDER BY table_name, ordinal_position`,
@@ -66,7 +68,7 @@ export async function scanMysqlSchema(credentials: ConnectorCredentials): Promis
     )
 
     const [counts] = await connection.query<mysql.RowDataPacket[]>(
-      `SELECT table_name, table_rows
+      `SELECT table_name AS table_name, table_rows AS table_rows
        FROM information_schema.tables
        WHERE table_schema = ? AND table_type = 'BASE TABLE'`,
       [schema]

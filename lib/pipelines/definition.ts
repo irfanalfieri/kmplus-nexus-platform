@@ -40,6 +40,10 @@ const sourceStep = z.object({
   table: z.string().min(1, 'Choose a table or object'),
   /** Safety cap on rows read per run. */
   maxRows: z.number().int().min(1).max(100_000).default(10_000),
+  /** incremental: only rows whose watermark column is greater than the last synced value. */
+  mode: z.enum(['full', 'incremental']).default('full'),
+  /** Ever-increasing column, e.g. updated_at or an auto-increment id. */
+  watermarkColumn: z.string().default(''),
 })
 
 const filterStep = z.object({
@@ -111,15 +115,33 @@ export type MapStep = z.infer<typeof mapStep>
 export type ValidateStep = z.infer<typeof validateStep>
 export type DestinationStep = z.infer<typeof destinationStep>
 
+export const ALERT_TRIGGERS = ['never', 'failure', 'failure_or_rejects'] as const
+
+export const settingsSchema = z.object({
+  /** Extra attempts after a failed run (source/destination errors only). */
+  retries: z.number().int().min(0).max(3).default(2),
+  /** Wait before the first retry; doubles each attempt. */
+  retryDelaySeconds: z.number().int().min(5).max(60).default(15),
+  alertOn: z.enum(ALERT_TRIGGERS).default('failure'),
+  /** Empty = the pipeline owner's email. */
+  alertEmails: z.array(z.string().trim().email('Enter valid email addresses')).max(10).default([]),
+})
+export type PipelineSettings = z.infer<typeof settingsSchema>
+export const DEFAULT_SETTINGS: PipelineSettings = settingsSchema.parse({})
+
 export const definitionSchema = z
   .object({
     schemaVersion: z.literal(1).default(1),
     steps: z.array(stepSchema).min(2),
+    settings: settingsSchema.default({}),
   })
   .superRefine((def, ctx) => {
     const first = def.steps[0]
     const last = def.steps[def.steps.length - 1]
     if (first?.type !== 'source') ctx.addIssue({ code: 'custom', message: 'The first step must be a Source.' })
+    if (first?.type === 'source' && first.mode === 'incremental' && !first.watermarkColumn.trim()) {
+      ctx.addIssue({ code: 'custom', message: 'Incremental sync needs a watermark column (e.g. updated_at).' })
+    }
     if (last?.type !== 'destination') ctx.addIssue({ code: 'custom', message: 'The last step must be a Destination.' })
     const middle = def.steps.slice(1, -1)
     if (middle.some((s) => s.type === 'source' || s.type === 'destination')) {

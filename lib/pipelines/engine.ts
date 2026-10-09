@@ -1,6 +1,6 @@
 import type { DestinationStep, PipelineDefinition, PipelineStep, SourceStep } from './definition'
 import { applyMap, matchesFilter, validateRow, type Row } from './transforms'
-import { inferColumns, type OutputColumn } from './columns'
+import { inferColumns, maxWatermark, type OutputColumn } from './columns'
 
 export interface StepStat {
   id: string
@@ -30,7 +30,11 @@ export interface EngineResult {
   rowsWritten: number
   columns: OutputColumn[]
   error?: string
+  /** false when retrying can't help (bad config, validation abort). */
+  retryable?: boolean
   destination?: { kind: string; target: string; rowCount?: number }
+  /** Incremental sync: highest watermark value read this run (null if no rows). */
+  watermark?: { column: string; value: string | null }
 }
 
 export interface EngineIO {
@@ -79,6 +83,7 @@ export async function runEngine(def: PipelineDefinition, io: EngineIO, opts: { s
   let rowsWritten = 0
   let columns: OutputColumn[] = []
   let destination: EngineResult['destination']
+  let watermark: EngineResult['watermark']
   const sample = (r: Row[]) => (testRun ? r.slice(0, opts.sampleSize ?? 25) : undefined)
 
   for (const step of def.steps) {
@@ -91,6 +96,12 @@ export async function runEngine(def: PipelineDefinition, io: EngineIO, opts: { s
           rows = await io.read(step)
           rowsRead = rows.length
           stat.rowsIn = 0
+          if (step.mode === 'incremental') {
+            if (rows.length && !(step.watermarkColumn in rows[0])) {
+              throw Object.assign(new Error(`Watermark column "${step.watermarkColumn}" is not in ${step.table}.`), { retryable: false })
+            }
+            watermark = { column: step.watermarkColumn, value: maxWatermark(rows, step.watermarkColumn) }
+          }
           break
         }
         case 'filter':
@@ -118,7 +129,7 @@ export async function runEngine(def: PipelineDefinition, io: EngineIO, opts: { s
               next.push(r)
               continue
             }
-            if (step.onFail === 'abort') throw new Error(`Validation failed: ${errors.join('; ')}`)
+            if (step.onFail === 'abort') throw Object.assign(new Error(`Validation failed: ${errors.join('; ')}`), { retryable: false })
             stat.rejected++
             rejectedCount++
             if (rejects.length < MAX_REJECTS_KEPT) rejects.push({ stepId: step.id, row: r, errors })
@@ -131,7 +142,9 @@ export async function runEngine(def: PipelineDefinition, io: EngineIO, opts: { s
           if (!columns.length && rows.length) throw new Error('No output columns. Add a Map step or check the source.')
           const keyCols = new Set(columns.map((c) => c.name))
           const missingKeys = step.keys.filter((k) => !keyCols.has(k))
-          if (step.mode === 'upsert' && missingKeys.length) throw new Error(`Upsert key column(s) not in output: ${missingKeys.join(', ')}`)
+          if (step.mode === 'upsert' && missingKeys.length) {
+            throw Object.assign(new Error(`Upsert key column(s) not in output: ${missingKeys.join(', ')}`), { retryable: false })
+          }
           if (io.write) {
             const res = await io.write(step, rows, columns)
             rowsWritten = res.written
@@ -145,7 +158,9 @@ export async function runEngine(def: PipelineDefinition, io: EngineIO, opts: { s
     } catch (err) {
       stat.error = err instanceof Error ? err.message : String(err)
       stat.durationMs = Date.now() - started
-      return { status: 'failed', steps, rejects, rejectedCount, rowsRead, rowsWritten, columns, error: `${stat.label}: ${stat.error}`, destination }
+      // Only I/O steps can fail transiently (network, locks, timeouts); transforms are deterministic.
+      const retryable = (err as { retryable?: boolean }).retryable !== false && (step.type === 'source' || step.type === 'destination')
+      return { status: 'failed', steps, rejects, rejectedCount, rowsRead, rowsWritten, columns, error: `${stat.label}: ${stat.error}`, retryable, destination }
     }
     stat.durationMs = Date.now() - started
   }
@@ -159,5 +174,6 @@ export async function runEngine(def: PipelineDefinition, io: EngineIO, opts: { s
     rowsWritten,
     columns,
     destination,
+    watermark,
   }
 }

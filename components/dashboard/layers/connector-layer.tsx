@@ -1,9 +1,9 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { Download, Check, Lock } from 'lucide-react'
+import { Download, Check, Lock, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { getConnectorMarketplace, purchaseConnector } from '@/app/actions/connectors'
+import { getConnectorMarketplace, installConnector, uninstallConnector } from '@/app/actions/connectors'
 
 type MarketplaceConnector = Awaited<ReturnType<typeof getConnectorMarketplace>>[number]
 
@@ -28,28 +28,32 @@ export default function ConnectorLayer() {
     void load()
   }, [load])
 
-  const handleInstall = async (slug: string) => {
+  const runAction = async (slug: string, action: () => Promise<unknown>, fallback: string) => {
     setInstallingSlug(slug)
     setError('')
     try {
-      await purchaseConnector(slug)
+      await action()
       await load()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Purchase failed')
+      setError(err instanceof Error ? err.message : fallback)
     } finally {
       setInstallingSlug(null)
     }
   }
+  const handleInstall = (slug: string) => runAction(slug, () => installConnector(slug), 'Install failed')
+  const handleUninstall = (slug: string) => runAction(slug, () => uninstallConnector(slug), 'Uninstall failed')
+  const billing = connectors[0]?.billing ?? false
 
   return (
     <div className="space-y-6">
       <div className="rounded-lg border border-border bg-card p-6">
         <h2 className="mb-2 text-2xl font-bold">Layer 2: Connector Marketplace</h2>
         <p className="mb-2 text-muted-foreground">
-          Purchase and install connectors to unlock source types in Data Source Manager.
+          Install connectors to unlock source types in Data Source Manager.
         </p>
         <p className="mb-6 text-sm text-muted-foreground">
-          Only installed connectors appear when adding a data source. Premium connectors require purchase before install.
+          Only installed connectors appear when adding a data source.{' '}
+          {billing ? 'Premium connectors require purchase before install.' : 'Development mode: every connector, including premium ones, installs for free.'}
         </p>
 
         {error && (
@@ -61,7 +65,7 @@ export default function ConnectorLayer() {
         {loading ? (
           <p className="py-8 text-center text-sm text-muted-foreground">Loading marketplace…</p>
         ) : (
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid gap-4 md:grid-cols-2">
             {connectors.map((connector) => (
               <div
                 key={connector.slug}
@@ -75,10 +79,22 @@ export default function ConnectorLayer() {
                 <div className="mt-2 text-sm text-muted-foreground">{connector.description}</div>
                 <div className="mt-4 flex items-center gap-2">
                   {connector.installed ? (
-                    <div className="flex flex-1 items-center justify-center gap-1 rounded bg-green-100 px-3 py-1 text-xs font-medium text-green-800">
-                      <Check className="h-3 w-3" />
-                      Installed
-                    </div>
+                    <>
+                      <div className="flex flex-1 items-center justify-center gap-1 rounded bg-green-100 px-3 py-1 text-xs font-medium text-green-800">
+                        <Check className="h-3 w-3" />
+                        Installed
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => void handleUninstall(connector.slug)}
+                        disabled={installingSlug === connector.slug}
+                        aria-label={`Uninstall ${connector.name}`}
+                        title="Uninstall"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    </>
                   ) : connector.locked ? (
                     <Button
                       size="sm"

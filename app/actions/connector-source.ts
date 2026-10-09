@@ -1,6 +1,6 @@
 'use server'
 
-import { auth } from '@/lib/auth'
+import { z } from 'zod'
 import { db } from '@/lib/db'
 import { dataSources } from '@/lib/db/schema'
 import { assertConnectorInstalled } from '@/app/actions/connectors'
@@ -15,14 +15,26 @@ import { parseRestConfig, previewRestRequest } from '@/lib/connectors/rest-clien
 import { resolveSalesforceAuth } from '@/lib/connectors/salesforce/oauth'
 import { decryptCredentials, encryptCredentials } from '@/lib/security/credentials'
 import { and, eq } from 'drizzle-orm'
-import { headers } from 'next/headers'
+import { requireUserId } from '@/lib/auth/session'
 import { revalidatePath } from 'next/cache'
 
-async function getUserId() {
-  const session = await auth.api.getSession({ headers: await headers() })
-  if (!session?.user) throw new Error('Unauthorized')
-  return session.user.id
+const slugSchema = z.string().trim().min(1).max(60)
+const idSchema = z.string().trim().min(1).max(100)
+const tableSchema = z.string().trim().min(1).max(256)
+const limitSchema = z.number().int().min(1).max(500).default(25)
+/** Credential form values: flat string map, bounded in size. */
+const credentialsSchema = z
+  .record(z.string().max(100), z.union([z.string().max(20000), z.number(), z.boolean(), z.null()]))
+  .refine((v) => Object.keys(v).length <= 100, 'Too many credential fields')
+  .transform((v) => Object.fromEntries(Object.entries(v).map(([k, x]) => [k, x == null ? '' : String(x)])) as ConnectorCredentials)
+
+function parseSlug(raw: string): ConnectorSlug {
+  const slug = slugSchema.parse(raw)
+  if (!isConnectorSlug(slug)) throw new Error('Invalid connector type')
+  return slug
 }
+
+const getUserId = requireUserId
 
 function parseCredentials(sourceId: string, stored: unknown): ConnectorCredentials {
   const entries = Object.entries(decryptCredentials(sourceId, stored))
@@ -42,22 +54,25 @@ async function getOwnedSource(sourceId: string, userId: string) {
   return source
 }
 
-export async function testConnectorConnectionAction(slug: string, credentials: ConnectorCredentials) {
+export async function testConnectorConnectionAction(rawSlug: string, rawCredentials: ConnectorCredentials) {
   await getUserId()
-  if (!isConnectorSlug(slug)) throw new Error('Invalid connector type')
+  const slug = parseSlug(rawSlug)
+  const credentials = credentialsSchema.parse(rawCredentials)
   await assertConnectorInstalled(slug)
   return testConnectorConnection(slug, credentials)
 }
 
-export async function scanConnectorSchemaAction(slug: string, credentials: ConnectorCredentials) {
+export async function scanConnectorSchemaAction(rawSlug: string, rawCredentials: ConnectorCredentials) {
   await getUserId()
-  if (!isConnectorSlug(slug)) throw new Error('Invalid connector type')
+  const slug = parseSlug(rawSlug)
+  const credentials = credentialsSchema.parse(rawCredentials)
   await assertConnectorInstalled(slug)
   return scanConnectorSchema(slug, credentials)
 }
 
-export async function scanDataSourceSchema(sourceId: string) {
+export async function scanDataSourceSchema(rawSourceId: string) {
   const userId = await getUserId()
+  const sourceId = idSchema.parse(rawSourceId)
   const source = await getOwnedSource(sourceId, userId)
   if (!isConnectorSlug(source.sourceType)) throw new Error('Unsupported source type')
 
@@ -86,8 +101,11 @@ export async function scanDataSourceSchema(sourceId: string) {
   return scan
 }
 
-export async function getDataSourceTableSample(sourceId: string, tableName: string, limit = 25) {
+export async function getDataSourceTableSample(rawSourceId: string, rawTableName: string, rawLimit = 25) {
   const userId = await getUserId()
+  const sourceId = idSchema.parse(rawSourceId)
+  const tableName = tableSchema.parse(rawTableName)
+  const limit = limitSchema.parse(rawLimit)
   const source = await getOwnedSource(sourceId, userId)
   if (!isConnectorSlug(source.sourceType)) throw new Error('Unsupported source type')
 
@@ -96,18 +114,20 @@ export async function getDataSourceTableSample(sourceId: string, tableName: stri
   return sampleConnectorTable(source.sourceType as ConnectorSlug, credentials, tableName, limit)
 }
 
-export async function previewRestConnection(credentials: ConnectorCredentials) {
+export async function previewRestConnection(rawCredentials: ConnectorCredentials) {
   await getUserId()
+  const credentials = credentialsSchema.parse(rawCredentials)
   await assertConnectorInstalled('rest')
   return previewRestRequest(parseRestConfig(credentials))
 }
 
 export async function testAndScanDataSource(
-  slug: string,
-  credentials: ConnectorCredentials
+  rawSlug: string,
+  rawCredentials: ConnectorCredentials
 ) {
   await getUserId()
-  if (!isConnectorSlug(slug)) throw new Error('Invalid connector type')
+  const slug = parseSlug(rawSlug)
+  const credentials = credentialsSchema.parse(rawCredentials)
   await assertConnectorInstalled(slug)
 
   const test = await testConnectorConnection(slug, credentials)
