@@ -518,61 +518,56 @@ Nexus doesn't expose raw source systems. It publishes **standardized business do
 
 ## 10. Current implementation status
 
-*Snapshot from the codebase as of 2026-10-08. Update this table whenever a feature moves from mock to real.*
+*Snapshot from the codebase as of 2026-10-09. Update this table whenever a feature moves from mock to real.*
 
 | Layer / area | Status | What's real | What's mock / missing |
 |---|:-:|---|---|
-| Auth & workspaces | ✅ | Better Auth email/password; workspaces with roles, switcher, invite links (`/invite/[token]`, hashed, 7-day, email-bound); personal workspace auto-created; Settings tab for members | SSO, MFA, email verification, email delivery of invites |
+| Auth & workspaces | ✅ | Better Auth email/password with email verification (SMTP) and **mandatory TOTP 2FA** (any authenticator app, 10 backup codes, "trust this device" 30 days); workspaces with roles, switcher, invite links (hashed, 7-day, email-bound, emailed when SMTP is set); personal workspace auto-created; Settings tab for members | SSO (SAML/OIDC); 2FA reset / backup-code regeneration (TD-19) |
 | Overview | ✅ | Real counts, getting-started checklist, pipelines needing attention | — |
 | Analytics, Governance pages | 🎭 | Labelled "Preview: sample data" | Not connected to workspace data |
-| Data Sources | ✅ | CRUD, rename, source/destination switch, re-test, delete guarded by pipeline use; credentials encrypted; zod-validated actions, UUID ids | No scheduled health checks; no key rotation; credentials can't be edited after creation |
+| Data Sources | ✅ | CRUD, rename, source/destination switch, re-test, delete guarded by pipeline use; credentials encrypted with key ids and rotation; edit credentials for every connector (REST/Salesforce secrets masked); zod-validated actions, UUID ids | No scheduled health checks |
 | Connector Marketplace | ✅ | 10 connectors; install/uninstall (uninstall blocked while used); dev mode installs everything free | No billing (`CONNECTOR_BILLING_ENABLED`) |
-| Connector drivers | ✅/🟡 | SAP (OData), Oracle, MySQL, Postgres, REST, Salesforce (OAuth), Snowflake, Supabase, Talenta, AD/LDAP: test / scan / sample / pipeline read; write-back for Postgres, MySQL, Supabase. `scripts/connector-harness.ts` verifies REST, SAP, MySQL, Postgres, LDAP, Talenta (6/6 pass) | Oracle, Snowflake, Salesforce, Supabase and live Talenta not yet tested against real accounts |
-| Pipeline Designer | ✅ | Step-list builder (`components/pipelines/*`), real engine (`lib/pipelines/*`), test on sample, run now, run history with rejected rows, versions + restore, write to Nexus datasets (`nexus_data` schema) or back into Postgres/MySQL/Supabase (destination role only) | No DAG/branching, joins, incremental watermark, retries, notifications; reads capped at 100k rows per run |
-| Scheduler | ✅ | Supabase pg_cron job `nexus-pipeline-tick` (every minute, only calls Vercel when a pipeline is due) → `/api/cron/pipelines` (Bearer `CRON_SECRET`, secret in Supabase Vault) | No webhook/API/event triggers |
-| Monitoring | ✅ | Today's outcomes, 7-day chart, pipeline health, recent runs, produced datasets (auto-refresh 30 s); notification bell | No SLA config, no cancel/replay |
-| Data Mapping | 🟡 | Map & transform step inside pipelines (14 transforms, auto-map, type conversion) | No standalone studio, lookups, templates; old `data_mappings` table unused |
-| Data Quality | 🎭 | `data_quality_metrics` table | No rule engine or quarantine |
-| Data Catalog | 🎭 | `data_catalog` table | UI mock data |
-| Business Rules | 🎭 | `business_rules` table, UI builder | Not persisted or evaluated |
-| Analytics / Dashboards | 🎭 | `dashboards` table | Placeholder UI |
-| Version Control | 🎭 | `pipeline_versions` table | Not written on save |
-| Governance | 🟡 | Workspaces, roles and server-side permissions (real, in Settings); audit log on all mutations | Policies (masking, retention, row-level) are still a preview page; see TD-15 |
+| Connector drivers | ✅/🟡 | SAP (OData), Oracle, MySQL, Postgres (TLS verify/require/disable + CA), REST, Salesforce (OAuth), Snowflake, Supabase, Talenta, AD/LDAP: test / scan / sample / pipeline read; write-back for Postgres, MySQL, Supabase. `scripts/connector-harness.ts` verifies REST, SAP, MySQL, Postgres, LDAP, Talenta (6/6 pass) | Oracle, Snowflake, Salesforce, Supabase and live Talenta not yet tested against real accounts |
+| Pipeline Designer | ✅ | Step-list builder (`components/pipelines/*`), real engine (`lib/pipelines/*`), test on sample, run now, run history with rejected rows, versions + restore, incremental sync, retries, alerts; write to Nexus datasets (`nexus_data` schema) or back into Postgres/MySQL/Supabase (destination role only) | No DAG/branching or joins; up to 1M source rows per run |
+| Background worker | ✅ | Postgres job queue (`pipeline_jobs`, `FOR UPDATE SKIP LOCKED` leases); runs read the source in 5,000-row chunks and checkpoint after each, so runs continue across 300 s invocations; retries resume from the last checkpoint; dataset `replace` loads into a staging table swapped in at the end | Delivery is at-least-once (TD-17) |
+| Scheduler | ✅ | Supabase pg_cron job `nexus-pipeline-tick` (every minute, only calls Vercel when a pipeline is due or a job is waiting) → `/api/cron/pipelines` (Bearer `CRON_SECRET`, secret in Supabase Vault) queues due runs and works the queue | No webhook/API/event triggers |
+| Monitoring | ✅ | Today's outcomes, 7-day chart, pipeline health (stalled jobs flagged), background runs with live progress, recent runs, produced datasets; notification bell | No SLA config, no cancel/replay |
+| Data Mapping | 🟡 | Map & transform step inside pipelines (14 transforms, auto-map, type conversion) | No standalone studio, lookups, templates |
+| Data Quality | 🟡 | Validate step inside pipelines (required, email, unique, regex, ranges, one-of) with rejected-row capture | No rule library, scoring or quarantine workflow |
+| Data Catalog | ⬜ | Datasets list in Monitoring | No catalog, lineage or search |
+| Business Rules | ⬜ | — | Not started (mock screen and table removed, TD-12) |
+| Analytics / Dashboards | 🎭 | Preview page | No dashboards |
+| Version Control | ✅ | `pipeline_versions` written on every save; history and restore in the run-history dialog | No diff view |
+| Governance | 🟡 | Workspaces, roles and server-side permissions; audit log of every change, data view (previews, samples, rejected rows, test runs), run and login, with IP and user agent; audit viewer in Settings (`audit:view`) | Policies (masking, retention, row-level) are still a preview page |
+| Email | 🟡 | SMTP mailer (`lib/email.ts`, Brevo free tier) for verification, invites and alerts; dev prints emails to the console | Production SMTP credentials not set yet (TD-18) |
 | AI Assistant | 🎭 | — | Mock UI |
 | Data API | ⬜ | — | — |
 
-**Tech debt register** (reviewed 2026-10-09). Priority: **P1** before the first customer pilot · **P2** before GA · **P3** when convenient. Mark items done here when fixed.
+**Tech debt register** (reviewed 2026-10-09). Priority: **P1** before the first customer pilot · **P2** before GA · **P3** when convenient. Move items to *Resolved* when fixed.
 
 | # | Area | Debt | Risk if left | Pri | Fix |
 |---|---|---|---|:-:|---|
-| TD-1 | Security | **DB certificates are not verified.** App DB and user-database pools use TLS with `rejectUnauthorized: false`. | Man-in-the-middle on the DB connection is possible in theory | P1 | Set `DATABASE_CA_CERT` (Supabase CA) on Vercel; add an optional CA field for customer Postgres sources |
-| TD-2 | Security | **No email verification, MFA or SSO.** Anyone can sign up with any address (invite links are bound to the email to compensate). | Account impersonation; enterprise buyers will require SSO | P1 (verification) · P2 (SSO/MFA) | Turn on Better Auth email verification once email works (TD-4); SAML/OIDC in Phase 2 |
-| TD-3 | Security | **No encryption key rotation.** One `NEXUS_ENCRYPTION_KEY` per environment; losing or changing it makes stored credentials unreadable. | Key compromise means re-entering every credential | P2 | Add `kid` to the envelope, support old+new keys, re-encrypt script; later a per-workspace data key |
-| TD-4 | Platform | **Email delivery is deferred** (decision 2026-10-09). Alerts are bell-only and invite links must be sent manually. | Failures go unnoticed outside the app; manual invites | P1 | Resend account + verified domain, set `RESEND_API_KEY` / `ALERT_FROM_EMAIL`, send invites by email, then Teams/Slack/WhatsApp (MN-5) |
-| TD-5 | Platform | **Pipelines run inside the web request** (300 s, max 100k rows per run). | Large HR syncs time out | P1 for big customers | Background worker + job queue (ADR-1); keep the request path for small runs |
-| TD-6 | Platform | **Dev database shares the production Postgres server** (`nexus_dev` database) because the free plan allows 2 projects per owner; dev and preview have no scheduler. | Heavy dev load could slow production | P2 | Move dev to its own Supabase project when upgrading |
+| TD-2 | Security | **No SSO.** Email verification and mandatory TOTP 2FA are done. | Enterprise buyers will require SSO | P2 | SAML/OIDC in Phase 2 (Better Auth SSO plugin) |
+| TD-6 | Platform | **Dev database shares the production Postgres server** (`nexus_dev` database) because the free plan allows 2 projects per owner; dev and preview have no scheduler (the worker is nudged by page polls there). | Heavy dev load could slow production | P2 | Move dev to its own Supabase project when upgrading |
 | TD-7 | Platform | **Vercel Hobby plan limits:** 300 s functions, daily-only Vercel cron (worked around with Supabase pg_cron). Hobby is for non-commercial use. | Customer use needs a paid plan | P1 before customers | Upgrade to Vercel Pro (and Supabase Pro for backups/PITR) |
-| TD-8 | Quality | **Type errors don't fail the build** (`ignoreBuildErrors: true` in `next.config.mjs`), although type-check is now clean and runs in CI. | A broken type can still deploy if CI is skipped | P2 | Remove the flag |
-| TD-9 | Quality | **No automated tests for server actions, permissions or UI.** Engine tests run in CI; the connector harness is manual and depends on public demo servers. | Regressions in auth/permissions slip through | P2 | Integration tests against `nexus_dev` for `requireWorkspace` and key actions; scheduled connector-harness run |
 | TD-10 | Connectors | **Not yet proven on real accounts:** Oracle, Snowflake, Salesforce, Supabase (REST path) and live Talenta (response format not public). | First customer finds the bug | P1 for the connectors a pilot uses | Run the harness with real credentials (env vars already supported) |
-| TD-11 | Connectors | **REST and Salesforce credentials can't be edited** after creation (custom forms); others can. | Re-create the data source to change them | P3 | Support custom forms in the edit dialog |
-| TD-12 | Code | **Leftover mock code:** six unreachable mock screens (`ai-advanced`, `business-rules`, `data-catalog`, `data-mapping`, `data-quality`, `version-control` layers), nine unused mock tables (`connectors`, `pipeline_steps`, `data_mappings`, `data_catalog`, `business_rules`, `data_quality_metrics`, `dashboards`, `governance_policies`, `integration_configs`), and the Analytics/Governance preview pages. | Confusion about what is real; dead code | P3 | Delete or rebuild each when its layer is implemented |
-| TD-13 | Code | **Stale scripts:** `scripts/test-persisted-source.mjs` and `scripts/uninstall-all-connectors.mjs` predate workspaces (no `workspaceId`) and will fail. | Misleading tooling | P3 | Update or delete |
-| TD-14 | Data | **App timestamps are `timestamp without time zone`** (stored as UTC by Drizzle). Raw SQL or other tools may read them as local time. | Off-by-hours bugs in reports/integrations | P3 | Migrate to `timestamptz` |
-| TD-15 | Governance | **Audit log is incomplete:** no IP/user agent, no read/export/login events. | Weak for UU PDP / audit requests | P2 | Capture request metadata in `audit()`; log dataset previews and exports |
-| TD-16 | Process | **Migration 0003 was edited after it was applied** (made a no-op outside the pg_cron database; result identical). | Precedent for editing applied migrations | P3 | Rule: never edit an applied migration; add a new one instead |
+| TD-17 | Platform | **Worker delivery is at-least-once.** If a function dies between writing a chunk and checkpointing it, the chunk is written again on resume. Upsert destinations are unaffected. | Duplicate rows in *append* destinations after a crash | P2 | Idempotency key column for append writes, or write + checkpoint in one transaction for Nexus datasets |
+| TD-18 | Platform | **Production SMTP not configured.** Until `SMTP_*` / `EMAIL_FROM` are set on Vercel, production skips email verification (2FA still applies), invites are copy-paste and alerts are bell-only. | Unverified sign-ups; missed failure alerts | P1 | Set the Brevo SMTP variables (sender domain verified with SPF/DKIM) and redeploy |
+| TD-19 | Security | **No 2FA recovery flow.** A user who loses both their authenticator and backup codes is locked out; admins can't reset 2FA and users can't regenerate backup codes in the app. | Support load; locked-out admins | P1 | Settings → Security: regenerate backup codes, re-enroll; admin "reset 2FA" with audit entry |
+| TD-20 | Code | **Analytics and Governance preview pages** still show sample data. | Confusion about what is real | P3 | Rebuild when those layers are implemented |
 
 **Accepted risks** (owner's decision): the production database password was shared in a chat transcript (2026-10-08/09); rotate it before customer data arrives.
 
-**Resolved:** credentials encrypted at rest · UUID ids · zod validation on all actions · shared `requireWorkspace` · single pnpm lockfile · committed migrations + tracked runner · workspaces & server-side RBAC · CI (type-check, engine tests, build) · dev database separated from production data.
+**Resolved:** credentials encrypted at rest · UUID ids · zod validation on all actions · shared `requireWorkspace` · single pnpm lockfile · committed migrations + tracked runner · workspaces & server-side RBAC · CI (type-check, engine tests, build) · dev database separated from production data · 2026-10-09: TD-1 DB certificates verified (bundled Supabase root CA; Postgres sources get verify/require/disable + CA) · TD-2 email verification + mandatory TOTP 2FA · TD-3 key ids + `NEXUS_ENCRYPTION_KEY_PREVIOUS` + `scripts/reencrypt-credentials.mjs` · TD-4 SMTP mailer, emailed invites and alerts (credentials pending, TD-18) · TD-5 background worker with chunked, resumable runs · TD-8 type errors fail the build · TD-9 integration tests in CI (`scripts/integration-tests.ts`, Postgres service) · TD-11 REST/Salesforce credentials editable · TD-12 mock screens and nine mock tables removed · TD-13 stale scripts removed · TD-14 all timestamps `timestamptz` · TD-15 complete audit trail + viewer · TD-16 migration checksums: `db-migrate` refuses edited applied migrations.
 
 ---
 
-### Pipeline runtime notes (2026-10-08)
-- Runs execute inside the request (manual runs: dashboard server action; scheduled: cron route), both with `maxDuration = 300`. Fine for tens of thousands of rows; larger loads need the worker in ADR-1.
-- Source reads are capped by the Source step's *max rows* (≤ 100k). Postgres/MySQL/Supabase read in 1,000-row batches; SAP/Salesforce/REST/Snowflake/Oracle use the connector's capped read.
-- Writing into a customer database requires the data source to have been added with **Add Destination** (role `destination`), the table must already exist, and writes run in one transaction.
-- Up to 500 rejected rows per run are kept in `pipeline_run_rejects`.
+### Pipeline runtime notes (2026-10-09)
+- "Run now" and the scheduler only queue a run (`pipeline_jobs`, one active job per pipeline). The worker (`lib/pipelines/jobs.ts`) runs in the cron route and, after "Run now", in the same function via `after()`; pages showing run progress restart it when a job is waiting.
+- Sources are read in 5,000-row chunks in a stable order (watermark column, then primary key; `ctid` for tables without one). APIs without paging are read once per invocation and sliced. Each chunk is transformed, written and checkpointed; a slice stops ~75 s before the 300 s limit and the next invocation resumes.
+- Transient failures retry from the last checkpoint with exponential backoff (`settings.retries`, `retryDelaySeconds`); configuration errors fail immediately. "Unique" validation spans chunks (hashed values in `pipeline_job_seen`).
+- Writing into a customer database requires the data source to have been added with **Add Destination** (role `destination`) and the table must already exist; each chunk is written in its own transaction.
+- Up to 500 rejected rows per run are kept in `pipeline_run_rejects`; source reads are capped by the Source step's *max rows* (≤ 1,000,000).
 
 ## 11. Architecture
 
@@ -618,7 +613,7 @@ Nexus doesn't expose raw source systems. It publishes **standardized business do
 ```
 
 **Key decisions (proposed; record in ADRs under `docs/adr/` when decided)**
-- **ADR-1 Execution engine:** don't execute in server actions. Options: (a) Vercel Workflow / Queues + Fluid Compute functions for batches; (b) a separate Node worker service (e.g., on Fly/Railway/Azure Container Apps) with a Postgres-backed queue (pg-boss/Graphile Worker); (c) Temporal. **Recommendation:** (b) a Postgres-backed queue + Node worker, because it works the same on-prem, which government customers need.
+- **ADR-1 Execution engine:** don't execute in server actions. Options: (a) Vercel Workflow / Queues + Fluid Compute functions for batches; (b) a separate Node worker service (e.g., on Fly/Railway/Azure Container Apps) with a Postgres-backed queue (pg-boss/Graphile Worker); (c) Temporal. **Recommendation:** (b) a Postgres-backed queue + Node worker, because it works the same on-prem, which government customers need. **Decided 2026-10-09 (TD-5):** the Postgres queue (`pipeline_jobs`, SKIP LOCKED leases, chunked checkpointed runs) runs inside the app's Vercel functions for now (cron tick + `after()`); the same `processJobs()` can later run in a standalone worker service or on-prem without changing the queue.
 - **ADR-2 Pipeline definition format:** a single JSON document (`nodes[]`, `edges[]`, `settings`) stored in `pipeline_versions.config`, validated by a zod schema shared by the UI and the engine. The current `pipeline_steps` table becomes redundant.
 - **ADR-3 Expression language:** a JSON AST for conditions and transforms (no `eval`). It's shared by Mapping, Rules, Filter, Validate, and Router.
 - **ADR-4 Curated data storage:** Postgres schema per workspace (`ws_<id>`) for v1; a warehouse option later.
@@ -806,8 +801,8 @@ Public Connector SDK · marketplace with partner connectors · pipeline template
 | Risk | Impact | Mitigation |
 |---|---|---|
 | Building 14 layers at once; everything is a mock and nothing works end-to-end | High | Stick to Phase 1 exit criteria; one real end-to-end flow before widening |
-| Pipelines executed in serverless request handlers time out | High | ADR-1 job queue/worker before the scheduler ships |
-| Credential leak | Critical | Encrypted at rest since 2026-10-08; add key rotation + KMS-held master key before GA |
+| Pipelines executed in serverless request handlers time out | High | Resolved 2026-10-09: job queue + chunked, resumable runs (ADR-1, TD-5) |
+| Credential leak | Critical | Encrypted at rest since 2026-10-08; key rotation since 2026-10-09; KMS-held master key before GA |
 | On-prem systems unreachable from Vercel | High | Nexus Agent (Phase 2–3), or self-hosted deployment |
 | Connector maintenance burden (SAP/Workday API changes) | Medium | Connector SDK, contract tests, versioned connectors |
 | Competing with mature iPaaS (MuleSoft, Boomi, Workato, n8n) | Medium | Differentiate on the **HR domain model + KMPlus app integration + local HRIS + Indonesian compliance**, not generic connector count |

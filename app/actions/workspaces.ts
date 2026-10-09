@@ -6,9 +6,11 @@ import { and, asc, desc, eq, gt, isNull, sql } from 'drizzle-orm'
 import { cookies } from 'next/headers'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/lib/db'
-import { auditLogs, user, workspaceInvites, workspaceMembers, workspaces } from '@/lib/db/schema'
+import { user, workspaceInvites, workspaceMembers, workspaces } from '@/lib/db/schema'
 import { ACTIVE_WORKSPACE_COOKIE, getMembership, newId, requireUserId, requireWorkspace, type WorkspaceContext } from '@/lib/auth/session'
-import { ROLES, type Role } from '@/lib/auth/permissions'
+import { ROLE_INFO, ROLES, type Role } from '@/lib/auth/permissions'
+import { recordAudit, type AuditAction } from '@/lib/audit'
+import { appUrl, sendEmail, smtpConfigured } from '@/lib/email'
 
 const roleSchema = z.enum(ROLES)
 const idSchema = z.string().trim().min(1).max(100)
@@ -17,8 +19,8 @@ const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
 const hashToken = (token: string) => createHash('sha256').update(token).digest('hex')
 
-async function audit(ctx: WorkspaceContext, action: string, resourceId: string, changes?: Record<string, unknown>) {
-  await db.insert(auditLogs).values({ id: newId('audit'), userId: ctx.userId, workspaceId: ctx.workspaceId, action, resource: 'workspace', resourceId, changes })
+async function audit(ctx: WorkspaceContext, action: AuditAction, resourceId: string, changes?: Record<string, unknown>) {
+  await recordAudit(ctx, { action, resource: 'workspace', resourceId, changes })
 }
 
 async function setActiveWorkspace(workspaceId: string) {
@@ -72,7 +74,7 @@ export async function createWorkspace(rawName: string) {
   const id = newId('ws')
   await db.insert(workspaces).values({ id, name, createdBy: userId })
   await db.insert(workspaceMembers).values({ workspaceId: id, userId, role: 'admin' })
-  await db.insert(auditLogs).values({ id: newId('audit'), userId, workspaceId: id, action: 'CREATE', resource: 'workspace', resourceId: id, changes: { name } })
+  await recordAudit({ userId, workspaceId: id }, { action: 'CREATE', resource: 'workspace', resourceId: id, changes: { name } })
   await setActiveWorkspace(id)
   revalidatePath('/dashboard')
   return { id }
@@ -133,9 +135,12 @@ export async function removeMember(rawUserId: string) {
   revalidatePath('/dashboard')
 }
 
-// ── Invites (link-based; no email is sent) ───────────────────────────────────
+// ── Invites (one-time links, emailed when SMTP is configured) ───────────────
 
-/** Creates an invite and returns its one-time link path. Only the token hash is stored. */
+/**
+ * Creates an invite, emails the link when SMTP is configured, and returns the
+ * link path so the admin can also copy it. Only the token hash is stored.
+ */
 export async function createInvite(rawEmail: string, rawRole: string) {
   const ctx = await requireWorkspace('workspace:manage')
   const email = z.string().trim().toLowerCase().email('Enter a valid email').parse(rawEmail)
@@ -159,9 +164,27 @@ export async function createInvite(rawEmail: string, rawRole: string) {
     invitedBy: ctx.userId,
     expiresAt: new Date(Date.now() + INVITE_TTL_MS),
   })
-  await audit(ctx, 'INVITE', id, { email, role })
+  const path = `/invite/${token}`
+  let emailed = false
+  if (smtpConfigured()) {
+    try {
+      await sendEmail({
+        to: email,
+        subject: `${ctx.name || ctx.email} invited you to ${ctx.workspaceName} on KMPlus Nexus`,
+        lines: [
+          `${ctx.name || ctx.email} invited you to join the workspace "${ctx.workspaceName}" on KMPlus Nexus as ${ROLE_INFO[role].label}.`,
+          `Sign in or create an account with this email address (${email}) to accept. The link works once and expires in 7 days.`,
+        ],
+        action: { label: 'Accept invite', url: `${appUrl()}${path}` },
+      })
+      emailed = true
+    } catch (err) {
+      console.error('[invite] email failed:', err instanceof Error ? err.message : err)
+    }
+  }
+  await audit(ctx, 'INVITE', id, { email, role, emailed })
   revalidatePath('/dashboard')
-  return { path: `/invite/${token}`, email, role }
+  return { path, email, role, emailed }
 }
 
 export async function listInvites() {
@@ -231,7 +254,7 @@ export async function acceptInvite(rawToken: string) {
     await db.insert(workspaceMembers).values({ workspaceId: invite.workspaceId, userId, role })
   }
   await db.update(workspaceInvites).set({ acceptedAt: new Date(), acceptedBy: userId }).where(eq(workspaceInvites.id, invite.id))
-  await db.insert(auditLogs).values({ id: newId('audit'), userId, workspaceId: invite.workspaceId, action: 'ACCEPT_INVITE', resource: 'workspace', resourceId: invite.id, changes: { role } })
+  await recordAudit({ userId, workspaceId: invite.workspaceId }, { action: 'ACCEPT_INVITE', resource: 'workspace', resourceId: invite.id, changes: { role } })
   await setActiveWorkspace(invite.workspaceId)
   revalidatePath('/dashboard')
   return { workspaceName: invite.workspaceName }

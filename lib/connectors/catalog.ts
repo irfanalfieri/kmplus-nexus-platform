@@ -58,6 +58,8 @@ export const CONNECTOR_CATALOG: ConnectorDefinition[] = [
     credentialFields: [
       { key: 'connectionString', label: 'Connection String', type: 'password', required: true, placeholder: 'postgresql://user:pass@host:5432/db' },
       { key: 'schema', label: 'Schema', type: 'text', required: false, placeholder: 'public' },
+      { key: 'sslMode', label: 'TLS: verify / require / disable (default require; Supabase hosts are always verified)', type: 'text', required: false, placeholder: 'require' },
+      { key: 'caCert', label: 'CA certificate for verify mode (PEM, optional)', type: 'text', required: false, placeholder: '-----BEGIN CERTIFICATE----- …' },
     ],
   },
   {

@@ -4,8 +4,9 @@ import { z } from 'zod'
 import { and, eq } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/lib/db'
-import { auditLogs, connectorInstalls, dataSources } from '@/lib/db/schema'
+import { connectorInstalls, dataSources } from '@/lib/db/schema'
 import { CONNECTOR_CATALOG, getConnectorDefinition } from '@/lib/connectors/catalog'
+import { recordAudit, type AuditAction } from '@/lib/audit'
 import { newId, requireWorkspace, type WorkspaceContext } from '@/lib/auth/session'
 
 /**
@@ -22,8 +23,8 @@ async function getWorkspaceInstalls(workspaceId: string) {
   return db.select().from(connectorInstalls).where(eq(connectorInstalls.workspaceId, workspaceId))
 }
 
-async function audit(ctx: WorkspaceContext, action: string, slug: string) {
-  await db.insert(auditLogs).values({ id: newId('audit'), userId: ctx.userId, workspaceId: ctx.workspaceId, action, resource: 'connector', resourceId: slug })
+async function audit(ctx: WorkspaceContext, action: AuditAction, slug: string) {
+  await recordAudit(ctx, { action, resource: 'connector', resourceId: slug })
 }
 
 export async function getConnectorMarketplace() {

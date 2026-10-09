@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test:engine": "node scripts/run-ts.mjs scripts/engine-tests.ts",
     "test:connectors": "node --env-file=.env.local scripts/run-ts.mjs scripts/connector-harness.ts",
+    "test:integration": "node --env-file=.env.local scripts/run-ts.mjs --stubs scripts/integration-tests.ts",
     "db:migrate": "node --env-file=.env.local scripts/db-migrate.mjs"
   },
   "dependencies": {
@@ -27,8 +28,10 @@
     "lucide-react": "^1.16.0",
     "mysql2": "^3.24.4",
     "next": "16.2.6",
+    "nodemailer": "^10.0.16",
     "oracledb": "^7.0.1",
     "pg": "^8.22.0",
+    "qrcode": "^1.5.4",
     "react": "^19",
     "react-dom": "^19",
     "shadcn": "^4.8.0",
@@ -40,6 +43,8 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4.2.0",
     "@types/node": "^24",
+    "@types/nodemailer": "^8.0.2",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "esbuild": "0.25.12",

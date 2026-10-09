@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm'
 import { pgTable, text, boolean, timestamp, integer, jsonb, numeric, index, uniqueIndex, primaryKey } from 'drizzle-orm/pg-core'
 
 // Better Auth tables (required)
@@ -7,8 +8,10 @@ export const user = pgTable('user', {
   name: text('name'),
   emailVerified: boolean('emailVerified').notNull().default(false),
   image: text('image'),
-  createdAt: timestamp('createdAt').notNull().defaultNow(),
-  updatedAt: timestamp('updatedAt').notNull().defaultNow(),
+  /** Better Auth two-factor plugin. Nexus requires TOTP 2FA for every account. */
+  twoFactorEnabled: boolean('twoFactorEnabled').default(false),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
 })
 
 export const session = pgTable('session', {
@@ -17,9 +20,9 @@ export const session = pgTable('session', {
   token: text('token').notNull().unique(),
   ipAddress: text('ipAddress'),
   userAgent: text('userAgent'),
-  expiresAt: timestamp('expiresAt').notNull(),
-  createdAt: timestamp('createdAt').notNull().defaultNow(),
-  updatedAt: timestamp('updatedAt').notNull().defaultNow(),
+  expiresAt: timestamp('expiresAt', { withTimezone: true }).notNull(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
 })
 
 export const account = pgTable('account', {
@@ -29,22 +32,33 @@ export const account = pgTable('account', {
   providerId: text('providerId').notNull(),
   refreshToken: text('refreshToken'),
   accessToken: text('accessToken'),
-  accessTokenExpiresAt: timestamp('accessTokenExpiresAt'),
-  refreshTokenExpiresAt: timestamp('refreshTokenExpiresAt'),
+  accessTokenExpiresAt: timestamp('accessTokenExpiresAt', { withTimezone: true }),
+  refreshTokenExpiresAt: timestamp('refreshTokenExpiresAt', { withTimezone: true }),
   scope: text('scope'),
   idToken: text('idToken'),
   password: text('password'),
-  createdAt: timestamp('createdAt').notNull().defaultNow(),
-  updatedAt: timestamp('updatedAt').notNull().defaultNow(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
 })
+
+// Better Auth two-factor plugin: TOTP secret and backup codes (both encrypted by Better Auth).
+export const twoFactor = pgTable('twoFactor', {
+  id: text('id').primaryKey(),
+  secret: text('secret').notNull(),
+  backupCodes: text('backupCodes').notNull(),
+  userId: text('userId').notNull().references(() => user.id, { onDelete: 'cascade' }),
+  verified: boolean('verified').default(true),
+  failedVerificationCount: integer('failedVerificationCount').default(0),
+  lockedUntil: timestamp('lockedUntil', { withTimezone: true }),
+}, (t) => [index('twoFactor_userId_idx').on(t.userId), index('twoFactor_secret_idx').on(t.secret)])
 
 export const verification = pgTable('verification', {
   id: text('id').primaryKey(),
   identifier: text('identifier').notNull(),
   value: text('value').notNull(),
-  expiresAt: timestamp('expiresAt').notNull(),
-  createdAt: timestamp('createdAt').defaultNow(),
-  updatedAt: timestamp('updatedAt').defaultNow(),
+  expiresAt: timestamp('expiresAt', { withTimezone: true }).notNull(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).defaultNow(),
 })
 
 // Workspaces (tenants). Everything a team shares belongs to one workspace.
@@ -52,8 +66,8 @@ export const workspaces = pgTable('workspaces', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
   createdBy: text('createdBy').notNull(),
-  createdAt: timestamp('createdAt').notNull().defaultNow(),
-  updatedAt: timestamp('updatedAt').notNull().defaultNow(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
 })
 
 export const workspaceMembers = pgTable('workspace_members', {
@@ -61,8 +75,8 @@ export const workspaceMembers = pgTable('workspace_members', {
   userId: text('userId').notNull(),
   /** admin | steward | operator | analyst | auditor | viewer (lib/auth/permissions.ts) */
   role: text('role').notNull(),
-  createdAt: timestamp('createdAt').notNull().defaultNow(),
-  updatedAt: timestamp('updatedAt').notNull().defaultNow(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [primaryKey({ columns: [t.workspaceId, t.userId] }), index('workspace_members_user_idx').on(t.userId)])
 
 /** Invite links. Only a SHA-256 hash of the token is stored; the link is shown once. */
@@ -73,11 +87,11 @@ export const workspaceInvites = pgTable('workspace_invites', {
   role: text('role').notNull(),
   tokenHash: text('tokenHash').notNull().unique(),
   invitedBy: text('invitedBy').notNull(),
-  expiresAt: timestamp('expiresAt').notNull(),
-  acceptedAt: timestamp('acceptedAt'),
+  expiresAt: timestamp('expiresAt', { withTimezone: true }).notNull(),
+  acceptedAt: timestamp('acceptedAt', { withTimezone: true }),
   acceptedBy: text('acceptedBy'),
-  revokedAt: timestamp('revokedAt'),
-  createdAt: timestamp('createdAt').notNull().defaultNow(),
+  revokedAt: timestamp('revokedAt', { withTimezone: true }),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [index('workspace_invites_workspace_idx').on(t.workspaceId)])
 
 // Layer 1: Data Source Manager
@@ -92,9 +106,9 @@ export const dataSources = pgTable('data_sources', {
   config: jsonb('config').notNull(),
   credentials: jsonb('credentials').notNull(),
   status: text('status').default('disconnected'),
-  lastConnected: timestamp('lastConnected'),
-  createdAt: timestamp('createdAt').notNull().defaultNow(),
-  updatedAt: timestamp('updatedAt').notNull().defaultNow(),
+  lastConnected: timestamp('lastConnected', { withTimezone: true }),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [index('data_sources_workspace_idx').on(t.workspaceId)])
 
 // Layer 2: Connector Marketplace — per-user purchased/installed plugins
@@ -105,25 +119,10 @@ export const connectorInstalls = pgTable('connector_installs', {
   workspaceId: text('workspaceId').notNull(),
   connectorSlug: text('connectorSlug').notNull(),
   purchased: boolean('purchased').notNull().default(false),
-  installedAt: timestamp('installedAt'),
-  createdAt: timestamp('createdAt').notNull().defaultNow(),
-  updatedAt: timestamp('updatedAt').notNull().defaultNow(),
+  installedAt: timestamp('installedAt', { withTimezone: true }),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [uniqueIndex('connector_installs_workspace_slug_idx').on(t.workspaceId, t.connectorSlug)])
-
-export const connectors = pgTable('connectors', {
-  id: text('id').primaryKey(),
-  userId: text('userId').notNull(),
-  name: text('name').notNull(),
-  description: text('description'),
-  category: text('category').notNull(),
-  icon: text('icon'),
-  version: text('version'),
-  available: boolean('available').default(true),
-  config: jsonb('config'),
-  documentation: text('documentation'),
-  createdAt: timestamp('createdAt').notNull().defaultNow(),
-  updatedAt: timestamp('updatedAt').notNull().defaultNow(),
-})
 
 // Layer 3: Pipeline Designer
 export const pipelines = pgTable('pipelines', {
@@ -140,28 +139,15 @@ export const pipelines = pgTable('pipelines', {
   schedule: jsonb('schedule'),
   enabled: boolean('enabled').default(false),
   version: integer('version').default(1),
-  lastRunAt: timestamp('lastRunAt'),
+  lastRunAt: timestamp('lastRunAt', { withTimezone: true }),
   lastRunStatus: text('lastRunStatus'),
   /** Next scheduled run (UTC); null when manual or disabled. Indexed for the scheduler tick. */
-  nextRunAt: timestamp('nextRunAt'),
+  nextRunAt: timestamp('nextRunAt', { withTimezone: true }),
   /** Runtime state, e.g. { watermark: { column, value } } for incremental sync. Not versioned. */
   state: jsonb('state'),
-  createdAt: timestamp('createdAt').notNull().defaultNow(),
-  updatedAt: timestamp('updatedAt').notNull().defaultNow(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [index('pipelines_next_run_idx').on(t.nextRunAt), index('pipelines_workspace_idx').on(t.workspaceId)])
-
-// Pipeline Steps
-export const pipelineSteps = pgTable('pipeline_steps', {
-  id: text('id').primaryKey(),
-  pipelineId: text('pipelineId').notNull(),
-  userId: text('userId').notNull(),
-  stepName: text('stepName').notNull(),
-  stepType: text('stepType').notNull(),
-  stepOrder: integer('stepOrder').notNull(),
-  config: jsonb('config'),
-  createdAt: timestamp('createdAt').notNull().defaultNow(),
-  updatedAt: timestamp('updatedAt').notNull().defaultNow(),
-})
 
 // Layer 4: Scheduler & Layer 5: Monitoring
 export const executionLogs = pgTable('execution_logs', {
@@ -179,13 +165,48 @@ export const executionLogs = pgTable('execution_logs', {
   recordsSuccess: integer('recordsSuccess').default(0),
   recordsError: integer('recordsError').default(0),
   errorMessage: text('errorMessage'),
-  startTime: timestamp('startTime'),
-  endTime: timestamp('endTime'),
+  startTime: timestamp('startTime', { withTimezone: true }),
+  endTime: timestamp('endTime', { withTimezone: true }),
   duration: integer('duration'),
   executionDetails: jsonb('executionDetails'),
-  createdAt: timestamp('createdAt').notNull().defaultNow(),
-  updatedAt: timestamp('updatedAt').notNull().defaultNow(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [index('execution_logs_pipeline_idx').on(t.pipelineId, t.createdAt), index('execution_logs_workspace_idx').on(t.workspaceId, t.startTime)])
+
+// Background worker queue (TD-5): one job per pipeline run. The worker claims a
+// job with a lease (FOR UPDATE SKIP LOCKED), processes the source in chunks and
+// checkpoints "progress" after each chunk, so a run can span many invocations.
+export const pipelineJobs = pgTable('pipeline_jobs', {
+  /** Same id as the run (execution_logs.id). */
+  id: text('id').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  pipelineId: text('pipelineId').notNull(),
+  /** Who triggered (manual) or owns (schedule) the run. */
+  actorId: text('actorId').notNull(),
+  trigger: text('trigger').notNull(),
+  /** queued | running | done */
+  status: text('status').notNull().default('queued'),
+  /** Failed attempts so far (transient errors are retried from the last checkpoint). */
+  attempts: integer('attempts').notNull().default(0),
+  /** Not picked up before this time (retry backoff). */
+  availableAt: timestamp('availableAt', { withTimezone: true }).notNull().defaultNow(),
+  /** A running job whose lease has expired is considered abandoned and is resumed. */
+  leaseUntil: timestamp('leaseUntil', { withTimezone: true }),
+  progress: jsonb('progress'),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  index('pipeline_jobs_claim_idx').on(t.status, t.availableAt),
+  // At most one queued/running job per pipeline: no overlapping runs.
+  uniqueIndex('pipeline_jobs_one_active_idx').on(t.pipelineId).where(sql`${t.status} <> 'done'`),
+])
+
+// Values already seen by Validate unique rules in earlier chunks of a running job (hashed).
+export const pipelineJobSeen = pgTable('pipeline_job_seen', {
+  jobId: text('jobId').notNull(),
+  field: text('field').notNull(),
+  hash: text('hash').notNull(),
+}, (t) => [primaryKey({ columns: [t.jobId, t.field, t.hash] })])
 
 // Rows rejected by a run's Validate step (capped per run) so users can inspect them.
 export const pipelineRunRejects = pgTable('pipeline_run_rejects', {
@@ -197,7 +218,7 @@ export const pipelineRunRejects = pgTable('pipeline_run_rejects', {
   workspaceId: text('workspaceId').notNull(),
   row: jsonb('row').notNull(),
   errors: jsonb('errors').notNull(),
-  createdAt: timestamp('createdAt').notNull().defaultNow(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [index('pipeline_run_rejects_run_idx').on(t.runId)])
 
 // In-app alerts (bell icon); email delivery status is tracked per row.
@@ -214,8 +235,8 @@ export const notifications = pgTable('notifications', {
   runId: text('runId'),
   /** sent | skipped | failed | null (no email requested) */
   emailStatus: text('emailStatus'),
-  readAt: timestamp('readAt'),
-  createdAt: timestamp('createdAt').notNull().defaultNow(),
+  readAt: timestamp('readAt', { withTimezone: true }),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [index('notifications_user_idx').on(t.userId, t.workspaceId, t.createdAt)])
 
 // Nexus-managed datasets: pipeline outputs stored as physical tables in the nexus_data schema.
@@ -231,84 +252,10 @@ export const nexusDatasets = pgTable('nexus_datasets', {
   columns: jsonb('columns').notNull(),
   pipelineId: text('pipelineId'),
   rowCount: integer('rowCount').default(0),
-  lastLoadedAt: timestamp('lastLoadedAt'),
-  createdAt: timestamp('createdAt').notNull().defaultNow(),
-  updatedAt: timestamp('updatedAt').notNull().defaultNow(),
+  lastLoadedAt: timestamp('lastLoadedAt', { withTimezone: true }),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [uniqueIndex('nexus_datasets_workspace_name_idx').on(t.workspaceId, t.name)])
-
-// Layer 6: Data Mapping Studio
-export const dataMappings = pgTable('data_mappings', {
-  id: text('id').primaryKey(),
-  userId: text('userId').notNull(),
-  pipelineId: text('pipelineId').notNull(),
-  sourceField: text('sourceField').notNull(),
-  destinationField: text('destinationField').notNull(),
-  transformationType: text('transformationType'),
-  transformationConfig: jsonb('transformationConfig'),
-  active: boolean('active').default(true),
-  createdAt: timestamp('createdAt').notNull().defaultNow(),
-  updatedAt: timestamp('updatedAt').notNull().defaultNow(),
-})
-
-// Layer 7: Data Catalog
-export const dataCatalog = pgTable('data_catalog', {
-  id: text('id').primaryKey(),
-  userId: text('userId').notNull(),
-  name: text('name').notNull(),
-  description: text('description'),
-  dataType: text('dataType'),
-  source: text('source'),
-  owner: text('owner'),
-  classification: text('classification'),
-  tags: text('tags').array(),
-  metadata: jsonb('metadata'),
-  createdAt: timestamp('createdAt').notNull().defaultNow(),
-  updatedAt: timestamp('updatedAt').notNull().defaultNow(),
-})
-
-// Layer 8: Business Rules Engine
-export const businessRules = pgTable('business_rules', {
-  id: text('id').primaryKey(),
-  userId: text('userId').notNull(),
-  name: text('name').notNull(),
-  description: text('description'),
-  ruleType: text('ruleType').notNull(),
-  condition: jsonb('condition').notNull(),
-  action: jsonb('action').notNull(),
-  active: boolean('active').default(true),
-  appliedTo: text('appliedTo').array(),
-  createdAt: timestamp('createdAt').notNull().defaultNow(),
-  updatedAt: timestamp('updatedAt').notNull().defaultNow(),
-})
-
-// Layer 9: Data Quality
-export const dataQualityMetrics = pgTable('data_quality_metrics', {
-  id: text('id').primaryKey(),
-  userId: text('userId').notNull(),
-  dataSourceId: text('dataSourceId'),
-  metricName: text('metricName').notNull(),
-  metricType: text('metricType').notNull(),
-  value: numeric('value'),
-  threshold: numeric('threshold'),
-  status: text('status'),
-  details: jsonb('details'),
-  createdAt: timestamp('createdAt').notNull().defaultNow(),
-  updatedAt: timestamp('updatedAt').notNull().defaultNow(),
-})
-
-// Layer 10: Analytics & Dashboards
-export const dashboards = pgTable('dashboards', {
-  id: text('id').primaryKey(),
-  userId: text('userId').notNull(),
-  name: text('name').notNull(),
-  description: text('description'),
-  layout: jsonb('layout').notNull(),
-  widgets: jsonb('widgets'),
-  refreshInterval: integer('refreshInterval').default(300),
-  public: boolean('public').default(false),
-  createdAt: timestamp('createdAt').notNull().defaultNow(),
-  updatedAt: timestamp('updatedAt').notNull().defaultNow(),
-})
 
 // Layer 11: Version Control
 export const pipelineVersions = pgTable('pipeline_versions', {
@@ -321,44 +268,21 @@ export const pipelineVersions = pgTable('pipeline_versions', {
   config: jsonb('config').notNull(),
   changes: text('changes'),
   createdBy: text('createdBy'),
-  createdAt: timestamp('createdAt').notNull().defaultNow(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
 })
 
 // Layer 12: Governance & Compliance
 export const auditLogs = pgTable('audit_logs', {
   id: text('id').primaryKey(),
   userId: text('userId').notNull(),
-  /** Owning workspace; every query is scoped by this. userId = who created / acted. */
-  workspaceId: text('workspaceId').notNull(),
+  /** Workspace the event belongs to; null for account-level events (login, 2FA). userId = who acted. */
+  workspaceId: text('workspaceId'),
   action: text('action').notNull(),
   resource: text('resource').notNull(),
   resourceId: text('resourceId'),
   changes: jsonb('changes'),
   ipAddress: text('ipAddress'),
   userAgent: text('userAgent'),
-  createdAt: timestamp('createdAt').notNull().defaultNow(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
 })
 
-export const governancePolicies = pgTable('governance_policies', {
-  id: text('id').primaryKey(),
-  userId: text('userId').notNull(),
-  name: text('name').notNull(),
-  description: text('description'),
-  policyType: text('policyType').notNull(),
-  rules: jsonb('rules').notNull(),
-  active: boolean('active').default(true),
-  appliedTo: text('appliedTo').array(),
-  createdAt: timestamp('createdAt').notNull().defaultNow(),
-  updatedAt: timestamp('updatedAt').notNull().defaultNow(),
-})
-
-// Layer 13-14: AI & Advanced Integration
-export const integrationConfigs = pgTable('integration_configs', {
-  id: text('id').primaryKey(),
-  userId: text('userId').notNull(),
-  integrationName: text('integrationName').notNull(),
-  config: jsonb('config').notNull(),
-  active: boolean('active').default(false),
-  createdAt: timestamp('createdAt').notNull().defaultNow(),
-  updatedAt: timestamp('updatedAt').notNull().defaultNow(),
-})

@@ -1,7 +1,5 @@
 import Link from 'next/link'
-import { headers } from 'next/headers'
-import { redirect } from 'next/navigation'
-import { auth } from '@/lib/auth'
+import { requirePageUser } from '@/lib/auth/session'
 import { describeInvite } from '@/app/actions/workspaces'
 import { ROLE_INFO } from '@/lib/auth/permissions'
 import { Card } from '@/components/ui/card'
@@ -9,11 +7,10 @@ import AcceptInviteButton from './accept-button'
 
 export default async function InvitePage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params
-  const session = await auth.api.getSession({ headers: await headers() })
-  if (!session?.user) redirect(`/sign-in?next=${encodeURIComponent(`/invite/${token}`)}`)
+  const user = await requirePageUser(`/invite/${token}`)
 
   const invite = await describeInvite(token).catch(() => null)
-  const emailMatches = invite && session.user.email.toLowerCase() === invite.email.toLowerCase()
+  const emailMatches = invite && user.email.toLowerCase() === invite.email.toLowerCase()
 
   return (
     <main className="flex min-h-svh items-center justify-center bg-background px-4">
@@ -41,7 +38,7 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
             ) : (
               <p className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
                 This invite is for <span className="font-medium">{invite.email}</span>, but you&apos;re signed in as{' '}
-                <span className="font-medium">{session.user.email}</span>. Sign out and sign in (or sign up) with the invited email.
+                <span className="font-medium">{user.email}</span>. Sign out and sign in (or sign up) with the invited email.
               </p>
             )}
           </>

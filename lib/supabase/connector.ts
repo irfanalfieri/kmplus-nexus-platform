@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { pgSslOptions } from '@/lib/connectors/drivers/postgres'
 import { Pool } from 'pg'
 import type {
   SupabaseColumn,
@@ -208,7 +209,8 @@ function inferTypeFromValue(value: unknown): string {
 }
 
 async function scanViaPostgres(databaseUrl: string, schema: string): Promise<SupabaseTable[]> {
-  const pool = new Pool({ connectionString: databaseUrl, max: 1 })
+  // Supabase-hosted: verified against the Supabase root CA (see pgSslOptions).
+  const pool = new Pool({ connectionString: databaseUrl, max: 1, ssl: pgSslOptions(databaseUrl) })
   try {
     const columnsResult = await pool.query<{
       table_schema: string

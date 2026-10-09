@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { and, asc, eq } from 'drizzle-orm'
 import { cookies, headers } from 'next/headers'
+import { redirect } from 'next/navigation'
 import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { workspaceMembers, workspaces } from '@/lib/db/schema'
@@ -13,9 +14,23 @@ export function newId(prefix: string) {
   return `${prefix}_${randomUUID()}`
 }
 
+/** Signed-in user with 2FA set up, or throws. Two-factor authentication is mandatory (TD-2). */
 async function requireSession() {
   const session = await auth.api.getSession({ headers: await headers() })
   if (!session?.user) throw new Error('Unauthorized')
+  if (!session.user.twoFactorEnabled) throw new Error('Set up two-factor authentication first (reload the page).')
+  return session.user
+}
+
+/**
+ * For server pages: the signed-in user, or a redirect to sign-in (no session)
+ * or to 2FA setup (no 2FA yet). nextPath is where to come back to afterwards.
+ */
+export async function requirePageUser(nextPath: string) {
+  const session = await auth.api.getSession({ headers: await headers() })
+  const next = encodeURIComponent(nextPath)
+  if (!session?.user) redirect(`/sign-in?next=${next}`)
+  if (!session.user.twoFactorEnabled) redirect(`/setup-2fa?next=${next}`)
   return session.user
 }
 

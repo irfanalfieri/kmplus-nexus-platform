@@ -91,7 +91,7 @@ export function SourceEditor({ step, options, onChange }: { step: SourceStep; op
       </div>
       <div>
         <FieldLabel>Max rows per run</FieldLabel>
-        <Input type="number" min={1} max={100000} value={step.maxRows} onChange={(e) => onChange({ ...step, maxRows: Math.max(1, Math.min(100000, Number(e.target.value) || 1)) })} />
+        <Input type="number" min={1} max={1000000} value={step.maxRows} onChange={(e) => onChange({ ...step, maxRows: Math.max(1, Math.min(1000000, Number(e.target.value) || 1)) })} />
       </div>
       {source && source.tables.length === 0 && (
         <p className="text-xs text-muted-foreground md:col-span-3">

@@ -39,7 +39,7 @@ const sourceStep = z.object({
   dataSourceId: z.string().min(1, 'Choose a data source'),
   table: z.string().min(1, 'Choose a table or object'),
   /** Safety cap on rows read per run. */
-  maxRows: z.number().int().min(1).max(100_000).default(10_000),
+  maxRows: z.number().int().min(1).max(1_000_000).default(10_000),
   /** incremental: only rows whose watermark column is greater than the last synced value. */
   mode: z.enum(['full', 'incremental']).default('full'),
   /** Ever-increasing column, e.g. updated_at or an auto-increment id. */

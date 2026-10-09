@@ -16,6 +16,7 @@ export function AuthForm({ mode, next = '/dashboard' }: { mode: 'sign-in' | 'sig
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [sentTo, setSentTo] = useState<string | null>(null)
 
   const isSignUp = mode === 'sign-up'
 
@@ -24,19 +25,54 @@ export function AuthForm({ mode, next = '/dashboard' }: { mode: 'sign-in' | 'sig
     setError(null)
     setLoading(true)
 
-    const { error } = isSignUp
-      ? await authClient.signUp.email({ email, password, name })
-      : await authClient.signIn.email({ email, password })
-
-    setLoading(false)
-
-    if (error) {
-      setError(error.message ?? 'Something went wrong')
+    const setupPath = `/setup-2fa?next=${encodeURIComponent(next)}`
+    if (isSignUp) {
+      // The verification link signs the user in and continues to 2FA setup.
+      const { data, error } = await authClient.signUp.email({ email, password, name, callbackURL: setupPath })
+      setLoading(false)
+      if (error) return setError(error.message ?? 'Something went wrong')
+      if (data?.token) {
+        // Email verification is off (production without SMTP): straight to 2FA setup.
+        router.push(setupPath)
+        return
+      }
+      setSentTo(email)
       return
     }
 
+    const { data, error } = await authClient.signIn.email({ email, password, callbackURL: setupPath })
+    setLoading(false)
+    if (error) {
+      if (error.code === 'EMAIL_NOT_VERIFIED') {
+        setSentTo(email)
+        return
+      }
+      return setError(error.message ?? 'Something went wrong')
+    }
+    if (data && 'twoFactorRedirect' in data && data.twoFactorRedirect) {
+      router.push(`/verify-2fa?next=${encodeURIComponent(next)}`)
+      return
+    }
+    // No 2FA yet: the dashboard sends the user to /setup-2fa.
     router.push(next)
     router.refresh()
+  }
+
+  if (sentTo) {
+    return (
+      <main className="min-h-svh bg-background flex items-center justify-center px-4">
+        <Card className="w-full max-w-sm p-6 space-y-3">
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">Check your email</h1>
+          <p className="text-sm text-muted-foreground">
+            We sent a verification link to <span className="font-medium text-foreground">{sentTo}</span>. Open it to confirm your address, then set up two-factor authentication with an authenticator app.
+          </p>
+          <p className="text-xs text-muted-foreground">The link works for 24 hours. Nothing arrived? Check spam, or sign in again to get a new link.</p>
+          <Button variant="outline" className="w-full" onClick={() => { setSentTo(null); setPassword('') }}>
+            Back to sign in
+          </Button>
+        </Card>
+      </main>
+    )
   }
 
   return (

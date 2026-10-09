@@ -13,6 +13,7 @@ import type { SupabaseCredentials } from '@/lib/supabase/types'
 import { decryptCredentials, encryptCredentials } from '@/lib/security/credentials'
 import { and, eq } from 'drizzle-orm'
 import { requireWorkspace } from '@/lib/auth/session'
+import { recordAudit } from '@/lib/audit'
 import type { Permission } from '@/lib/auth/permissions'
 import { revalidatePath } from 'next/cache'
 
@@ -97,7 +98,8 @@ export async function getSupabaseTableSampleAction(
   rawTableName: string,
   rawLimit = 25
 ) {
-  const workspaceId = await workspaceFor('data:preview')
+  const ctx = await requireWorkspace('data:preview')
+  const workspaceId = ctx.workspaceId
   const sourceId = idSchema.parse(rawSourceId)
   const tableName = z.string().trim().min(1).max(256).parse(rawTableName)
   const limit = z.number().int().min(1).max(500).parse(rawLimit)
@@ -108,6 +110,7 @@ export async function getSupabaseTableSampleAction(
   }
 
   const credentials = parseCredentials(source.id, source.credentials)
+  await recordAudit(ctx, { action: 'VIEW_DATA', resource: 'data_source', resourceId: sourceId, changes: { what: 'source_sample', table: tableName } })
   return fetchSupabaseTableSample(credentials, tableName, limit)
 }
 

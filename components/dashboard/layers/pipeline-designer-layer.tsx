@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Database, Edit, History, Loader2, Play, Plus, RotateCcw, Trash2, Workflow } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { deletePipeline, getBuilderOptions, getDatasetPreview, listPipelines, resetSyncPosition, runPipelineNow, setPipelineEnabled } from '@/app/actions/pipelines'
+import { deletePipeline, getBuilderOptions, getDatasetPreview, getRunStatus, listPipelines, resetSyncPosition, runPipelineNow, setPipelineEnabled } from '@/app/actions/pipelines'
 import { DEFAULT_SCHEDULE, DEFAULT_SETTINGS, definitionSchema, scheduleSchema, type PipelineStep } from '@/lib/pipelines/definition'
 import { describeSchedule } from '@/lib/pipelines/schedule'
 import { stepLabel } from '@/lib/pipelines/engine'
@@ -74,16 +74,33 @@ export default function PipelineDesignerLayer() {
     }
   }, [items])
 
+  /** Runs execute in the background worker; poll the run until it finishes. */
   const run = async (p: PipelineRow) => {
     setRunning(p.id)
     setNotice(null)
     try {
       const outcome = await runPipelineNow(p.id)
-      setNotice({
-        id: p.id,
-        kind: outcome.status === 'success' ? 'ok' : outcome.status === 'failed' ? 'err' : 'warn',
-        text: outcome.status === 'skipped' ? outcome.message : `${outcome.status === 'failed' ? 'Run failed' : 'Run finished'}: ${outcome.message}`,
-      })
+      if (outcome.status === 'skipped') {
+        setNotice({ id: p.id, kind: 'warn', text: outcome.message })
+        return
+      }
+      setNotice({ id: p.id, kind: 'ok', text: 'Queued…' })
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 3000))
+        const s = await getRunStatus(outcome.runId)
+        if (s.active) {
+          const progress = s.recordsProcessed ? `${s.recordsProcessed.toLocaleString()} rows read, ${(s.recordsSuccess ?? 0).toLocaleString()} written` : 'starting'
+          setNotice({ id: p.id, kind: 'ok', text: `${s.status === 'queued' ? 'Queued' : 'Running'} in the background: ${progress}${s.errorMessage ? ` · ${s.errorMessage}` : ''}` })
+          continue
+        }
+        const summary = `${(s.recordsSuccess ?? 0).toLocaleString()} of ${(s.recordsProcessed ?? 0).toLocaleString()} rows written${s.recordsError ? `, ${s.recordsError.toLocaleString()} rejected` : ''}.`
+        setNotice({
+          id: p.id,
+          kind: s.status === 'success' ? 'ok' : s.status === 'failed' ? 'err' : 'warn',
+          text: s.status === 'failed' ? `Run failed: ${s.errorMessage ?? 'unknown error'}` : `Run finished: ${summary}`,
+        })
+        break
+      }
       await load()
     } catch (err) {
       setNotice({ id: p.id, kind: 'err', text: err instanceof Error ? err.message : 'Run failed' })

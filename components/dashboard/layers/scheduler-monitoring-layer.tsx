@@ -52,11 +52,16 @@ export default function SchedulerMonitoringLayer() {
 
   useEffect(() => {
     void load()
+  }, [load])
+
+  // Faster refresh while background runs are in progress.
+  const busy = (data?.jobs.length ?? 0) > 0
+  useEffect(() => {
     const timer = setInterval(() => {
       if (document.visibilityState === 'visible') void load()
-    }, REFRESH_MS)
+    }, busy ? 5_000 : REFRESH_MS)
     return () => clearInterval(timer)
-  }, [load])
+  }, [load, busy])
 
   const openPreview = async (name: string) => {
     try {
@@ -151,6 +156,33 @@ export default function SchedulerMonitoringLayer() {
               )}
             </section>
           </div>
+
+          {data.jobs.length > 0 && (
+            <section className="rounded-xl border border-border bg-card p-5" aria-live="polite">
+              <h3 className="font-semibold">Background runs</h3>
+              <p className="mb-3 text-sm text-muted-foreground">Runs execute in chunks of 5,000 rows in the background worker and survive restarts. This list refreshes every 5 seconds.</p>
+              <ul className="divide-y divide-border">
+                {data.jobs.map((j) => {
+                  const retrying = j.status === 'queued' && j.attempts > 0
+                  return (
+                    <li key={j.id} className="flex flex-wrap items-center gap-3 py-2.5 text-sm">
+                      <span className="flex w-28 items-center gap-1.5 font-medium">
+                        {j.status === 'running' ? <Loader2 className="h-4 w-4 animate-spin text-primary" aria-hidden /> : <Clock className="h-4 w-4 text-muted-foreground" aria-hidden />}
+                        {j.status === 'running' ? 'Running' : retrying ? 'Retrying' : 'Queued'}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate font-medium">{j.pipelineName}</span>
+                      <span className="text-muted-foreground">
+                        {j.rowsRead.toLocaleString()} read · {j.rowsWritten.toLocaleString()} written{j.chunks ? ` · ${j.chunks} chunk${j.chunks === 1 ? '' : 's'}` : ''}
+                      </span>
+                      <span className="w-48 text-right text-xs text-muted-foreground">
+                        {retrying ? `attempt ${j.attempts + 1} at ${formatWhen(j.availableAt)}` : `${j.trigger} · queued ${formatWhen(j.createdAt)}`}
+                      </span>
+                    </li>
+                  )
+                })}
+              </ul>
+            </section>
+          )}
 
           <section className="rounded-xl border border-border bg-card p-5">
             <h3 className="mb-3 font-semibold">Recent runs</h3>

@@ -12,6 +12,7 @@
  * Requires DATABASE_URL (Supabase transaction pooler URL works).
  */
 import pg from 'pg'
+import { scriptSsl } from './db-ssl.mjs'
 import { is, SQL } from 'drizzle-orm'
 import { PgDialect, PgTable, getTableConfig } from 'drizzle-orm/pg-core'
 import * as schema from '../lib/db/schema.ts'
@@ -44,9 +45,7 @@ function columnDef(col, { forAdd = false, tableHasRows = false } = {}) {
   return parts.join(' ')
 }
 
-// Same TLS handling as lib/db/index.ts.
-const ca = process.env.DATABASE_CA_CERT?.replace(/\\n/g, '\n')
-const client = new pg.Client({ connectionString, ssl: ca ? { ca } : { rejectUnauthorized: false } })
+const client = new pg.Client({ connectionString, ssl: scriptSsl() })
 await client.connect()
 
 const statements = []

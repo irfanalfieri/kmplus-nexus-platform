@@ -1,17 +1,24 @@
 import { drizzle } from 'drizzle-orm/node-postgres'
 import { Pool } from 'pg'
 import * as schema from './schema'
+import { SUPABASE_ROOT_CA } from './supabase-ca'
+
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]'])
 
 /**
- * Production DB is Supabase Postgres via the transaction pooler (port 6543).
- * Supabase signs its certificates with its own CA, which Node doesn't trust by
- * default. Always use TLS; verify the server against DATABASE_CA_CERT (PEM,
- * Supabase Dashboard → Database Settings → SSL) when set, otherwise encrypt
- * without CA verification. An `sslmode` in DATABASE_URL overrides this.
+ * TLS for the Nexus database (Supabase, transaction pooler). The server
+ * certificate is always verified: against DATABASE_CA_CERT when set (PEM; "\n"
+ * escapes allowed), otherwise against the bundled Supabase root CA. Only a
+ * database on localhost (CI's Postgres service) is reached without TLS.
  */
-export function databaseSsl() {
-  const ca = process.env.DATABASE_CA_CERT?.replace(/\\n/g, '\n')
-  return ca ? { ca } : { rejectUnauthorized: false }
+export function databaseSsl(connectionString = process.env.DATABASE_URL) {
+  try {
+    if (connectionString && LOCAL_HOSTS.has(new URL(connectionString).hostname)) return false
+  } catch {
+    // Not a URL: keep TLS.
+  }
+  const override = process.env.DATABASE_CA_CERT?.replace(/\\n/g, '\n').trim()
+  return { ca: override || SUPABASE_ROOT_CA, rejectUnauthorized: true }
 }
 
 export const pool = new Pool({

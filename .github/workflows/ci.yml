@@ -15,6 +15,20 @@ jobs:
     timeout-minutes: 15
     env:
       NEXT_TELEMETRY_DISABLED: '1'
+    services:
+      # Throwaway database for the integration tests (named nexus_test: the tests refuse any other).
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: nexus_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d nexus_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -33,6 +47,15 @@ jobs:
 
       - name: Pipeline engine tests
         run: node scripts/run-ts.mjs scripts/engine-tests.ts
+
+      - name: Integration tests (server actions, permissions, worker)
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/nexus_test
+        run: |
+          # Supabase's API roles, referenced by the migrations.
+          psql "$DATABASE_URL" -c "CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN;"
+          node scripts/db-migrate.mjs --apply
+          NEXUS_ENCRYPTION_KEY="$(openssl rand -base64 32)" node scripts/run-ts.mjs --stubs scripts/integration-tests.ts
 
       - name: Build
         run: pnpm build

@@ -16,6 +16,8 @@ import { resolveSalesforceAuth } from '@/lib/connectors/salesforce/oauth'
 import { decryptCredentials, encryptCredentials } from '@/lib/security/credentials'
 import { and, eq } from 'drizzle-orm'
 import { requireWorkspace } from '@/lib/auth/session'
+import { recordAudit } from '@/lib/audit'
+import { restoreSecrets } from '@/lib/connectors/secret-mask'
 import type { Permission } from '@/lib/auth/permissions'
 import { revalidatePath } from 'next/cache'
 
@@ -106,7 +108,8 @@ export async function scanDataSourceSchema(rawSourceId: string) {
 }
 
 export async function getDataSourceTableSample(rawSourceId: string, rawTableName: string, rawLimit = 25) {
-  const workspaceId = await workspaceFor('data:preview')
+  const ctx = await requireWorkspace('data:preview')
+  const workspaceId = ctx.workspaceId
   const sourceId = idSchema.parse(rawSourceId)
   const tableName = tableSchema.parse(rawTableName)
   const limit = limitSchema.parse(rawLimit)
@@ -115,12 +118,18 @@ export async function getDataSourceTableSample(rawSourceId: string, rawTableName
 
   await assertConnectorInstalled(source.sourceType)
   const credentials = parseCredentials(source.id, source.credentials)
+  await recordAudit(ctx, { action: 'VIEW_DATA', resource: 'data_source', resourceId: sourceId, changes: { what: 'source_sample', table: tableName } })
   return sampleConnectorTable(source.sourceType as ConnectorSlug, credentials, tableName, limit)
 }
 
-export async function previewRestConnection(rawCredentials: ConnectorCredentials) {
-  await workspaceFor('sources:manage')
-  const credentials = credentialsSchema.parse(rawCredentials)
+/** Live REST request preview. With sourceId (edit form), masked secrets are filled from that source. */
+export async function previewRestConnection(rawCredentials: ConnectorCredentials, rawSourceId?: string) {
+  const workspaceId = await workspaceFor('sources:manage')
+  let credentials = credentialsSchema.parse(rawCredentials)
+  if (rawSourceId) {
+    const source = await getOwnedSource(idSchema.parse(rawSourceId), workspaceId)
+    credentials = restoreSecrets('rest', credentials, parseCredentials(source.id, source.credentials))
+  }
   await assertConnectorInstalled('rest')
   return previewRestRequest(parseRestConfig(credentials))
 }

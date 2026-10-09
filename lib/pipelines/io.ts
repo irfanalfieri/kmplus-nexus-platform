@@ -33,9 +33,11 @@ const qIdent = (name: string) => `"${name.replace(/"/g, '""')}"`
 const mIdent = (name: string) => `\`${name.replace(/`/g, '``')}\``
 
 
-function pgTarget(source: StoredDataSource): { connectionString: string; schema: string } | null {
+function pgTarget(source: StoredDataSource): { connectionString: string; schema: string; tls?: { mode?: string; ca?: string } } | null {
   const creds = credentialsOf(source)
-  if (source.sourceType === 'postgres') return { connectionString: creds.connectionString?.trim() ?? '', schema: creds.schema?.trim() || 'public' }
+  if (source.sourceType === 'postgres') {
+    return { connectionString: creds.connectionString?.trim() ?? '', schema: creds.schema?.trim() || 'public', tls: { mode: creds.sslMode, ca: creds.caCert } }
+  }
   if (source.sourceType === 'supabase' && creds.databaseUrl?.trim()) {
     return { connectionString: creds.databaseUrl.trim(), schema: creds.schema?.trim() || 'public' }
   }
@@ -71,7 +73,7 @@ export async function readSourceRows(source: StoredDataSource, table: string, ma
   const wm = opts.watermark
   const pg = pgTarget(source)
   if (pg) {
-    const p = externalPgPool(pg.connectionString)
+    const p = externalPgPool(pg.connectionString, pg.tls)
     try {
       const where = wm?.after != null ? `WHERE ${qIdent(wm.column)} > $3` : ''
       const order = wm ? `ORDER BY ${qIdent(wm.column)} ASC` : ''
@@ -257,7 +259,7 @@ export async function writeToDataSource(opts: {
 
   const pg = pgTarget(source)
   if (pg) {
-    const p = externalPgPool(pg.connectionString)
+    const p = externalPgPool(pg.connectionString, pg.tls)
     const client = await p.connect()
     try {
       const { rows: existing } = await client.query<{ column_name: string }>(
@@ -315,4 +317,139 @@ export async function writeToDataSource(opts: {
     throw new NonRetryableError(`To write into Supabase, add the Database URL to "${source.name}" (Data Sources → edit credentials).`)
   }
   throw new NonRetryableError(`Writing to ${source.sourceType} isn't supported yet. Writable connectors: PostgreSQL, MySQL, Supabase (with Database URL).`)
+}
+
+// ── Chunked reads (background worker) ────────────────────────────────────────
+
+export interface ChunkRead {
+  rows: Row[]
+  /** No rows after this chunk. */
+  exhausted: boolean
+}
+
+/** Per-invocation cache: API reads (read once, sliced per chunk) and resolved sort keys. */
+export type ReadCache = Map<string, unknown>
+
+async function pgOrderKeys(p: ReturnType<typeof externalPgPool>, schema: string, table: string, cache: ReadCache): Promise<string[]> {
+  const key = `pgkeys:${schema}.${table}`
+  if (cache.has(key)) return cache.get(key) as string[]
+  const rel = `${qIdent(schema)}.${qIdent(table)}`
+  const { rows } = await p.query<{ attname: string; relkind: string }>(
+    `SELECT a.attname, c.relkind
+       FROM pg_class c
+       LEFT JOIN pg_index i ON i.indrelid = c.oid AND i.indisprimary
+       LEFT JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(i.indkey)
+      WHERE c.oid = to_regclass($1)
+      ORDER BY array_position(i.indkey::int2[], a.attnum)`,
+    [rel]
+  )
+  // Primary key, else the physical row id for plain tables; views get no tiebreaker.
+  const pk = rows.map((r) => r.attname).filter(Boolean).map(qIdent)
+  const order = pk.length ? pk : rows[0] && ['r', 'p'].includes(rows[0].relkind) ? ['ctid'] : []
+  cache.set(key, order)
+  return order
+}
+
+async function mysqlOrderKeys(conn: mysql.Connection, table: string, cache: ReadCache): Promise<string[]> {
+  const key = `mykeys:${table}`
+  if (cache.has(key)) return cache.get(key) as string[]
+  const [rows] = await conn.query<mysql.RowDataPacket[]>(
+    `SELECT COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND CONSTRAINT_NAME = 'PRIMARY' ORDER BY ORDINAL_POSITION`,
+    [table]
+  )
+  const order = rows.map((r) => mIdent(String(r.COLUMN_NAME)))
+  cache.set(key, order)
+  return order
+}
+
+/**
+ * Reads rows [offset, offset + limit) of a source in a stable order (watermark
+ * column for incremental syncs, then the primary key), so consecutive chunks,
+ * even in different function invocations, neither skip nor repeat rows.
+ * Sources without server-side paging (APIs) are read once per invocation and sliced.
+ */
+export async function readSourceChunk(
+  source: StoredDataSource,
+  table: string,
+  opts: { offset: number; limit: number; maxRows: number; watermark?: ReadOptions['watermark']; cache: ReadCache }
+): Promise<ChunkRead> {
+  const { offset, cache } = opts
+  const limit = Math.max(0, Math.min(opts.limit, opts.maxRows - offset))
+  if (limit === 0) return { rows: [], exhausted: true }
+  const wm = opts.watermark
+  const pg = pgTarget(source)
+  if (pg) {
+    const p = externalPgPool(pg.connectionString, pg.tls)
+    try {
+      const order = [...(wm ? [qIdent(wm.column)] : []), ...(await pgOrderKeys(p, pg.schema, table, cache))]
+      const params: unknown[] = [limit, offset]
+      if (wm?.after != null) params.push(wm.after)
+      const res = await p.query(
+        `SELECT * FROM ${qIdent(pg.schema)}.${qIdent(table)} ${wm?.after != null ? `WHERE ${qIdent(wm.column)} > $3` : ''} ${order.length ? `ORDER BY ${order.join(', ')}` : ''} LIMIT $1 OFFSET $2`,
+        params
+      )
+      return { rows: res.rows as Row[], exhausted: res.rows.length < limit || offset + limit >= opts.maxRows }
+    } finally {
+      await p.end()
+    }
+  }
+
+  if (source.sourceType === 'mysql') {
+    const conn = await mysql.createConnection(mysqlConfig(credentialsOf(source)) as mysql.ConnectionOptions)
+    try {
+      const order = [...(wm ? [mIdent(wm.column)] : []), ...(await mysqlOrderKeys(conn, table, cache))]
+      const params: unknown[] = wm?.after != null ? [wm.after, limit, offset] : [limit, offset]
+      const [rows] = await conn.query<mysql.RowDataPacket[]>(
+        `SELECT * FROM ${mIdent(table)} ${wm?.after != null ? `WHERE ${mIdent(wm.column)} > ?` : ''} ${order.length ? `ORDER BY ${order.join(', ')}` : ''} LIMIT ? OFFSET ?`,
+        params
+      )
+      return { rows: rows as Row[], exhausted: rows.length < limit || offset + limit >= opts.maxRows }
+    } finally {
+      await conn.end()
+    }
+  }
+
+  // Supabase REST and API connectors: one capped read per invocation, then slices.
+  const key = `rows:${source.id}:${table}:${wm?.after ?? ''}`
+  let all = cache.get(key) as Row[] | undefined
+  if (!all) {
+    all = await readSourceRows(source, table, opts.maxRows, { watermark: wm })
+    cache.set(key, all)
+  }
+  const rows = all.slice(offset, offset + limit)
+  return { rows, exhausted: offset + rows.length >= all.length }
+}
+
+// ── Dataset replace via staging table ────────────────────────────────────────
+// A replace run loads into a staging table and swaps it in only when the whole
+// run succeeds, so readers never see a half-loaded dataset.
+
+export function stagingTableName(tableName: string, runId: string) {
+  return `${tableName.slice(0, 44)}__stg_${createHash('sha1').update(runId).digest('hex').slice(0, 8)}`
+}
+
+/** Swaps the staging table in for the dataset table. No staging table (no rows) empties the dataset. */
+export async function finalizeDatasetReplace(tableName: string, staging: string): Promise<number> {
+  const target = `"nexus_data".${qIdent(tableName)}`
+  const stagingRel = `"nexus_data".${qIdent(staging)}`
+  const exists = async (client: PoolClient, rel: string) =>
+    (await client.query<{ r: string | null }>('SELECT to_regclass($1)::text AS r', [rel])).rows[0].r !== null
+  const client = await nexusPool.connect()
+  try {
+    await client.query('BEGIN')
+    if (await exists(client, stagingRel)) {
+      await client.query(`DROP TABLE IF EXISTS ${target}`)
+      await client.query(`ALTER TABLE ${stagingRel} RENAME TO ${qIdent(tableName)}`)
+    } else if (await exists(client, target)) {
+      await client.query(`TRUNCATE ${target}`)
+    }
+    const n = (await exists(client, target)) ? (await client.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${target}`)).rows[0].n : 0
+    await client.query('COMMIT')
+    return n
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => undefined)
+    throw err
+  } finally {
+    client.release()
+  }
 }

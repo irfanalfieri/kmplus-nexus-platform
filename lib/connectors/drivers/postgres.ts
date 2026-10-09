@@ -1,6 +1,7 @@
 import { Pool, types } from 'pg'
 import type { ConnectionTestResult, ConnectorCredentials, SchemaScanResult } from '../types'
 import { mapSqlType } from '../sql-introspect'
+import { SUPABASE_ROOT_CA } from '@/lib/db/supabase-ca'
 
 function getConnectionString(credentials: ConnectorCredentials) {
   return credentials.connectionString?.trim() ?? ''
@@ -19,20 +20,44 @@ const externalTypes = {
     oid === PG_DATE_OID || oid === PG_TIMESTAMP_OID ? (value: string) => value : types.getTypeParser(oid, format)) as typeof types.getTypeParser,
 }
 
+export type PgSslMode = 'verify' | 'require' | 'disable'
+
 /**
- * Pool for a user's Postgres. TLS is on for anything but localhost (managed
- * hosts require it); an sslmode in the connection string takes precedence.
+ * TLS settings for a user's Postgres:
+ * - localhost: no TLS
+ * - Supabase hosts: always verified against the bundled Supabase root CA
+ * - verify: verified against the supplied CA (PEM) or the system trust store
+ * - require (default): encrypted, certificate not verified
+ * - disable: plain connection
+ * An sslmode in the connection string still takes precedence (pg applies it).
  */
-export function createPgPool(connectionString: string) {
-  const local = /@(localhost|127\.0\.0\.1)[:/]/.test(connectionString)
-  return new Pool({ connectionString, max: 1, ssl: local ? undefined : { rejectUnauthorized: false }, types: externalTypes })
+export function pgSslOptions(connectionString: string, tls: { mode?: string; ca?: string } = {}) {
+  const host = (() => {
+    try {
+      return new URL(connectionString).hostname
+    } catch {
+      return ''
+    }
+  })()
+  if (/^(localhost|127\.0\.0\.1|::1)$/.test(host)) return undefined
+  if (/\.(supabase\.com|supabase\.co)$/.test(host)) return { ca: SUPABASE_ROOT_CA, rejectUnauthorized: true }
+  const mode = (tls.mode ?? 'require') as PgSslMode
+  if (mode === 'disable') return false
+  if (mode === 'verify') return { ca: tls.ca?.trim() || undefined, rejectUnauthorized: true }
+  return { rejectUnauthorized: false }
 }
+
+export function createPgPool(connectionString: string, tls?: { mode?: string; ca?: string }) {
+  return new Pool({ connectionString, max: 1, ssl: pgSslOptions(connectionString, tls), types: externalTypes })
+}
+
+const tlsOf = (c: ConnectorCredentials) => ({ mode: c.sslMode, ca: c.caCert })
 
 export async function testPostgresConnection(credentials: ConnectorCredentials): Promise<ConnectionTestResult> {
   const connectionString = getConnectionString(credentials)
   if (!connectionString) return { ok: false, message: 'Connection string is required.' }
 
-  const pool = createPgPool(connectionString)
+  const pool = createPgPool(connectionString, tlsOf(credentials))
   try {
     await pool.query('SELECT 1 AS ok')
     return { ok: true, message: 'Connected to PostgreSQL.' }
@@ -46,7 +71,7 @@ export async function testPostgresConnection(credentials: ConnectorCredentials):
 export async function scanPostgresSchema(credentials: ConnectorCredentials): Promise<SchemaScanResult> {
   const connectionString = getConnectionString(credentials)
   const schema = credentials.schema?.trim() || 'public'
-  const pool = createPgPool(connectionString)
+  const pool = createPgPool(connectionString, tlsOf(credentials))
 
   try {
     const columnsResult = await pool.query<{
@@ -107,7 +132,7 @@ export async function samplePostgresTable(
   tableName: string,
   limit = 25
 ) {
-  const pool = createPgPool(getConnectionString(credentials))
+  const pool = createPgPool(getConnectionString(credentials), tlsOf(credentials))
   const schema = credentials.schema?.trim() || 'public'
   try {
     const quoted = `"${schema.replace(/"/g, '""')}"."${tableName.replace(/"/g, '""')}"`

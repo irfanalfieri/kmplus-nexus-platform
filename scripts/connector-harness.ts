@@ -10,6 +10,7 @@ import { createHmac, randomBytes } from 'node:crypto'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { CONNECTOR_CATALOG } from '@/lib/connectors/catalog'
+import { databaseSsl } from '@/lib/db'
 import { REST_DEFAULTS } from '@/lib/connectors/rest-client'
 import { sampleConnectorTable, scanConnectorSchema, testConnectorConnection } from '@/lib/connectors/runtime'
 import type { ConnectorCredentials, ConnectorSlug } from '@/lib/connectors/types'
@@ -58,7 +59,7 @@ async function startTalentaMock() {
 let postgresFixtureUrl = ''
 async function startPostgresFixture() {
   const { default: pg } = await import('pg')
-  const admin = new pg.Client({ connectionString: env.DATABASE_URL, ssl: { rejectUnauthorized: false } })
+  const admin = new pg.Client({ connectionString: env.DATABASE_URL, ssl: databaseSsl() })
   await admin.connect()
   const suffix = randomBytes(4).toString('hex')
   const schema = `nexus_harness_${suffix}`

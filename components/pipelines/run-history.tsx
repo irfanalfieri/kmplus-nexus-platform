@@ -21,6 +21,8 @@ export function statusBadge(status: string | null | undefined) {
       return <Badge variant="destructive">Failed</Badge>
     case 'running':
       return <Badge variant="secondary">Running…</Badge>
+    case 'queued':
+      return <Badge variant="outline">Queued…</Badge>
     default:
       return <Badge variant="outline">Never run</Badge>
   }

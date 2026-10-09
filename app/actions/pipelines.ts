@@ -4,26 +4,21 @@ import { z } from 'zod'
 import { and, desc, eq, inArray } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { newId, requireWorkspace, type WorkspaceContext } from '@/lib/auth/session'
+import { recordAudit, type AuditAction } from '@/lib/audit'
 import { db } from '@/lib/db'
-import {
-  auditLogs,
-  dataSources,
-  executionLogs,
-  nexusDatasets,
-  pipelineRunRejects,
-  pipelineVersions,
-  pipelines,
-} from '@/lib/db/schema'
+import { dataSources, executionLogs, nexusDatasets, pipelineRunRejects, pipelineVersions, pipelines } from '@/lib/db/schema'
 import { definitionSchema, scheduleSchema, type PipelineSchedule } from '@/lib/pipelines/definition'
 import { assertValidSchedule, nextRunAt } from '@/lib/pipelines/schedule'
-import { currentWatermark, executePipelineRun, parseDefinition, testRunDefinition } from '@/lib/pipelines/runner'
+import { currentWatermark, parseDefinition, testRunDefinition } from '@/lib/pipelines/runner'
+import { enqueueRun } from '@/lib/pipelines/jobs'
+import { nudgeWorker, startWorker } from '@/lib/pipelines/worker'
 import { readDatasetSample } from '@/lib/pipelines/io'
 import type { SchemaScanResult } from '@/lib/connectors/types'
 
 const idSchema = z.string().trim().min(1).max(100)
 
-async function audit(ctx: WorkspaceContext, action: string, resourceId: string, changes?: Record<string, unknown>) {
-  await db.insert(auditLogs).values({ id: newId('audit'), userId: ctx.userId, workspaceId: ctx.workspaceId, action, resource: 'pipeline', resourceId, changes })
+async function audit(ctx: WorkspaceContext, action: AuditAction, resourceId: string, changes?: Record<string, unknown>, resource = 'pipeline') {
+  await recordAudit(ctx, { action, resource, resourceId, changes })
 }
 
 async function getOwned(ctx: WorkspaceContext, id: string) {
@@ -124,6 +119,10 @@ export async function getRunRejects(rawRunId: string, limit = 100) {
     .from(pipelineRunRejects)
     .where(and(eq(pipelineRunRejects.runId, runId), eq(pipelineRunRejects.workspaceId, ctx.workspaceId)))
     .limit(Math.min(limit, 500))
+    .then(async (rows) => {
+      await audit(ctx, 'VIEW_DATA', runId, { what: 'rejected_rows', rows: rows.length }, 'run')
+      return rows
+    })
 }
 
 export async function listVersions(rawPipelineId: string) {
@@ -146,6 +145,7 @@ export async function getDatasetPreview(rawName: string) {
     .where(and(eq(nexusDatasets.workspaceId, ctx.workspaceId), eq(nexusDatasets.name, name)))
     .limit(1)
   if (!dataset) throw new Error('Dataset not found')
+  await audit(ctx, 'VIEW_DATA', dataset.id, { what: 'dataset_preview', dataset: dataset.name }, 'dataset')
   return { name: dataset.name, rowCount: dataset.rowCount, lastLoadedAt: dataset.lastLoadedAt, rows: await readDatasetSample(dataset.tableName, 50) }
 }
 
@@ -261,12 +261,33 @@ export async function restoreVersion(rawId: string, rawVersion: number) {
   })
 }
 
+/** Queues a run and starts a background worker for it; returns immediately. */
 export async function runPipelineNow(rawId: string) {
   const ctx = await requireWorkspace('pipelines:run')
   const id = idSchema.parse(rawId)
-  const outcome = await executePipelineRun(id, scope(ctx), 'manual')
+  const outcome = await enqueueRun(id, scope(ctx), 'manual')
+  if (outcome.status === 'queued') startWorker()
   revalidatePath('/dashboard')
   return outcome
+}
+
+/**
+ * Status of a run for live progress. Also restarts the worker when a job is
+ * waiting (paused between invocations, or due for a retry), so runs progress
+ * even where no scheduler runs (development and preview).
+ */
+export async function getRunStatus(rawRunId: string) {
+  const ctx = await requireWorkspace()
+  const runId = idSchema.parse(rawRunId)
+  const [run] = await db
+    .select({ id: executionLogs.id, pipelineId: executionLogs.pipelineId, status: executionLogs.status, recordsProcessed: executionLogs.recordsProcessed, recordsSuccess: executionLogs.recordsSuccess, recordsError: executionLogs.recordsError, errorMessage: executionLogs.errorMessage, duration: executionLogs.duration })
+    .from(executionLogs)
+    .where(and(eq(executionLogs.id, runId), eq(executionLogs.workspaceId, ctx.workspaceId)))
+    .limit(1)
+  if (!run) throw new Error('Run not found')
+  const active = run.status === 'queued' || run.status === 'running'
+  if (active) await nudgeWorker(ctx.workspaceId)
+  return { ...run, active }
 }
 
 /** Test run of an unsaved definition: real source data, nothing written. Uses the saved sync position when editing. */
@@ -276,6 +297,7 @@ export async function testPipeline(definition: unknown, rawPipelineId?: string) 
     let state: unknown = null
     if (rawPipelineId) state = (await getOwned(ctx, idSchema.parse(rawPipelineId))).state
     const result = await testRunDefinition(scope(ctx), definition, 25, state)
+    await audit(ctx, 'TEST_RUN', rawPipelineId ?? 'unsaved', { rowsRead: result.rowsRead })
     // Plain JSON only (rows may hold Buffers/BigInts from drivers).
     return { ok: true as const, result: JSON.parse(JSON.stringify(result, (_k, v) => (typeof v === 'bigint' ? v.toString() : v))) as typeof result }
   } catch (err) {

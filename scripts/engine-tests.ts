@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict'
 import { compareWatermarks, maxWatermark } from '@/lib/pipelines/columns'
 import { definitionSchema, scheduleSchema, settingsSchema } from '@/lib/pipelines/definition'
-import { runEngine } from '@/lib/pipelines/engine'
+import { checkDestination, newRunTotals, runEngine, transformChunk } from '@/lib/pipelines/engine'
 import { describeSchedule, nextRunTimes } from '@/lib/pipelines/schedule'
 import { formatDate, parseDate } from '@/lib/pipelines/transforms'
 
@@ -129,6 +129,39 @@ async function main() {
     const s = scheduleSchema.parse({ type: 'weekly', time: '01:00', weekdays: [1, 2, 3, 4, 5] })
     assert.equal(describeSchedule(s), 'Weekdays at 01:00 WIB')
     assert.deepEqual(nextRunTimes(s, 2, new Date('2026-10-08T10:00:00Z')).map((d) => d.toISOString()), ['2026-10-08T18:00:00.000Z', '2026-10-11T18:00:00.000Z'])
+  })
+
+  await test('chunked run matches a single-pass run (background worker)', async () => {
+    const def = definitionSchema.parse({ ...base, steps: [{ ...base.steps[0], mode: 'incremental', watermarkColumn: 'UPDATED' }, ...base.steps.slice(1)] })
+    let single: Record<string, unknown>[] = []
+    const whole = await runEngine(def, { read: async () => hr, write: async (_s, rows) => ((single = rows), { written: rows.length, target: 't' }) })
+    for (const size of [1, 2, 3]) {
+      const totals = newRunTotals(def)
+      const seen = new Map<string, Set<string>>()
+      const out: Record<string, unknown>[] = []
+      let rejects = 0
+      for (let i = 0; i < hr.length; i += size) {
+        const chunk = transformChunk(def, hr.slice(i, i + size), totals, seen)
+        out.push(...chunk.rows)
+        rejects += chunk.rejects.length
+      }
+      assert.deepEqual(out, single, `chunk size ${size}: same rows`)
+      assert.equal(totals.rejectedCount, whole.rejectedCount, `chunk size ${size}: same rejects (unique works across chunks)`)
+      assert.equal(rejects, whole.rejectedCount)
+      assert.equal(totals.rowsRead, hr.length)
+      assert.deepEqual(totals.watermark, whole.watermark, `chunk size ${size}: same watermark`)
+      assert.deepEqual(totals.columns.map((c) => c.name), whole.columns.map((c) => c.name))
+      const val = totals.steps.find((s) => s.id === 'val')!
+      assert.equal(val.rejected, whole.steps.find((s) => s.id === 'val')!.rejected)
+      assert.doesNotThrow(() => checkDestination(def, totals.columns))
+    }
+  })
+
+  await test('chunked run: abort validation and missing upsert key are not retryable', () => {
+    const abortDef = definitionSchema.parse({ steps: [base.steps[0], { id: 'v', type: 'validate', onFail: 'abort', rules: [{ field: 'EMAIL', rule: 'email' }] }, base.steps[4]] })
+    assert.throws(() => transformChunk(abortDef, hr, newRunTotals(abortDef), new Map()), (e: { retryable?: boolean }) => e.retryable === false)
+    const noKey = definitionSchema.parse({ steps: [base.steps[0], base.steps[4]] })
+    assert.throws(() => checkDestination(noKey, [{ name: 'PERNR', type: 'text' }]), (e: { retryable?: boolean }) => e.retryable === false)
   })
 
   console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`)

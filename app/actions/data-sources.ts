@@ -4,18 +4,20 @@ import { z } from 'zod'
 import { and, desc, eq } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/lib/db'
-import { auditLogs, dataSources, pipelines } from '@/lib/db/schema'
+import { dataSources, pipelines } from '@/lib/db/schema'
 import { assertConnectorInstalled } from '@/app/actions/connectors'
 import { getConnectorDefinition, isConnectorSlug } from '@/lib/connectors/catalog'
 import { decryptCredentials, encryptCredentials } from '@/lib/security/credentials'
 import { newId, requireWorkspace, type WorkspaceContext } from '@/lib/auth/session'
+import { recordAudit, type AuditAction } from '@/lib/audit'
+import { hasCustomCredentialForm, maskCredentials, restoreSecrets } from '@/lib/connectors/secret-mask'
 
 const idSchema = z.string().trim().min(1).max(100)
 const roleSchema = z.enum(['source', 'destination'])
 const credentialValues = z.record(z.string().max(100), z.union([z.string().max(20000), z.number(), z.boolean(), z.null()]))
 
-async function audit(ctx: WorkspaceContext, action: string, resourceId: string, changes?: Record<string, unknown>) {
-  await db.insert(auditLogs).values({ id: newId('audit'), userId: ctx.userId, workspaceId: ctx.workspaceId, action, resource: 'data_source', resourceId, changes })
+async function audit(ctx: WorkspaceContext, action: AuditAction, resourceId: string, changes?: Record<string, unknown>) {
+  await recordAudit(ctx, { action, resource: 'data_source', resourceId, changes })
 }
 
 async function getOwned(ctx: WorkspaceContext, id: string) {
@@ -117,11 +119,15 @@ export async function testConnection(rawId: string) {
 export async function getEditableCredentials(rawId: string) {
   const ctx = await requireWorkspace('sources:manage')
   const source = await getOwned(ctx, idSchema.parse(rawId))
+  const stored = asStrings(decryptCredentials(source.id, source.credentials))
+  if (hasCustomCredentialForm(source.sourceType)) {
+    // REST / Salesforce: the full form, with secrets masked (see secret-mask.ts).
+    return { supported: true as const, custom: source.sourceType as 'rest' | 'salesforce', sourceType: source.sourceType, values: maskCredentials(source.sourceType, stored) }
+  }
   const definition = getConnectorDefinition(source.sourceType)
   if (!definition || !definition.credentialFields.length) {
     return { supported: false as const, sourceType: source.sourceType }
   }
-  const stored = asStrings(decryptCredentials(source.id, source.credentials))
   const values: Record<string, string> = {}
   const secretsSet: string[] = []
   for (const field of definition.credentialFields) {
@@ -131,7 +137,7 @@ export async function getEditableCredentials(rawId: string) {
       values[field.key] = stored[field.key] ?? ''
     }
   }
-  return { supported: true as const, sourceType: source.sourceType, fields: definition.credentialFields, values, secretsSet }
+  return { supported: true as const, custom: null as null, sourceType: source.sourceType, fields: definition.credentialFields, values, secretsSet }
 }
 
 /**
@@ -143,12 +149,18 @@ export async function updateDataSourceCredentials(rawId: string, rawValues: Reco
   const ctx = await requireWorkspace('sources:manage')
   const source = await getOwned(ctx, idSchema.parse(rawId))
   const values = asStrings(credentialValues.parse(rawValues))
+  const stored = asStrings(decryptCredentials(source.id, source.credentials))
+  if (hasCustomCredentialForm(source.sourceType)) {
+    const merged = restoreSecrets(source.sourceType, values, stored)
+    const changed = Object.keys(merged).filter((k) => merged[k] !== (stored[k] ?? ''))
+    return testAndSave(ctx, source, merged, changed)
+  }
   const definition = getConnectorDefinition(source.sourceType)
   if (!definition?.credentialFields.length || !isConnectorSlug(source.sourceType)) {
     throw new Error('Editing credentials for this connector type is not supported yet. Re-create the data source instead.')
   }
   const known = new Map(definition.credentialFields.map((f) => [f.key, f]))
-  const merged = asStrings(decryptCredentials(source.id, source.credentials))
+  const merged = { ...stored }
   for (const [key, value] of Object.entries(values)) {
     const field = known.get(key)
     if (!field) continue
@@ -157,8 +169,23 @@ export async function updateDataSourceCredentials(rawId: string, rawValues: Reco
   }
   const missing = definition.credentialFields.filter((f) => f.required && !merged[f.key]?.trim()).map((f) => f.label)
   if (missing.length) throw new Error(`Required: ${missing.join(', ')}`)
+  return testAndSave(ctx, source, merged, Object.keys(values).filter((k) => known.has(k) && values[k] !== ''))
+}
 
+/** Saves merged credentials only if they pass a connection test; re-scans the schema. */
+async function testAndSave(ctx: WorkspaceContext, source: typeof dataSources.$inferSelect, merged: Record<string, string>, changedFields: string[]) {
+  if (!isConnectorSlug(source.sourceType)) throw new Error(`Unknown connector "${source.sourceType}".`)
   const { testConnectorConnection, scanConnectorSchema } = await import('@/lib/connectors/runtime')
+  if (source.sourceType === 'salesforce') {
+    // Refresh the access token first so the saved credentials stay usable.
+    const { resolveSalesforceAuth } = await import('@/lib/connectors/salesforce/oauth')
+    try {
+      const auth = await resolveSalesforceAuth(merged)
+      if (auth.refreshed) Object.assign(merged, auth.refreshed)
+    } catch (err) {
+      return { ok: false as const, message: err instanceof Error ? err.message : 'Salesforce sign-in failed.' }
+    }
+  }
   const test = await testConnectorConnection(source.sourceType, merged)
   if (!test.ok) return { ok: false as const, message: test.message }
   const scan = await scanConnectorSchema(source.sourceType, merged)
@@ -174,7 +201,7 @@ export async function updateDataSourceCredentials(rawId: string, rawValues: Reco
     })
     .where(and(eq(dataSources.id, source.id), eq(dataSources.workspaceId, ctx.workspaceId)))
   // Record which fields changed, never their values.
-  await audit(ctx, 'UPDATE_CREDENTIALS', source.id, { fields: Object.keys(values).filter((k) => known.has(k) && values[k] !== '') })
+  await audit(ctx, 'UPDATE_CREDENTIALS', source.id, { fields: changedFields })
   revalidatePath('/dashboard')
   return { ok: true as const, message: `${test.message} Found ${scan.tables.length} objects.` }
 }

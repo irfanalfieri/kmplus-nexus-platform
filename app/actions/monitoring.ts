@@ -7,10 +7,13 @@ import { db } from '@/lib/db'
 import { connectorInstalls, dataSources, executionLogs, nexusDatasets, notifications, pipelines } from '@/lib/db/schema'
 import { requireWorkspace } from '@/lib/auth/session'
 import { scheduleSchema } from '@/lib/pipelines/definition'
+import { activeJobs } from '@/lib/pipelines/jobs'
+import { nudgeWorker } from '@/lib/pipelines/worker'
 
 const TZ = 'Asia/Jakarta'
 const DELAY_GRACE_MS = 5 * 60 * 1000
-const STUCK_RUN_MS = 10 * 60 * 1000
+/** A background job waiting this long for a worker means the scheduler or worker is not keeping up. */
+const STALLED_JOB_MS = 10 * 60 * 1000
 
 export type PipelineHealth = 'healthy' | 'warning' | 'failed' | 'delayed' | 'paused' | 'never_run'
 
@@ -24,7 +27,7 @@ export async function getMonitoringOverview() {
   const now = Date.now()
   const since = new Date(now - 8 * 24 * 60 * 60 * 1000)
 
-  const [pipelineRows, runs, datasets] = await Promise.all([
+  const [pipelineRows, runs, datasets, jobs] = await Promise.all([
     db
       .select({
         id: pipelines.id,
@@ -59,7 +62,9 @@ export async function getMonitoringOverview() {
       .from(nexusDatasets)
       .where(eq(nexusDatasets.workspaceId, ctx.workspaceId))
       .orderBy(desc(nexusDatasets.lastLoadedAt)),
+    activeJobs(ctx.workspaceId),
   ])
+  if (jobs.length) await nudgeWorker(ctx.workspaceId)
 
   const names = new Map(pipelineRows.map((p) => [p.id, p.name]))
   const today = jakartaDay(new Date(now))
@@ -76,7 +81,8 @@ export async function getMonitoringOverview() {
     const day = jakartaDay(r.startTime)
     const bucket = byDay.get(day)
     if (bucket && (r.status === 'success' || r.status === 'partial' || r.status === 'failed')) bucket[r.status]++
-    if (day === today && r.status in todayCounts) todayCounts[r.status as keyof typeof todayCounts]++
+    const counted = r.status === 'queued' ? 'running' : r.status
+    if (day === today && counted in todayCounts) todayCounts[counted as keyof typeof todayCounts]++
     if (now - r.startTime.getTime() < 86_400_000) {
       rowsWritten24h += r.recordsSuccess ?? 0
       rowsRejected24h += r.recordsError ?? 0
@@ -86,12 +92,14 @@ export async function getMonitoringOverview() {
   const health = pipelineRows.map((p) => {
     const schedule = scheduleSchema.safeParse(p.schedule ?? {}).data
     const scheduled = schedule ? schedule.type !== 'manual' : false
-    const running = runs.find((r) => r.pipelineId === p.id && r.status === 'running')
+    const job = jobs.find((j) => j.pipelineId === p.id)
+    // Waiting for a worker: queued past its retry time, or abandoned (lease expired) and not resumed.
+    const waitingSince = job ? (job.status === 'queued' ? job.availableAt : job.leaseUntil) : null
     let state: PipelineHealth
     let reason = ''
-    if (running && running.startTime && now - running.startTime.getTime() > STUCK_RUN_MS) {
+    if (waitingSince && now - waitingSince.getTime() > STALLED_JOB_MS) {
       state = 'delayed'
-      reason = 'A run has been in progress for over 10 minutes'
+      reason = 'A run has been waiting for the background worker for over 10 minutes'
     } else if (scheduled && !p.enabled) {
       state = 'paused'
       reason = 'Schedule paused'
@@ -109,7 +117,7 @@ export async function getMonitoringOverview() {
     } else {
       state = 'never_run'
     }
-    const recent = runs.filter((r) => r.pipelineId === p.id && r.status !== 'running')
+    const recent = runs.filter((r) => r.pipelineId === p.id && r.status !== 'running' && r.status !== 'queued')
     const ok = recent.filter((r) => r.status !== 'failed').length
     return {
       id: p.id,
@@ -136,6 +144,7 @@ export async function getMonitoringOverview() {
     rowsRejected24h,
     trend,
     health,
+    jobs: jobs.map((j) => ({ ...j, pipelineName: names.get(j.pipelineId) ?? 'Deleted pipeline' })),
     recentRuns: runs.slice(0, 25).map((r) => ({ ...r, pipelineName: names.get(r.pipelineId) ?? 'Deleted pipeline' })),
     datasets: datasets.map((d) => ({ ...d, columnCount: Array.isArray(d.columns) ? d.columns.length : 0, pipelineName: d.pipelineId ? names.get(d.pipelineId) ?? null : null })),
   }

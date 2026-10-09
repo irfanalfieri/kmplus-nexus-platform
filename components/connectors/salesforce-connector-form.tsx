@@ -30,13 +30,15 @@ export const SALESFORCE_DEFAULTS: Record<string, string> = {
 interface SalesforceConnectorFormProps {
   values: Record<string, string>
   onChange: (key: string, value: string) => void
+  /** Set when editing an existing source: a masked Consumer Secret is read server-side. */
+  sourceId?: string
 }
 
 function val(values: Record<string, string>, key: string) {
   return values[key] ?? SALESFORCE_DEFAULTS[key] ?? ''
 }
 
-export default function SalesforceConnectorForm({ values, onChange }: SalesforceConnectorFormProps) {
+export default function SalesforceConnectorForm({ values, onChange, sourceId }: SalesforceConnectorFormProps) {
   const authMethod = val(values, 'authMethod') || 'web_oauth'
   const connected = Boolean(val(values, 'accessToken') && val(values, 'instanceUrl'))
   const [connecting, setConnecting] = useState(false)
@@ -87,6 +89,7 @@ export default function SalesforceConnectorForm({ values, onChange }: Salesforce
         clientId,
         clientSecret,
         loginHost: val(values, 'loginHost'),
+        sourceId,
       })
 
       const popup = window.open(

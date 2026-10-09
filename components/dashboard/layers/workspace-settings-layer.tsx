@@ -16,6 +16,7 @@ import {
 } from '@/app/actions/workspaces'
 import { ROLE_INFO, ROLES, type Role } from '@/lib/auth/permissions'
 import { useCan, useWorkspace } from '@/components/workspace/workspace-context'
+import { AuditLog } from '@/components/workspace/audit-log'
 
 type Member = Awaited<ReturnType<typeof listMembers>>[number]
 type Invite = Awaited<ReturnType<typeof listInvites>>[number]
@@ -26,12 +27,13 @@ const when = (d: Date | string) => new Intl.DateTimeFormat('en-GB', { timeZone: 
 export default function WorkspaceSettingsLayer() {
   const { workspace, role } = useWorkspace()
   const isAdmin = useCan('workspace:manage')
+  const canAudit = useCan('audit:view')
   const [members, setMembers] = useState<Member[]>([])
   const [invites, setInvites] = useState<Invite[]>([])
   const [name, setName] = useState(workspace.name)
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteRole, setInviteRole] = useState<Role>('viewer')
-  const [link, setLink] = useState<{ url: string; email: string } | null>(null)
+  const [link, setLink] = useState<{ url: string; email: string; emailed: boolean } | null>(null)
   const [copied, setCopied] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState('')
@@ -70,7 +72,7 @@ export default function WorkspaceSettingsLayer() {
   const invite = () =>
     act('invite', async () => {
       const res = await createInvite(inviteEmail, inviteRole)
-      setLink({ url: `${window.location.origin}${res.path}`, email: res.email })
+      setLink({ url: `${window.location.origin}${res.path}`, email: res.email, emailed: res.emailed })
       setCopied(false)
       setInviteEmail('')
     })
@@ -216,12 +218,12 @@ export default function WorkspaceSettingsLayer() {
             </Button>
           </form>
           <p className="mt-2 text-xs text-muted-foreground">
-            Nexus doesn&apos;t send email yet: copy the link and send it yourself. It works once, for that email address only, and expires in 7 days.
+            Nexus emails the invite link when email is set up; you can also copy it. It works once, for that email address only, and expires in 7 days.
           </p>
           {link && (
             <div className="mt-3 rounded-md border border-primary/30 bg-primary/5 p-3 text-sm">
               <div className="mb-1">
-                Invite link for <span className="font-medium">{link.email}</span> (shown only once):
+                {link.emailed ? 'Emailed to' : 'Email not sent; send this link to'} <span className="font-medium">{link.email}</span> (shown only once):
               </div>
               <div className="flex gap-2">
                 <Input readOnly value={link.url} className="font-mono text-xs" onFocus={(e) => e.target.select()} aria-label="Invite link" />
@@ -252,6 +254,8 @@ export default function WorkspaceSettingsLayer() {
           )}
         </section>
       )}
+
+      {canAudit && <AuditLog />}
 
       {me && (
         <section className="rounded-xl border border-border bg-card p-5">
