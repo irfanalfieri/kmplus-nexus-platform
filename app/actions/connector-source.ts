@@ -15,7 +15,8 @@ import { parseRestConfig, previewRestRequest } from '@/lib/connectors/rest-clien
 import { resolveSalesforceAuth } from '@/lib/connectors/salesforce/oauth'
 import { decryptCredentials, encryptCredentials } from '@/lib/security/credentials'
 import { and, eq } from 'drizzle-orm'
-import { requireUserId } from '@/lib/auth/session'
+import { requireWorkspace } from '@/lib/auth/session'
+import type { Permission } from '@/lib/auth/permissions'
 import { revalidatePath } from 'next/cache'
 
 const slugSchema = z.string().trim().min(1).max(60)
@@ -34,7 +35,10 @@ function parseSlug(raw: string): ConnectorSlug {
   return slug
 }
 
-const getUserId = requireUserId
+/** Resolves the active workspace and enforces the permission; returns its id for scoping. */
+async function workspaceFor(permission: Permission) {
+  return (await requireWorkspace(permission)).workspaceId
+}
 
 function parseCredentials(sourceId: string, stored: unknown): ConnectorCredentials {
   const entries = Object.entries(decryptCredentials(sourceId, stored))
@@ -43,11 +47,11 @@ function parseCredentials(sourceId: string, stored: unknown): ConnectorCredentia
   )
 }
 
-async function getOwnedSource(sourceId: string, userId: string) {
+async function getOwnedSource(sourceId: string, workspaceId: string) {
   const [source] = await db
     .select()
     .from(dataSources)
-    .where(and(eq(dataSources.id, sourceId), eq(dataSources.userId, userId)))
+    .where(and(eq(dataSources.id, sourceId), eq(dataSources.workspaceId, workspaceId)))
     .limit(1)
 
   if (!source) throw new Error('Data source not found')
@@ -55,7 +59,7 @@ async function getOwnedSource(sourceId: string, userId: string) {
 }
 
 export async function testConnectorConnectionAction(rawSlug: string, rawCredentials: ConnectorCredentials) {
-  await getUserId()
+  await workspaceFor('sources:manage')
   const slug = parseSlug(rawSlug)
   const credentials = credentialsSchema.parse(rawCredentials)
   await assertConnectorInstalled(slug)
@@ -63,7 +67,7 @@ export async function testConnectorConnectionAction(rawSlug: string, rawCredenti
 }
 
 export async function scanConnectorSchemaAction(rawSlug: string, rawCredentials: ConnectorCredentials) {
-  await getUserId()
+  await workspaceFor('sources:manage')
   const slug = parseSlug(rawSlug)
   const credentials = credentialsSchema.parse(rawCredentials)
   await assertConnectorInstalled(slug)
@@ -71,9 +75,9 @@ export async function scanConnectorSchemaAction(rawSlug: string, rawCredentials:
 }
 
 export async function scanDataSourceSchema(rawSourceId: string) {
-  const userId = await getUserId()
+  const workspaceId = await workspaceFor('sources:manage')
   const sourceId = idSchema.parse(rawSourceId)
-  const source = await getOwnedSource(sourceId, userId)
+  const source = await getOwnedSource(sourceId, workspaceId)
   if (!isConnectorSlug(source.sourceType)) throw new Error('Unsupported source type')
 
   await assertConnectorInstalled(source.sourceType)
@@ -95,18 +99,18 @@ export async function scanDataSourceSchema(rawSourceId: string) {
       lastConnected: new Date(),
       updatedAt: new Date(),
     })
-    .where(and(eq(dataSources.id, sourceId), eq(dataSources.userId, userId)))
+    .where(and(eq(dataSources.id, sourceId), eq(dataSources.workspaceId, workspaceId)))
 
   revalidatePath('/dashboard')
   return scan
 }
 
 export async function getDataSourceTableSample(rawSourceId: string, rawTableName: string, rawLimit = 25) {
-  const userId = await getUserId()
+  const workspaceId = await workspaceFor('data:preview')
   const sourceId = idSchema.parse(rawSourceId)
   const tableName = tableSchema.parse(rawTableName)
   const limit = limitSchema.parse(rawLimit)
-  const source = await getOwnedSource(sourceId, userId)
+  const source = await getOwnedSource(sourceId, workspaceId)
   if (!isConnectorSlug(source.sourceType)) throw new Error('Unsupported source type')
 
   await assertConnectorInstalled(source.sourceType)
@@ -115,7 +119,7 @@ export async function getDataSourceTableSample(rawSourceId: string, rawTableName
 }
 
 export async function previewRestConnection(rawCredentials: ConnectorCredentials) {
-  await getUserId()
+  await workspaceFor('sources:manage')
   const credentials = credentialsSchema.parse(rawCredentials)
   await assertConnectorInstalled('rest')
   return previewRestRequest(parseRestConfig(credentials))
@@ -125,7 +129,7 @@ export async function testAndScanDataSource(
   rawSlug: string,
   rawCredentials: ConnectorCredentials
 ) {
-  await getUserId()
+  await workspaceFor('sources:manage')
   const slug = parseSlug(rawSlug)
   const credentials = credentialsSchema.parse(rawCredentials)
   await assertConnectorInstalled(slug)

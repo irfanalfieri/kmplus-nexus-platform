@@ -31,7 +31,7 @@ async function tick(request: Request) {
   const started = Date.now()
   const now = new Date()
   const due = await db
-    .select({ id: pipelines.id, userId: pipelines.userId, schedule: pipelines.schedule, nextRunAt: pipelines.nextRunAt })
+    .select({ id: pipelines.id, userId: pipelines.userId, workspaceId: pipelines.workspaceId, schedule: pipelines.schedule, nextRunAt: pipelines.nextRunAt })
     .from(pipelines)
     .where(and(eq(pipelines.enabled, true), isNotNull(pipelines.nextRunAt), lte(pipelines.nextRunAt, now)))
     .orderBy(asc(pipelines.nextRunAt))
@@ -50,7 +50,8 @@ async function tick(request: Request) {
       .returning({ id: pipelines.id })
     if (!claimed.length) continue
     try {
-      const outcome = await executePipelineRun(p.id, p.userId, 'schedule')
+      // Scheduled runs act as the pipeline's creator, inside its workspace.
+      const outcome = await executePipelineRun(p.id, { workspaceId: p.workspaceId, actorId: p.userId }, 'schedule')
       results.push({ id: p.id, status: outcome.status, message: outcome.message })
     } catch (err) {
       results.push({ id: p.id, status: 'failed', message: err instanceof Error ? err.message : String(err) })

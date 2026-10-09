@@ -1,7 +1,9 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Plus, Trash2, CheckCircle2, AlertCircle, X, Save, Edit, Eye, Lock } from 'lucide-react'
+import { Plus, Trash2, CheckCircle2, AlertCircle, X, Save, Edit, Eye, Lock, KeyRound } from 'lucide-react'
+import EditCredentialsDialog from '@/components/connectors/edit-credentials-dialog'
+import { useCan } from '@/components/workspace/workspace-context'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -95,6 +97,9 @@ export default function DataSourcesLayer() {
   const [listError, setListError] = useState('')
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const [retestingId, setRetestingId] = useState<string | null>(null)
+  const [credentialsFor, setCredentialsFor] = useState<{ id: string; name: string } | null>(null)
+  const canManage = useCan('sources:manage')
+  const canPreview = useCan('data:preview')
   const [explorerOpen, setExplorerOpen] = useState(false)
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null)
   const [restPreview, setRestPreview] = useState<RestRequestPreview | null>(null)
@@ -260,6 +265,17 @@ export default function DataSourcesLayer() {
 
   return (
     <div className="space-y-6">
+      {credentialsFor && (
+        <EditCredentialsDialog
+          sourceId={credentialsFor.id}
+          sourceName={credentialsFor.name}
+          onClose={() => setCredentialsFor(null)}
+          onSaved={() => {
+            setCredentialsFor(null)
+            void loadAll()
+          }}
+        />
+      )}
       <SchemaExplorerModal
         isOpen={explorerOpen}
         sourceId={selectedSourceId || ''}
@@ -282,6 +298,9 @@ export default function DataSourcesLayer() {
               Add sources using installed connectors from the marketplace.
             </p>
           </div>
+          {!canManage ? (
+            <p className="text-sm text-muted-foreground">Only workspace admins can add or change data sources.</p>
+          ) : (
           <div className="flex gap-2">
             <Button
               variant="outline"
@@ -301,6 +320,7 @@ export default function DataSourcesLayer() {
               <Plus className="mr-2 h-4 w-4" /> Add Destination
             </Button>
           </div>
+          )}
         </div>
 
         {showAddForm && (
@@ -450,19 +470,26 @@ export default function DataSourcesLayer() {
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <select
-                    value={source.role ?? 'source'}
-                    onChange={(e) => void handleRole(source.id, e.target.value as 'source' | 'destination')}
-                    className="h-8 rounded-md border border-input bg-background px-2 text-xs"
-                    aria-label={`Role of ${source.name}`}
-                    title="Pipelines only write to destinations"
-                  >
-                    <option value="source">Use as source</option>
-                    <option value="destination">Use as destination</option>
-                  </select>
-                  <Button size="sm" variant="outline" disabled={retestingId === source.id} onClick={() => void handleRetest(source.id)}>
-                    {retestingId === source.id ? 'Testing…' : 'Re-test'}
-                  </Button>
+                  {canManage && (
+                    <>
+                      <select
+                        value={source.role ?? 'source'}
+                        onChange={(e) => void handleRole(source.id, e.target.value as 'source' | 'destination')}
+                        className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                        aria-label={`Role of ${source.name}`}
+                        title="Pipelines only write to destinations"
+                      >
+                        <option value="source">Use as source</option>
+                        <option value="destination">Use as destination</option>
+                      </select>
+                      <Button size="sm" variant="outline" disabled={retestingId === source.id} onClick={() => void handleRetest(source.id)}>
+                        {retestingId === source.id ? 'Testing…' : 'Re-test'}
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => setCredentialsFor({ id: source.id, name: source.name })}>
+                        <KeyRound className="mr-1 h-4 w-4" /> Credentials
+                      </Button>
+                    </>
+                  )}
                   {source.status === 'connected' ? (
                     <span className="flex items-center gap-1 text-xs text-green-600">
                       <CheckCircle2 className="h-4 w-4" /> Connected
@@ -472,7 +499,7 @@ export default function DataSourcesLayer() {
                       <AlertCircle className="h-4 w-4" /> Disconnected
                     </span>
                   )}
-                  {source.status === 'connected' && (
+                  {source.status === 'connected' && canPreview && (
                     <Button
                       size="sm"
                       variant="outline"
@@ -485,17 +512,20 @@ export default function DataSourcesLayer() {
                       Schema & Data
                     </Button>
                   )}
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => {
-                      setEditingId(source.id)
-                      setEditName(source.name)
-                    }}
-                  >
-                    <Edit className="h-4 w-4" />
-                  </Button>
-                  {confirmDeleteId === source.id ? (
+                  {canManage && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        setEditingId(source.id)
+                        setEditName(source.name)
+                      }}
+                      aria-label={`Rename ${source.name}`}
+                    >
+                      <Edit className="h-4 w-4" />
+                    </Button>
+                  )}
+                  {!canManage ? null : confirmDeleteId === source.id ? (
                     <span className="flex items-center gap-1 text-xs">
                       Delete &ldquo;{source.name}&rdquo;?
                       <Button size="sm" variant="destructive" onClick={() => void handleDelete(source.id)}>Delete</Button>

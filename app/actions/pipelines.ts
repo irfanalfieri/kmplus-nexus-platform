@@ -3,7 +3,7 @@
 import { z } from 'zod'
 import { and, desc, eq, inArray } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
-import { newId, requireUserId } from '@/lib/auth/session'
+import { newId, requireWorkspace, type WorkspaceContext } from '@/lib/auth/session'
 import { db } from '@/lib/db'
 import {
   auditLogs,
@@ -20,15 +20,14 @@ import { currentWatermark, executePipelineRun, parseDefinition, testRunDefinitio
 import { readDatasetSample } from '@/lib/pipelines/io'
 import type { SchemaScanResult } from '@/lib/connectors/types'
 
-const getUserId = requireUserId
 const idSchema = z.string().trim().min(1).max(100)
 
-async function audit(userId: string, action: string, resourceId: string, changes?: Record<string, unknown>) {
-  await db.insert(auditLogs).values({ id: newId('audit'), userId, action, resource: 'pipeline', resourceId, changes })
+async function audit(ctx: WorkspaceContext, action: string, resourceId: string, changes?: Record<string, unknown>) {
+  await db.insert(auditLogs).values({ id: newId('audit'), userId: ctx.userId, workspaceId: ctx.workspaceId, action, resource: 'pipeline', resourceId, changes })
 }
 
-async function getOwned(userId: string, id: string) {
-  const [row] = await db.select().from(pipelines).where(and(eq(pipelines.id, id), eq(pipelines.userId, userId))).limit(1)
+async function getOwned(ctx: WorkspaceContext, id: string) {
+  const [row] = await db.select().from(pipelines).where(and(eq(pipelines.id, id), eq(pipelines.workspaceId, ctx.workspaceId))).limit(1)
   if (!row) throw new Error('Pipeline not found')
   return row
 }
@@ -37,10 +36,12 @@ function computeNextRun(enabled: boolean, schedule: PipelineSchedule) {
   return enabled ? nextRunAt(schedule) : null
 }
 
+const scope = (ctx: WorkspaceContext) => ({ workspaceId: ctx.workspaceId, actorId: ctx.userId })
+
 // ── Queries ──────────────────────────────────────────────────────────────────
 
 export async function listPipelines() {
-  const userId = await getUserId()
+  const ctx = await requireWorkspace()
   return db
     .select({
       id: pipelines.id,
@@ -58,7 +59,7 @@ export async function listPipelines() {
       updatedAt: pipelines.updatedAt,
     })
     .from(pipelines)
-    .where(eq(pipelines.userId, userId))
+    .where(eq(pipelines.workspaceId, ctx.workspaceId))
     .orderBy(desc(pipelines.updatedAt))
     .then((rows) =>
       rows.map(({ state, ...row }) => {
@@ -70,17 +71,17 @@ export async function listPipelines() {
 
 /** Everything the builder needs to populate pickers (no credentials). */
 export async function getBuilderOptions() {
-  const userId = await getUserId()
+  const ctx = await requireWorkspace()
   const [sources, datasets] = await Promise.all([
     db
       .select({ id: dataSources.id, name: dataSources.name, sourceType: dataSources.sourceType, status: dataSources.status, config: dataSources.config })
       .from(dataSources)
-      .where(eq(dataSources.userId, userId))
+      .where(eq(dataSources.workspaceId, ctx.workspaceId))
       .orderBy(dataSources.name),
     db
       .select({ name: nexusDatasets.name, columns: nexusDatasets.columns, rowCount: nexusDatasets.rowCount, lastLoadedAt: nexusDatasets.lastLoadedAt })
       .from(nexusDatasets)
-      .where(eq(nexusDatasets.userId, userId))
+      .where(eq(nexusDatasets.workspaceId, ctx.workspaceId))
       .orderBy(nexusDatasets.name),
   ])
   return {
@@ -103,45 +104,46 @@ export async function getBuilderOptions() {
 }
 
 export async function listRuns(rawPipelineId: string, limit = 20) {
-  const userId = await getUserId()
+  const ctx = await requireWorkspace()
   const pipelineId = idSchema.parse(rawPipelineId)
-  await getOwned(userId, pipelineId)
+  await getOwned(ctx, pipelineId)
   return db
     .select()
     .from(executionLogs)
-    .where(and(eq(executionLogs.pipelineId, pipelineId), eq(executionLogs.userId, userId)))
+    .where(and(eq(executionLogs.pipelineId, pipelineId), eq(executionLogs.workspaceId, ctx.workspaceId)))
     .orderBy(desc(executionLogs.createdAt))
     .limit(Math.min(limit, 100))
 }
 
+/** Rejected rows contain source data, so they need data:preview. */
 export async function getRunRejects(rawRunId: string, limit = 100) {
-  const userId = await getUserId()
+  const ctx = await requireWorkspace('data:preview')
   const runId = idSchema.parse(rawRunId)
   return db
     .select({ id: pipelineRunRejects.id, row: pipelineRunRejects.row, errors: pipelineRunRejects.errors })
     .from(pipelineRunRejects)
-    .where(and(eq(pipelineRunRejects.runId, runId), eq(pipelineRunRejects.userId, userId)))
+    .where(and(eq(pipelineRunRejects.runId, runId), eq(pipelineRunRejects.workspaceId, ctx.workspaceId)))
     .limit(Math.min(limit, 500))
 }
 
 export async function listVersions(rawPipelineId: string) {
-  const userId = await getUserId()
+  const ctx = await requireWorkspace()
   const pipelineId = idSchema.parse(rawPipelineId)
-  await getOwned(userId, pipelineId)
+  await getOwned(ctx, pipelineId)
   return db
     .select({ version: pipelineVersions.version, changes: pipelineVersions.changes, createdAt: pipelineVersions.createdAt })
     .from(pipelineVersions)
-    .where(and(eq(pipelineVersions.pipelineId, pipelineId), eq(pipelineVersions.userId, userId)))
+    .where(and(eq(pipelineVersions.pipelineId, pipelineId), eq(pipelineVersions.workspaceId, ctx.workspaceId)))
     .orderBy(desc(pipelineVersions.version))
 }
 
 export async function getDatasetPreview(rawName: string) {
-  const userId = await getUserId()
+  const ctx = await requireWorkspace('data:preview')
   const name = z.string().trim().min(1).max(64).parse(rawName)
   const [dataset] = await db
     .select()
     .from(nexusDatasets)
-    .where(and(eq(nexusDatasets.userId, userId), eq(nexusDatasets.name, name)))
+    .where(and(eq(nexusDatasets.workspaceId, ctx.workspaceId), eq(nexusDatasets.name, name)))
     .limit(1)
   if (!dataset) throw new Error('Dataset not found')
   return { name: dataset.name, rowCount: dataset.rowCount, lastLoadedAt: dataset.lastLoadedAt, rows: await readDatasetSample(dataset.tableName, 50) }
@@ -159,8 +161,7 @@ const saveInput = z.object({
   changeNote: z.string().trim().max(200).optional(),
 })
 
-export async function savePipeline(input: z.input<typeof saveInput>) {
-  const userId = await getUserId()
+async function savePipelineAs(ctx: WorkspaceContext, input: z.input<typeof saveInput>) {
   const data = saveInput.parse(input)
   const definition = parseDefinition(data.definition)
   assertValidSchedule(data.schedule)
@@ -182,69 +183,74 @@ export async function savePipeline(input: z.input<typeof saveInput>) {
   let id = data.id
   let version = 1
   if (id) {
-    const existing = await getOwned(userId, id)
+    const existing = await getOwned(ctx, id)
     version = (existing.version ?? 1) + 1
-    await db.update(pipelines).set({ ...common, version }).where(and(eq(pipelines.id, id), eq(pipelines.userId, userId)))
+    await db.update(pipelines).set({ ...common, version }).where(and(eq(pipelines.id, id), eq(pipelines.workspaceId, ctx.workspaceId)))
   } else {
     id = newId('pipe')
-    await db.insert(pipelines).values({ id, userId, ...common, version, status: 'draft' })
+    await db.insert(pipelines).values({ id, userId: ctx.userId, workspaceId: ctx.workspaceId, ...common, version, status: 'draft' })
   }
 
   await db.insert(pipelineVersions).values({
     id: newId('pver'),
-    userId,
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
     pipelineId: id,
     version,
     config: { definition, schedule: data.schedule, name: data.name, description: data.description },
     changes: data.changeNote || (version === 1 ? 'Created' : 'Updated'),
-    createdBy: userId,
+    createdBy: ctx.userId,
   })
-  await audit(userId, version === 1 ? 'CREATE' : 'UPDATE', id, { version })
+  await audit(ctx, version === 1 ? 'CREATE' : 'UPDATE', id, { version })
   revalidatePath('/dashboard')
   return { id, version }
 }
 
+export async function savePipeline(input: z.input<typeof saveInput>) {
+  return savePipelineAs(await requireWorkspace('pipelines:edit'), input)
+}
+
 export async function setPipelineEnabled(rawId: string, rawEnabled: boolean) {
-  const userId = await getUserId()
+  const ctx = await requireWorkspace('pipelines:run')
   const id = idSchema.parse(rawId)
   const enabled = z.boolean().parse(rawEnabled)
-  const existing = await getOwned(userId, id)
+  const existing = await getOwned(ctx, id)
   const schedule = scheduleSchema.parse(existing.schedule ?? {})
   await db
     .update(pipelines)
     .set({ enabled, nextRunAt: computeNextRun(enabled, schedule), updatedAt: new Date() })
-    .where(and(eq(pipelines.id, id), eq(pipelines.userId, userId)))
-  await audit(userId, enabled ? 'ENABLE' : 'DISABLE', id)
+    .where(and(eq(pipelines.id, id), eq(pipelines.workspaceId, ctx.workspaceId)))
+  await audit(ctx, enabled ? 'ENABLE' : 'DISABLE', id)
   revalidatePath('/dashboard')
 }
 
 export async function deletePipeline(rawId: string) {
-  const userId = await getUserId()
+  const ctx = await requireWorkspace('pipelines:edit')
   const id = idSchema.parse(rawId)
-  await getOwned(userId, id)
-  const runIds = (await db.select({ id: executionLogs.id }).from(executionLogs).where(eq(executionLogs.pipelineId, id))).map((r) => r.id)
-  if (runIds.length) await db.delete(pipelineRunRejects).where(inArray(pipelineRunRejects.runId, runIds))
-  await db.delete(executionLogs).where(and(eq(executionLogs.pipelineId, id), eq(executionLogs.userId, userId)))
-  await db.delete(pipelineVersions).where(and(eq(pipelineVersions.pipelineId, id), eq(pipelineVersions.userId, userId)))
-  await db.delete(pipelines).where(and(eq(pipelines.id, id), eq(pipelines.userId, userId)))
+  await getOwned(ctx, id)
+  const runIds = (await db.select({ id: executionLogs.id }).from(executionLogs).where(and(eq(executionLogs.pipelineId, id), eq(executionLogs.workspaceId, ctx.workspaceId)))).map((r) => r.id)
+  if (runIds.length) await db.delete(pipelineRunRejects).where(and(inArray(pipelineRunRejects.runId, runIds), eq(pipelineRunRejects.workspaceId, ctx.workspaceId)))
+  await db.delete(executionLogs).where(and(eq(executionLogs.pipelineId, id), eq(executionLogs.workspaceId, ctx.workspaceId)))
+  await db.delete(pipelineVersions).where(and(eq(pipelineVersions.pipelineId, id), eq(pipelineVersions.workspaceId, ctx.workspaceId)))
+  await db.delete(pipelines).where(and(eq(pipelines.id, id), eq(pipelines.workspaceId, ctx.workspaceId)))
   // Datasets produced by the pipeline are kept; they may be used elsewhere.
-  await audit(userId, 'DELETE', id)
+  await audit(ctx, 'DELETE', id)
   revalidatePath('/dashboard')
 }
 
 export async function restoreVersion(rawId: string, rawVersion: number) {
-  const userId = await getUserId()
+  const ctx = await requireWorkspace('pipelines:edit')
   const id = idSchema.parse(rawId)
   const version = z.number().int().min(1).parse(rawVersion)
-  const existing = await getOwned(userId, id)
+  const existing = await getOwned(ctx, id)
   const [snapshot] = await db
     .select()
     .from(pipelineVersions)
-    .where(and(eq(pipelineVersions.pipelineId, id), eq(pipelineVersions.userId, userId), eq(pipelineVersions.version, version)))
+    .where(and(eq(pipelineVersions.pipelineId, id), eq(pipelineVersions.workspaceId, ctx.workspaceId), eq(pipelineVersions.version, version)))
     .limit(1)
   if (!snapshot) throw new Error(`Version ${version} not found`)
   const cfg = snapshot.config as { definition: unknown; schedule: unknown; name: string; description: string }
-  return savePipeline({
+  return savePipelineAs(ctx, {
     id,
     name: cfg.name ?? existing.name,
     description: cfg.description ?? '',
@@ -256,20 +262,20 @@ export async function restoreVersion(rawId: string, rawVersion: number) {
 }
 
 export async function runPipelineNow(rawId: string) {
-  const userId = await getUserId()
+  const ctx = await requireWorkspace('pipelines:run')
   const id = idSchema.parse(rawId)
-  const outcome = await executePipelineRun(id, userId, 'manual')
+  const outcome = await executePipelineRun(id, scope(ctx), 'manual')
   revalidatePath('/dashboard')
   return outcome
 }
 
 /** Test run of an unsaved definition: real source data, nothing written. Uses the saved sync position when editing. */
 export async function testPipeline(definition: unknown, rawPipelineId?: string) {
-  const userId = await getUserId()
+  const ctx = await requireWorkspace('pipelines:edit')
   try {
     let state: unknown = null
-    if (rawPipelineId) state = (await getOwned(userId, idSchema.parse(rawPipelineId))).state
-    const result = await testRunDefinition(userId, definition, 25, state)
+    if (rawPipelineId) state = (await getOwned(ctx, idSchema.parse(rawPipelineId))).state
+    const result = await testRunDefinition(scope(ctx), definition, 25, state)
     // Plain JSON only (rows may hold Buffers/BigInts from drivers).
     return { ok: true as const, result: JSON.parse(JSON.stringify(result, (_k, v) => (typeof v === 'bigint' ? v.toString() : v))) as typeof result }
   } catch (err) {
@@ -279,12 +285,12 @@ export async function testPipeline(definition: unknown, rawPipelineId?: string) 
 
 /** Forget the incremental sync position so the next run reads everything again. */
 export async function resetSyncPosition(rawId: string) {
-  const userId = await getUserId()
+  const ctx = await requireWorkspace('pipelines:edit')
   const id = idSchema.parse(rawId)
-  const existing = await getOwned(userId, id)
+  const existing = await getOwned(ctx, id)
   const state = { ...((existing.state as Record<string, unknown> | null) ?? {}) }
   delete state.watermark
-  await db.update(pipelines).set({ state, updatedAt: new Date() }).where(and(eq(pipelines.id, id), eq(pipelines.userId, userId)))
-  await audit(userId, 'RESET_SYNC', id)
+  await db.update(pipelines).set({ state, updatedAt: new Date() }).where(and(eq(pipelines.id, id), eq(pipelines.workspaceId, ctx.workspaceId)))
+  await audit(ctx, 'RESET_SYNC', id)
   revalidatePath('/dashboard')
 }

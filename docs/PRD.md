@@ -426,9 +426,9 @@ Example rules: `IF employment_status = 'Active' → Import`; `IF department = 'F
 
 | ID | Requirement | Pri | Status |
 |---|---|:-:|:-:|
-| GV-1 | **Workspaces (multi-tenancy)** with members and roles (§4 matrix) | P0 | ⬜ (currently per-user only) |
-| GV-2 | RBAC enforced **server-side** in every server action / API route | P0 | ⬜ |
-| GV-3 | Audit log for every create/update/delete/run/export/login/secret access, with actor, IP, user agent, and before/after diff | P0 | 🟡 (create/update/delete for some resources) |
+| GV-1 | **Workspaces (multi-tenancy)** with members and roles (§4 matrix) | P0 | ✅ (workspaces, switcher, members, link invites; roles admin/steward/operator/analyst/auditor/viewer) |
+| GV-2 | RBAC enforced **server-side** in every server action / API route | P0 | ✅ (`requireWorkspace(permission)` in every action; matrix in `lib/auth/permissions.ts`; UI uses the same table) |
+| GV-3 | Audit log for every create/update/delete/run/export/login/secret access, with actor, IP, user agent, and before/after diff | P0 | 🟡 (all mutations, runs, credential edits (field names only), membership changes; no IP/user agent or read/export logging yet) |
 | GV-4 | Secrets management: envelope encryption (AES-256-GCM, per-workspace data key, master key from KMS/env), rotation, no secrets in logs | P0 | ⬜ |
 | GV-5 | Data masking policies per column classification (full mask, partial `****1234`, hash), applied in preview, catalog, API, and dashboards by role | P1 | 🎭 |
 | GV-6 | Approval workflow for promoting pipelines to `prod` and for destructive write modes | P1 | ⬜ |
@@ -522,7 +522,9 @@ Nexus doesn't expose raw source systems. It publishes **standardized business do
 
 | Layer / area | Status | What's real | What's mock / missing |
 |---|:-:|---|---|
-| Auth | ✅ | Better Auth email/password, sessions (7 days), sign-in/up pages | SSO, MFA, workspaces, roles |
+| Auth & workspaces | ✅ | Better Auth email/password; workspaces with roles, switcher, invite links (`/invite/[token]`, hashed, 7-day, email-bound); personal workspace auto-created; Settings tab for members | SSO, MFA, email verification, email delivery of invites |
+| Overview | ✅ | Real counts, getting-started checklist, pipelines needing attention | — |
+| Analytics, Governance pages | 🎭 | Labelled "Preview: sample data" | Not connected to workspace data |
 | Data Sources | ✅ | CRUD, rename, source/destination switch, re-test, delete guarded by pipeline use; credentials encrypted; zod-validated actions, UUID ids | No scheduled health checks; no key rotation; credentials can't be edited after creation |
 | Connector Marketplace | ✅ | 10 connectors; install/uninstall (uninstall blocked while used); dev mode installs everything free | No billing (`CONNECTOR_BILLING_ENABLED`) |
 | Connector drivers | ✅/🟡 | SAP (OData), Oracle, MySQL, Postgres, REST, Salesforce (OAuth), Snowflake, Supabase, Talenta, AD/LDAP: test / scan / sample / pipeline read; write-back for Postgres, MySQL, Supabase. `scripts/connector-harness.ts` verifies REST, SAP, MySQL, Postgres, LDAP, Talenta (6/6 pass) | Oracle, Snowflake, Salesforce, Supabase and live Talenta not yet tested against real accounts |
@@ -544,9 +546,10 @@ Nexus doesn't expose raw source systems. It publishes **standardized business do
 2. ~~Timestamp IDs~~ Done: `newId(prefix)` in `lib/auth/session.ts` (UUID). Mock-only layers still use `Date.now()` client-side.
 3. ~~Unvalidated server actions~~ Done: every action in `app/actions/*` validates input with zod.
 4. ~~Copy-pasted `getUserId()`~~ Done: `requireUserId()` in `lib/auth/session.ts`; replace with `requireWorkspaceRole(role)` when workspaces land.
-5. There are both `package-lock.json` and `pnpm-lock.yaml`. Vercel uses pnpm, so **use pnpm only** and delete `package-lock.json`.
+5. ~~Two lockfiles~~ Done: `package-lock.json` removed; `packageManager` pins pnpm 10.34.6.
 6. ~~No migrations committed~~ Done: `drizzle/0000_init.sql` + `0001_enable_rls.sql`. Production moved from Neon (which had drifted and crashed the Connectors page) to Supabase on 2026-10-08. `scripts/db-repair-schema.mjs` remains as a drift check.
-7. Tests are scripts, not a test runner: `scripts/engine-tests.ts` (pure engine tests) and `scripts/connector-harness.ts` (live connector checks). No CI runs them yet, and server actions/UI have no automated tests.
+7. Tests are scripts, not a test runner: `scripts/engine-tests.ts` (pure engine tests, run in CI) and `scripts/connector-harness.ts` (live connector checks, run manually). CI (`.github/workflows/ci.yml`) runs install, type-check, engine tests and build. Server actions/UI have no automated tests.
+9. **Dev database shares the production Postgres server** (separate `nexus_dev` database: isolated data, shared compute) because the Supabase free plan allows 2 projects per owner. Move it to its own project when upgrading. Dev/preview have no scheduler (pg_cron runs only in the production `postgres` database).
 8. **Email alerts are deferred (decision 2026-10-09).** The code path exists (`lib/notifications.ts`, Resend) but no `RESEND_API_KEY` is configured, so only in-app (bell) alerts are active and notifications show "email not configured". To finish: create a Resend account, verify a sending domain (e.g. kmplus.co.id), set `RESEND_API_KEY` + `ALERT_FROM_EMAIL` on Vercel, send a test alert, then consider Teams/Slack/WhatsApp channels (MN-5).
 
 ---

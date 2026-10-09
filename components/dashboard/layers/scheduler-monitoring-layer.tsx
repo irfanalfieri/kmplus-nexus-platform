@@ -8,6 +8,7 @@ import { getMonitoringOverview, type PipelineHealth } from '@/app/actions/monito
 import { getDatasetPreview } from '@/app/actions/pipelines'
 import RunHistory, { formatWhen, statusBadge } from '@/components/pipelines/run-history'
 import { SampleTable } from '@/components/pipelines/pipeline-editor'
+import { useCan } from '@/components/workspace/workspace-context'
 
 type Overview = Awaited<ReturnType<typeof getMonitoringOverview>>
 
@@ -35,6 +36,7 @@ export default function SchedulerMonitoringLayer() {
   const [refreshing, setRefreshing] = useState(false)
   const [historyFor, setHistoryFor] = useState<{ id: string; name: string; version: number } | null>(null)
   const [preview, setPreview] = useState<{ name: string; rows: Record<string, unknown>[] } | null>(null)
+  const canPreview = useCan('data:preview')
 
   const load = useCallback(async () => {
     setRefreshing(true)
@@ -206,6 +208,8 @@ export default function SchedulerMonitoringLayer() {
                   <button
                     key={d.name}
                     onClick={() => void openPreview(d.name)}
+                    disabled={!canPreview}
+                    title={canPreview ? undefined : 'Your role cannot view dataset contents'}
                     className={`rounded-lg border p-3 text-left text-sm hover:bg-muted/40 ${preview?.name === d.name ? 'border-primary' : 'border-border'}`}
                   >
                     <div className="font-mono font-medium">{d.name}</div>

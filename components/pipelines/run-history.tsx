@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { getRunRejects, listRuns, listVersions, restoreVersion } from '@/app/actions/pipelines'
 import type { StepStat } from '@/lib/pipelines/engine'
+import { useCan } from '@/components/workspace/workspace-context'
 
 type Run = Awaited<ReturnType<typeof listRuns>>[number]
 type Version = Awaited<ReturnType<typeof listVersions>>[number]
@@ -46,6 +47,8 @@ export default function RunHistory({ pipelineId, pipelineName, currentVersion, o
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [restoring, setRestoring] = useState<number | null>(null)
+  const canEdit = useCan('pipelines:edit')
+  const canPreview = useCan('data:preview')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -67,13 +70,13 @@ export default function RunHistory({ pipelineId, pipelineName, currentVersion, o
   }, [load])
 
   useEffect(() => {
-    if (!selected?.recordsError) return setRejects([])
+    if (!selected?.recordsError || !canPreview) return setRejects([])
     let cancelled = false
     getRunRejects(selected.id, 100).then((r) => !cancelled && setRejects(r)).catch(() => !cancelled && setRejects([]))
     return () => {
       cancelled = true
     }
-  }, [selected])
+  }, [selected, canPreview])
 
   const restore = async (version: number) => {
     setRestoring(version)
@@ -249,7 +252,7 @@ export default function RunHistory({ pipelineId, pipelineName, currentVersion, o
                 <Badge variant={v.version === currentVersion ? 'default' : 'outline'}>v{v.version}</Badge>
                 <span className="flex-1">{v.changes}</span>
                 <span className="text-xs text-muted-foreground">{formatWhen(v.createdAt)}</span>
-                {v.version !== currentVersion && (
+                {v.version !== currentVersion && canEdit && (
                   <Button size="sm" variant="outline" disabled={restoring !== null} onClick={() => restore(v.version)}>
                     {restoring === v.version ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-1 h-4 w-4" />}
                     Restore

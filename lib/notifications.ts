@@ -51,7 +51,9 @@ async function sendEmail(to: string[], subject: string, lines: string[]): Promis
 }
 
 export async function notify(opts: {
+  /** Recipient. */
   userId: string
+  workspaceId: string
   level: NotificationLevel
   title: string
   lines: string[]
@@ -72,6 +74,7 @@ export async function notify(opts: {
   await db.insert(notifications).values({
     id: newId('ntf'),
     userId: opts.userId,
+    workspaceId: opts.workspaceId,
     level: opts.level,
     title: opts.title,
     body: opts.lines.join('\n'),

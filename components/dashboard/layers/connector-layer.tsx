@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Download, Check, Lock, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { getConnectorMarketplace, installConnector, uninstallConnector } from '@/app/actions/connectors'
+import { useCan } from '@/components/workspace/workspace-context'
 
 type MarketplaceConnector = Awaited<ReturnType<typeof getConnectorMarketplace>>[number]
 
@@ -12,6 +13,7 @@ export default function ConnectorLayer() {
   const [loading, setLoading] = useState(true)
   const [installingSlug, setInstallingSlug] = useState<string | null>(null)
   const [error, setError] = useState('')
+  const canManage = useCan('connectors:manage')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -54,6 +56,7 @@ export default function ConnectorLayer() {
         <p className="mb-6 text-sm text-muted-foreground">
           Only installed connectors appear when adding a data source.{' '}
           {billing ? 'Premium connectors require purchase before install.' : 'Development mode: every connector, including premium ones, installs for free.'}
+          {!canManage && ' Only workspace admins can install or uninstall connectors.'}
         </p>
 
         {error && (
@@ -84,7 +87,7 @@ export default function ConnectorLayer() {
                         <Check className="h-3 w-3" />
                         Installed
                       </div>
-                      <Button
+                      {canManage && <Button
                         size="sm"
                         variant="ghost"
                         onClick={() => void handleUninstall(connector.slug)}
@@ -93,8 +96,10 @@ export default function ConnectorLayer() {
                         title="Uninstall"
                       >
                         <Trash2 className="h-3 w-3" />
-                      </Button>
+                      </Button>}
                     </>
+                  ) : !canManage ? (
+                    <span className="flex-1 text-center text-xs text-muted-foreground">Not installed</span>
                   ) : connector.locked ? (
                     <Button
                       size="sm"

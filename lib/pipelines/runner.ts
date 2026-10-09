@@ -1,6 +1,6 @@
-import { and, eq, gt } from 'drizzle-orm'
+import { and, eq, gt, inArray } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { auditLogs, dataSources, executionLogs, nexusDatasets, pipelineRunRejects, pipelines } from '@/lib/db/schema'
+import { auditLogs, dataSources, executionLogs, nexusDatasets, pipelineRunRejects, pipelines, workspaceMembers } from '@/lib/db/schema'
 import { newId } from '@/lib/auth/session'
 import { notify } from '@/lib/notifications'
 import { definitionSchema, describeDefinitionError, scheduleSchema, type PipelineDefinition, type SourceStep } from './definition'
@@ -12,6 +12,12 @@ import { nextRunAt } from './schedule'
 const STALE_RUN_MS = 10 * 60 * 1000
 /** Retries stop once a run has used this much of the 300 s function budget. */
 const RETRY_BUDGET_MS = 180_000
+
+/** Who a run belongs to: the workspace, and the user who triggered or owns it. */
+export interface RunScope {
+  workspaceId: string
+  actorId: string
+}
 
 export interface PipelineState {
   watermark?: { column: string; value: string | null; sourceKey: string }
@@ -36,31 +42,44 @@ export function currentWatermark(def: PipelineDefinition, state: unknown): strin
   return wm && wm.sourceKey === watermarkKey(source) ? wm.value : null
 }
 
-async function loadSource(userId: string, dataSourceId: string): Promise<StoredDataSource> {
+async function loadSource(workspaceId: string, dataSourceId: string): Promise<StoredDataSource> {
   const [source] = await db
     .select({ id: dataSources.id, name: dataSources.name, sourceType: dataSources.sourceType, config: dataSources.config, credentials: dataSources.credentials })
     .from(dataSources)
-    .where(and(eq(dataSources.id, dataSourceId), eq(dataSources.userId, userId)))
+    .where(and(eq(dataSources.id, dataSourceId), eq(dataSources.workspaceId, workspaceId)))
     .limit(1)
   if (!source) throw new NonRetryableError('The data source used by this pipeline no longer exists.')
   return source
 }
 
-function buildIO(userId: string, pipelineId: string, opts: { write: boolean; maxRows?: number; watermarkAfter?: string | null }): EngineIO {
+function buildIO(scope: RunScope, pipelineId: string, opts: { write: boolean; maxRows?: number; watermarkAfter?: string | null }): EngineIO {
   return {
     async read(step) {
-      const source = await loadSource(userId, step.dataSourceId)
+      const source = await loadSource(scope.workspaceId, step.dataSourceId)
       const watermark = step.mode === 'incremental' ? { column: step.watermarkColumn, after: opts.watermarkAfter ?? null } : undefined
       return readSourceRows(source, step.table, Math.min(step.maxRows, opts.maxRows ?? step.maxRows), { watermark })
     },
     write: opts.write
       ? async (step, rows, columns) => {
           if (step.kind === 'dataset') {
-            const res = await writeDataset({ userId, datasetName: step.datasetName, mode: step.mode, keys: step.keys, columns, rows })
-            await upsertDatasetRecord(userId, pipelineId, step.datasetName, res.tableName, columns, res.rowCount)
+            const [existing] = await db
+              .select({ tableName: nexusDatasets.tableName })
+              .from(nexusDatasets)
+              .where(and(eq(nexusDatasets.workspaceId, scope.workspaceId), eq(nexusDatasets.name, step.datasetName)))
+              .limit(1)
+            const res = await writeDataset({
+              workspaceId: scope.workspaceId,
+              existingTableName: existing?.tableName,
+              datasetName: step.datasetName,
+              mode: step.mode,
+              keys: step.keys,
+              columns,
+              rows,
+            })
+            await upsertDatasetRecord(scope, pipelineId, step.datasetName, res.tableName, columns, res.rowCount)
             return { written: res.written, target: `Dataset ${step.datasetName}`, rowCount: res.rowCount }
           }
-          const source = await loadSource(userId, step.dataSourceId)
+          const source = await loadSource(scope.workspaceId, step.dataSourceId)
           const res = await writeToDataSource({ source, table: step.table, mode: step.mode, keys: step.keys, columns, rows })
           return { written: res.written, target: `${source.name} · ${step.table}` }
         }
@@ -69,7 +88,7 @@ function buildIO(userId: string, pipelineId: string, opts: { write: boolean; max
 }
 
 async function upsertDatasetRecord(
-  userId: string,
+  scope: RunScope,
   pipelineId: string,
   name: string,
   tableName: string,
@@ -79,7 +98,7 @@ async function upsertDatasetRecord(
   const now = new Date()
   await db
     .insert(nexusDatasets)
-    .values({ id: newId('ds'), userId, name, tableName, columns, pipelineId, rowCount, lastLoadedAt: now })
+    .values({ id: newId('ds'), userId: scope.actorId, workspaceId: scope.workspaceId, name, tableName, columns, pipelineId, rowCount, lastLoadedAt: now })
     .onConflictDoUpdate({
       target: nexusDatasets.tableName,
       set: { columns, pipelineId, rowCount, lastLoadedAt: now, updatedAt: now },
@@ -87,9 +106,9 @@ async function upsertDatasetRecord(
 }
 
 /** Dry run on a small sample: reads real data, runs every step, writes nothing. */
-export async function testRunDefinition(userId: string, config: unknown, sampleSize = 25, state?: unknown): Promise<EngineResult> {
+export async function testRunDefinition(scope: RunScope, config: unknown, sampleSize = 25, state?: unknown): Promise<EngineResult> {
   const def = parseDefinition(config)
-  const io = buildIO(userId, 'test', { write: false, maxRows: Math.max(sampleSize, 200), watermarkAfter: currentWatermark(def, state) })
+  const io = buildIO(scope, 'test', { write: false, maxRows: Math.max(sampleSize, 200), watermarkAfter: currentWatermark(def, state) })
   return runEngine(def, io, { sampleSize })
 }
 
@@ -113,11 +132,11 @@ function summarize(result: EngineResult) {
 }
 
 /** Executes the published version of a pipeline, retrying transient failures, and records the run. */
-export async function executePipelineRun(pipelineId: string, userId: string, trigger: 'manual' | 'schedule'): Promise<RunOutcome> {
+export async function executePipelineRun(pipelineId: string, scope: RunScope, trigger: 'manual' | 'schedule'): Promise<RunOutcome> {
   const [pipeline] = await db
     .select()
     .from(pipelines)
-    .where(and(eq(pipelines.id, pipelineId), eq(pipelines.userId, userId)))
+    .where(and(eq(pipelines.id, pipelineId), eq(pipelines.workspaceId, scope.workspaceId)))
     .limit(1)
   if (!pipeline) throw new Error('Pipeline not found')
 
@@ -139,7 +158,8 @@ export async function executePipelineRun(pipelineId: string, userId: string, tri
   const startTime = new Date()
   await db.insert(executionLogs).values({
     id: runId,
-    userId,
+    userId: scope.actorId,
+    workspaceId: scope.workspaceId,
     pipelineId,
     status: 'running',
     trigger,
@@ -152,7 +172,7 @@ export async function executePipelineRun(pipelineId: string, userId: string, tri
   const attempts: { attempt: number; error?: string; at: string }[] = []
   try {
     def = parseDefinition(pipeline.config)
-    const io = buildIO(userId, pipelineId, { write: true, watermarkAfter: currentWatermark(def, pipeline.state) })
+    const io = buildIO(scope, pipelineId, { write: true, watermarkAfter: currentWatermark(def, pipeline.state) })
     for (let attempt = 1; ; attempt++) {
       result = await runEngine(def, io)
       attempts.push({ attempt, error: result.error, at: new Date().toISOString() })
@@ -179,7 +199,8 @@ export async function executePipelineRun(pipelineId: string, userId: string, tri
         id: newId('rej'),
         runId,
         pipelineId,
-        userId,
+        userId: scope.actorId,
+        workspaceId: scope.workspaceId,
         row: JSON.parse(JSON.stringify(r.row)),
         errors: { stepId: r.stepId, messages: r.errors },
       }))
@@ -223,7 +244,8 @@ export async function executePipelineRun(pipelineId: string, userId: string, tri
 
   await db.insert(auditLogs).values({
     id: newId('audit'),
-    userId,
+    userId: scope.actorId,
+    workspaceId: scope.workspaceId,
     action: 'RUN',
     resource: 'pipeline',
     resourceId: pipelineId,
@@ -231,7 +253,7 @@ export async function executePipelineRun(pipelineId: string, userId: string, tri
   })
 
   const message = summarize(result)
-  await alertIfNeeded({ def, pipelineName: pipeline.name, pipelineId, userId, runId, trigger, result, attempts: attempts.length, message })
+  await alertIfNeeded({ def, pipelineName: pipeline.name, pipelineId, scope, runId, trigger, result, attempts: attempts.length, message })
   return { runId, status: result.status, message }
 }
 
@@ -239,7 +261,7 @@ async function alertIfNeeded(opts: {
   def: PipelineDefinition | null
   pipelineName: string
   pipelineId: string
-  userId: string
+  scope: RunScope
   runId: string
   trigger: string
   result: EngineResult
@@ -259,15 +281,24 @@ async function alertIfNeeded(opts: {
     `Time: ${new Date().toISOString()}`,
   ]
   try {
-    await notify({
-      userId: opts.userId,
-      level: failed ? 'error' : 'warning',
-      title,
-      lines,
-      pipelineId: opts.pipelineId,
-      runId: opts.runId,
-      email: alertOn === 'never' ? undefined : { to: settings?.alertEmails ?? [] },
-    })
+    // Everyone who can act on a failure gets it in their bell; email is sent once (configured list or owner).
+    const recipients = await db
+      .select({ userId: workspaceMembers.userId })
+      .from(workspaceMembers)
+      .where(and(eq(workspaceMembers.workspaceId, opts.scope.workspaceId), inArray(workspaceMembers.role, ['admin', 'steward', 'operator'])))
+    const ids = Array.from(new Set([...recipients.map((r) => r.userId), opts.scope.actorId]))
+    for (const [i, userId] of ids.entries()) {
+      await notify({
+        userId,
+        workspaceId: opts.scope.workspaceId,
+        level: failed ? 'error' : 'warning',
+        title,
+        lines,
+        pipelineId: opts.pipelineId,
+        runId: opts.runId,
+        email: alertOn === 'never' || i > 0 ? undefined : { to: settings?.alertEmails ?? [] },
+      })
+    }
   } catch (err) {
     // Alerts must never turn a finished run into an error.
     console.error('[runner] alert failed:', err instanceof Error ? err.message : err)

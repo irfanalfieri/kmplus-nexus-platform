@@ -1,0 +1,238 @@
+'use server'
+
+import { createHash, randomBytes } from 'node:crypto'
+import { z } from 'zod'
+import { and, asc, desc, eq, gt, isNull, sql } from 'drizzle-orm'
+import { cookies } from 'next/headers'
+import { revalidatePath } from 'next/cache'
+import { db } from '@/lib/db'
+import { auditLogs, user, workspaceInvites, workspaceMembers, workspaces } from '@/lib/db/schema'
+import { ACTIVE_WORKSPACE_COOKIE, getMembership, newId, requireUserId, requireWorkspace, type WorkspaceContext } from '@/lib/auth/session'
+import { ROLES, type Role } from '@/lib/auth/permissions'
+
+const roleSchema = z.enum(ROLES)
+const idSchema = z.string().trim().min(1).max(100)
+const nameSchema = z.string().trim().min(1, 'Name is required').max(80)
+const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000
+
+const hashToken = (token: string) => createHash('sha256').update(token).digest('hex')
+
+async function audit(ctx: WorkspaceContext, action: string, resourceId: string, changes?: Record<string, unknown>) {
+  await db.insert(auditLogs).values({ id: newId('audit'), userId: ctx.userId, workspaceId: ctx.workspaceId, action, resource: 'workspace', resourceId, changes })
+}
+
+async function setActiveWorkspace(workspaceId: string) {
+  ;(await cookies()).set(ACTIVE_WORKSPACE_COOKIE, workspaceId, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    path: '/',
+    maxAge: 60 * 60 * 24 * 365,
+  })
+}
+
+async function adminCount(workspaceId: string) {
+  const [{ n }] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(workspaceMembers)
+    .where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.role, 'admin')))
+  return n
+}
+
+// ── Context & switching ──────────────────────────────────────────────────────
+
+/** Current workspace, the user's role in it, and every workspace they belong to. */
+export async function getWorkspaceContext() {
+  const ctx = await requireWorkspace()
+  const mine = await db
+    .select({ id: workspaces.id, name: workspaces.name, role: workspaceMembers.role })
+    .from(workspaceMembers)
+    .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
+    .where(eq(workspaceMembers.userId, ctx.userId))
+    .orderBy(asc(workspaces.name))
+  return {
+    user: { id: ctx.userId, email: ctx.email, name: ctx.name },
+    workspace: { id: ctx.workspaceId, name: ctx.workspaceName },
+    role: ctx.role,
+    workspaces: mine.map((w) => ({ ...w, role: w.role as Role })),
+  }
+}
+
+export async function switchWorkspace(rawId: string) {
+  const userId = await requireUserId()
+  const workspaceId = idSchema.parse(rawId)
+  if (!(await getMembership(userId, workspaceId))) throw new Error('You are not a member of that workspace.')
+  await setActiveWorkspace(workspaceId)
+  revalidatePath('/dashboard')
+}
+
+export async function createWorkspace(rawName: string) {
+  const userId = await requireUserId()
+  const name = nameSchema.parse(rawName)
+  const id = newId('ws')
+  await db.insert(workspaces).values({ id, name, createdBy: userId })
+  await db.insert(workspaceMembers).values({ workspaceId: id, userId, role: 'admin' })
+  await db.insert(auditLogs).values({ id: newId('audit'), userId, workspaceId: id, action: 'CREATE', resource: 'workspace', resourceId: id, changes: { name } })
+  await setActiveWorkspace(id)
+  revalidatePath('/dashboard')
+  return { id }
+}
+
+export async function renameWorkspace(rawName: string) {
+  const ctx = await requireWorkspace('workspace:manage')
+  const name = nameSchema.parse(rawName)
+  await db.update(workspaces).set({ name, updatedAt: new Date() }).where(eq(workspaces.id, ctx.workspaceId))
+  await audit(ctx, 'RENAME', ctx.workspaceId, { name })
+  revalidatePath('/dashboard')
+}
+
+// ── Members ──────────────────────────────────────────────────────────────────
+
+export async function listMembers() {
+  const ctx = await requireWorkspace()
+  const members = await db
+    .select({ userId: workspaceMembers.userId, role: workspaceMembers.role, joinedAt: workspaceMembers.createdAt, email: user.email, name: user.name })
+    .from(workspaceMembers)
+    .innerJoin(user, eq(user.id, workspaceMembers.userId))
+    .where(eq(workspaceMembers.workspaceId, ctx.workspaceId))
+    .orderBy(asc(user.email))
+  return members.map((m) => ({ ...m, role: m.role as Role, isYou: m.userId === ctx.userId }))
+}
+
+export async function changeMemberRole(rawUserId: string, rawRole: string) {
+  const ctx = await requireWorkspace('workspace:manage')
+  const userId = idSchema.parse(rawUserId)
+  const role = roleSchema.parse(rawRole)
+  const current = await getMembership(userId, ctx.workspaceId)
+  if (!current) throw new Error('That user is not a member of this workspace.')
+  if (current === 'admin' && role !== 'admin' && (await adminCount(ctx.workspaceId)) <= 1) {
+    throw new Error('A workspace needs at least one admin. Make someone else admin first.')
+  }
+  await db
+    .update(workspaceMembers)
+    .set({ role, updatedAt: new Date() })
+    .where(and(eq(workspaceMembers.workspaceId, ctx.workspaceId), eq(workspaceMembers.userId, userId)))
+  await audit(ctx, 'CHANGE_ROLE', userId, { from: current, to: role })
+  revalidatePath('/dashboard')
+}
+
+/** Removes a member (admins), or leaves the workspace (anyone, for themselves). */
+export async function removeMember(rawUserId: string) {
+  const ctx = await requireWorkspace()
+  const userId = idSchema.parse(rawUserId)
+  const self = userId === ctx.userId
+  if (!self && ctx.role !== 'admin') throw new Error('Only admins can remove other members.')
+  const current = await getMembership(userId, ctx.workspaceId)
+  if (!current) throw new Error('That user is not a member of this workspace.')
+  if (current === 'admin' && (await adminCount(ctx.workspaceId)) <= 1) {
+    throw new Error('A workspace needs at least one admin. Make someone else admin first.')
+  }
+  await db.delete(workspaceMembers).where(and(eq(workspaceMembers.workspaceId, ctx.workspaceId), eq(workspaceMembers.userId, userId)))
+  await audit(ctx, self ? 'LEAVE' : 'REMOVE_MEMBER', userId, { role: current })
+  if (self) (await cookies()).delete(ACTIVE_WORKSPACE_COOKIE)
+  revalidatePath('/dashboard')
+}
+
+// ── Invites (link-based; no email is sent) ───────────────────────────────────
+
+/** Creates an invite and returns its one-time link path. Only the token hash is stored. */
+export async function createInvite(rawEmail: string, rawRole: string) {
+  const ctx = await requireWorkspace('workspace:manage')
+  const email = z.string().trim().toLowerCase().email('Enter a valid email').parse(rawEmail)
+  const role = roleSchema.parse(rawRole)
+  const [existingMember] = await db
+    .select({ userId: user.id })
+    .from(user)
+    .innerJoin(workspaceMembers, and(eq(workspaceMembers.userId, user.id), eq(workspaceMembers.workspaceId, ctx.workspaceId)))
+    .where(eq(sql`lower(${user.email})`, email))
+    .limit(1)
+  if (existingMember) throw new Error(`${email} is already a member.`)
+
+  const token = randomBytes(24).toString('base64url')
+  const id = newId('inv')
+  await db.insert(workspaceInvites).values({
+    id,
+    workspaceId: ctx.workspaceId,
+    email,
+    role,
+    tokenHash: hashToken(token),
+    invitedBy: ctx.userId,
+    expiresAt: new Date(Date.now() + INVITE_TTL_MS),
+  })
+  await audit(ctx, 'INVITE', id, { email, role })
+  revalidatePath('/dashboard')
+  return { path: `/invite/${token}`, email, role }
+}
+
+export async function listInvites() {
+  const ctx = await requireWorkspace('workspace:manage')
+  return db
+    .select({ id: workspaceInvites.id, email: workspaceInvites.email, role: workspaceInvites.role, expiresAt: workspaceInvites.expiresAt, createdAt: workspaceInvites.createdAt })
+    .from(workspaceInvites)
+    .where(
+      and(
+        eq(workspaceInvites.workspaceId, ctx.workspaceId),
+        isNull(workspaceInvites.acceptedAt),
+        isNull(workspaceInvites.revokedAt),
+        gt(workspaceInvites.expiresAt, new Date())
+      )
+    )
+    .orderBy(desc(workspaceInvites.createdAt))
+}
+
+export async function revokeInvite(rawId: string) {
+  const ctx = await requireWorkspace('workspace:manage')
+  const id = idSchema.parse(rawId)
+  await db
+    .update(workspaceInvites)
+    .set({ revokedAt: new Date() })
+    .where(and(eq(workspaceInvites.id, id), eq(workspaceInvites.workspaceId, ctx.workspaceId)))
+  await audit(ctx, 'REVOKE_INVITE', id)
+  revalidatePath('/dashboard')
+}
+
+async function findValidInvite(token: string) {
+  const [invite] = await db
+    .select({ id: workspaceInvites.id, workspaceId: workspaceInvites.workspaceId, email: workspaceInvites.email, role: workspaceInvites.role, workspaceName: workspaces.name })
+    .from(workspaceInvites)
+    .innerJoin(workspaces, eq(workspaces.id, workspaceInvites.workspaceId))
+    .where(
+      and(
+        eq(workspaceInvites.tokenHash, hashToken(token)),
+        isNull(workspaceInvites.acceptedAt),
+        isNull(workspaceInvites.revokedAt),
+        gt(workspaceInvites.expiresAt, new Date())
+      )
+    )
+    .limit(1)
+  return invite ?? null
+}
+
+/** For the invite page: what the link is for (no secrets). */
+export async function describeInvite(rawToken: string) {
+  const token = z.string().min(10).max(200).parse(rawToken)
+  const invite = await findValidInvite(token)
+  if (!invite) return null
+  return { workspaceName: invite.workspaceName, email: invite.email, role: invite.role as Role }
+}
+
+/** Accepts an invite. The signed-in account's email must match the invited email. */
+export async function acceptInvite(rawToken: string) {
+  const userId = await requireUserId()
+  const token = z.string().min(10).max(200).parse(rawToken)
+  const invite = await findValidInvite(token)
+  if (!invite) throw new Error('This invite link is invalid, expired, revoked or already used.')
+  const [me] = await db.select({ email: user.email }).from(user).where(eq(user.id, userId)).limit(1)
+  if (me?.email.toLowerCase() !== invite.email.toLowerCase()) {
+    throw new Error(`This invite is for ${invite.email}. Sign in with that account to accept it.`)
+  }
+  const role = roleSchema.parse(invite.role)
+  if (!(await getMembership(userId, invite.workspaceId))) {
+    await db.insert(workspaceMembers).values({ workspaceId: invite.workspaceId, userId, role })
+  }
+  await db.update(workspaceInvites).set({ acceptedAt: new Date(), acceptedBy: userId }).where(eq(workspaceInvites.id, invite.id))
+  await db.insert(auditLogs).values({ id: newId('audit'), userId, workspaceId: invite.workspaceId, action: 'ACCEPT_INVITE', resource: 'workspace', resourceId: invite.id, changes: { role } })
+  await setActiveWorkspace(invite.workspaceId)
+  revalidatePath('/dashboard')
+  return { workspaceName: invite.workspaceName }
+}

@@ -157,8 +157,8 @@ function pgValue(v: unknown, type?: ColumnType) {
 
 // ── Nexus datasets (nexus_data schema in the Nexus DB) ───────────────────────
 
-export function datasetTableName(userId: string, datasetName: string) {
-  const owner = createHash('sha1').update(userId).digest('hex').slice(0, 8)
+export function datasetTableName(workspaceId: string, datasetName: string) {
+  const owner = createHash('sha1').update(workspaceId).digest('hex').slice(0, 8)
   return `ds_${owner}_${datasetName}`.slice(0, 63)
 }
 
@@ -187,14 +187,16 @@ async function insertBatches(
 }
 
 export async function writeDataset(opts: {
-  userId: string
+  workspaceId: string
+  /** Physical table of an existing dataset (kept as-is when it predates workspaces). */
+  existingTableName?: string
   datasetName: string
   mode: 'append' | 'upsert' | 'replace'
   keys: string[]
   columns: OutputColumn[]
   rows: Row[]
 }): Promise<{ written: number; tableName: string; rowCount: number }> {
-  const tableName = datasetTableName(opts.userId, opts.datasetName)
+  const tableName = opts.existingTableName ?? datasetTableName(opts.workspaceId, opts.datasetName)
   const target = `"nexus_data".${qIdent(tableName)}`
   const client = await nexusPool.connect()
   try {

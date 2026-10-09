@@ -1,4 +1,4 @@
-import { pgTable, text, boolean, timestamp, integer, jsonb, numeric, index, uniqueIndex } from 'drizzle-orm/pg-core'
+import { pgTable, text, boolean, timestamp, integer, jsonb, numeric, index, uniqueIndex, primaryKey } from 'drizzle-orm/pg-core'
 
 // Better Auth tables (required)
 export const user = pgTable('user', {
@@ -47,10 +47,45 @@ export const verification = pgTable('verification', {
   updatedAt: timestamp('updatedAt').defaultNow(),
 })
 
+// Workspaces (tenants). Everything a team shares belongs to one workspace.
+export const workspaces = pgTable('workspaces', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  createdBy: text('createdBy').notNull(),
+  createdAt: timestamp('createdAt').notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt').notNull().defaultNow(),
+})
+
+export const workspaceMembers = pgTable('workspace_members', {
+  workspaceId: text('workspaceId').notNull(),
+  userId: text('userId').notNull(),
+  /** admin | steward | operator | analyst | auditor | viewer (lib/auth/permissions.ts) */
+  role: text('role').notNull(),
+  createdAt: timestamp('createdAt').notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt').notNull().defaultNow(),
+}, (t) => [primaryKey({ columns: [t.workspaceId, t.userId] }), index('workspace_members_user_idx').on(t.userId)])
+
+/** Invite links. Only a SHA-256 hash of the token is stored; the link is shown once. */
+export const workspaceInvites = pgTable('workspace_invites', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  email: text('email').notNull(),
+  role: text('role').notNull(),
+  tokenHash: text('tokenHash').notNull().unique(),
+  invitedBy: text('invitedBy').notNull(),
+  expiresAt: timestamp('expiresAt').notNull(),
+  acceptedAt: timestamp('acceptedAt'),
+  acceptedBy: text('acceptedBy'),
+  revokedAt: timestamp('revokedAt'),
+  createdAt: timestamp('createdAt').notNull().defaultNow(),
+}, (t) => [index('workspace_invites_workspace_idx').on(t.workspaceId)])
+
 // Layer 1: Data Source Manager
 export const dataSources = pgTable('data_sources', {
   id: text('id').primaryKey(),
   userId: text('userId').notNull(),
+  /** Owning workspace; every query is scoped by this. userId = who created / acted. */
+  workspaceId: text('workspaceId').notNull(),
   name: text('name').notNull(),
   type: text('type').notNull(),
   sourceType: text('sourceType').notNull(),
@@ -60,18 +95,20 @@ export const dataSources = pgTable('data_sources', {
   lastConnected: timestamp('lastConnected'),
   createdAt: timestamp('createdAt').notNull().defaultNow(),
   updatedAt: timestamp('updatedAt').notNull().defaultNow(),
-})
+}, (t) => [index('data_sources_workspace_idx').on(t.workspaceId)])
 
 // Layer 2: Connector Marketplace — per-user purchased/installed plugins
 export const connectorInstalls = pgTable('connector_installs', {
   id: text('id').primaryKey(),
   userId: text('userId').notNull(),
+  /** Owning workspace; every query is scoped by this. userId = who created / acted. */
+  workspaceId: text('workspaceId').notNull(),
   connectorSlug: text('connectorSlug').notNull(),
   purchased: boolean('purchased').notNull().default(false),
   installedAt: timestamp('installedAt'),
   createdAt: timestamp('createdAt').notNull().defaultNow(),
   updatedAt: timestamp('updatedAt').notNull().defaultNow(),
-})
+}, (t) => [uniqueIndex('connector_installs_workspace_slug_idx').on(t.workspaceId, t.connectorSlug)])
 
 export const connectors = pgTable('connectors', {
   id: text('id').primaryKey(),
@@ -92,6 +129,8 @@ export const connectors = pgTable('connectors', {
 export const pipelines = pgTable('pipelines', {
   id: text('id').primaryKey(),
   userId: text('userId').notNull(),
+  /** Owning workspace; every query is scoped by this. userId = who created / acted. */
+  workspaceId: text('workspaceId').notNull(),
   name: text('name').notNull(),
   description: text('description'),
   status: text('status').default('draft'),
@@ -109,7 +148,7 @@ export const pipelines = pgTable('pipelines', {
   state: jsonb('state'),
   createdAt: timestamp('createdAt').notNull().defaultNow(),
   updatedAt: timestamp('updatedAt').notNull().defaultNow(),
-}, (t) => [index('pipelines_next_run_idx').on(t.nextRunAt)])
+}, (t) => [index('pipelines_next_run_idx').on(t.nextRunAt), index('pipelines_workspace_idx').on(t.workspaceId)])
 
 // Pipeline Steps
 export const pipelineSteps = pgTable('pipeline_steps', {
@@ -128,6 +167,8 @@ export const pipelineSteps = pgTable('pipeline_steps', {
 export const executionLogs = pgTable('execution_logs', {
   id: text('id').primaryKey(),
   userId: text('userId').notNull(),
+  /** Owning workspace; every query is scoped by this. userId = who created / acted. */
+  workspaceId: text('workspaceId').notNull(),
   pipelineId: text('pipelineId').notNull(),
   /** running | success | partial | failed */
   status: text('status').notNull(),
@@ -144,7 +185,7 @@ export const executionLogs = pgTable('execution_logs', {
   executionDetails: jsonb('executionDetails'),
   createdAt: timestamp('createdAt').notNull().defaultNow(),
   updatedAt: timestamp('updatedAt').notNull().defaultNow(),
-}, (t) => [index('execution_logs_pipeline_idx').on(t.pipelineId, t.createdAt)])
+}, (t) => [index('execution_logs_pipeline_idx').on(t.pipelineId, t.createdAt), index('execution_logs_workspace_idx').on(t.workspaceId, t.startTime)])
 
 // Rows rejected by a run's Validate step (capped per run) so users can inspect them.
 export const pipelineRunRejects = pgTable('pipeline_run_rejects', {
@@ -152,6 +193,8 @@ export const pipelineRunRejects = pgTable('pipeline_run_rejects', {
   runId: text('runId').notNull(),
   pipelineId: text('pipelineId').notNull(),
   userId: text('userId').notNull(),
+  /** Owning workspace; every query is scoped by this. userId = who created / acted. */
+  workspaceId: text('workspaceId').notNull(),
   row: jsonb('row').notNull(),
   errors: jsonb('errors').notNull(),
   createdAt: timestamp('createdAt').notNull().defaultNow(),
@@ -161,6 +204,8 @@ export const pipelineRunRejects = pgTable('pipeline_run_rejects', {
 export const notifications = pgTable('notifications', {
   id: text('id').primaryKey(),
   userId: text('userId').notNull(),
+  /** Owning workspace; every query is scoped by this. userId = who created / acted. */
+  workspaceId: text('workspaceId').notNull(),
   /** error | warning | info */
   level: text('level').notNull(),
   title: text('title').notNull(),
@@ -171,12 +216,14 @@ export const notifications = pgTable('notifications', {
   emailStatus: text('emailStatus'),
   readAt: timestamp('readAt'),
   createdAt: timestamp('createdAt').notNull().defaultNow(),
-}, (t) => [index('notifications_user_idx').on(t.userId, t.createdAt)])
+}, (t) => [index('notifications_user_idx').on(t.userId, t.workspaceId, t.createdAt)])
 
 // Nexus-managed datasets: pipeline outputs stored as physical tables in the nexus_data schema.
 export const nexusDatasets = pgTable('nexus_datasets', {
   id: text('id').primaryKey(),
   userId: text('userId').notNull(),
+  /** Owning workspace; every query is scoped by this. userId = who created / acted. */
+  workspaceId: text('workspaceId').notNull(),
   name: text('name').notNull(),
   /** Physical table name inside the nexus_data schema. */
   tableName: text('tableName').notNull().unique(),
@@ -187,7 +234,7 @@ export const nexusDatasets = pgTable('nexus_datasets', {
   lastLoadedAt: timestamp('lastLoadedAt'),
   createdAt: timestamp('createdAt').notNull().defaultNow(),
   updatedAt: timestamp('updatedAt').notNull().defaultNow(),
-}, (t) => [uniqueIndex('nexus_datasets_user_name_idx').on(t.userId, t.name)])
+}, (t) => [uniqueIndex('nexus_datasets_workspace_name_idx').on(t.workspaceId, t.name)])
 
 // Layer 6: Data Mapping Studio
 export const dataMappings = pgTable('data_mappings', {
@@ -267,6 +314,8 @@ export const dashboards = pgTable('dashboards', {
 export const pipelineVersions = pgTable('pipeline_versions', {
   id: text('id').primaryKey(),
   userId: text('userId').notNull(),
+  /** Owning workspace; every query is scoped by this. userId = who created / acted. */
+  workspaceId: text('workspaceId').notNull(),
   pipelineId: text('pipelineId').notNull(),
   version: integer('version').notNull(),
   config: jsonb('config').notNull(),
@@ -279,6 +328,8 @@ export const pipelineVersions = pgTable('pipeline_versions', {
 export const auditLogs = pgTable('audit_logs', {
   id: text('id').primaryKey(),
   userId: text('userId').notNull(),
+  /** Owning workspace; every query is scoped by this. userId = who created / acted. */
+  workspaceId: text('workspaceId').notNull(),
   action: text('action').notNull(),
   resource: text('resource').notNull(),
   resourceId: text('resourceId'),

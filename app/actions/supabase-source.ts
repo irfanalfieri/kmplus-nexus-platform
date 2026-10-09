@@ -12,10 +12,14 @@ import {
 import type { SupabaseCredentials } from '@/lib/supabase/types'
 import { decryptCredentials, encryptCredentials } from '@/lib/security/credentials'
 import { and, eq } from 'drizzle-orm'
-import { requireUserId } from '@/lib/auth/session'
+import { requireWorkspace } from '@/lib/auth/session'
+import type { Permission } from '@/lib/auth/permissions'
 import { revalidatePath } from 'next/cache'
 
-const getUserId = requireUserId
+/** Resolves the active workspace and enforces the permission; returns its id for scoping. */
+async function workspaceFor(permission: Permission) {
+  return (await requireWorkspace(permission)).workspaceId
+}
 const idSchema = z.string().trim().min(1).max(100)
 const supabaseCredentialsSchema = z.object({
   projectUrl: z.string().trim().url('Project URL must be a URL').max(300),
@@ -38,11 +42,11 @@ function parseCredentials(sourceId: string, stored: unknown): SupabaseCredential
   }
 }
 
-async function getOwnedSource(sourceId: string, userId: string) {
+async function getOwnedSource(sourceId: string, workspaceId: string) {
   const [source] = await db
     .select()
     .from(dataSources)
-    .where(and(eq(dataSources.id, sourceId), eq(dataSources.userId, userId)))
+    .where(and(eq(dataSources.id, sourceId), eq(dataSources.workspaceId, workspaceId)))
     .limit(1)
 
   if (!source) throw new Error('Data source not found')
@@ -50,19 +54,19 @@ async function getOwnedSource(sourceId: string, userId: string) {
 }
 
 export async function testSupabaseConnectionAction(rawCredentials: SupabaseCredentials) {
-  await getUserId()
+  await workspaceFor('sources:manage')
   return testSupabaseConnection(supabaseCredentialsSchema.parse(rawCredentials))
 }
 
 export async function scanSupabaseSchemaAction(rawCredentials: SupabaseCredentials) {
-  await getUserId()
+  await workspaceFor('sources:manage')
   return scanSupabaseSchema(supabaseCredentialsSchema.parse(rawCredentials))
 }
 
 export async function scanSupabaseSourceSchema(rawSourceId: string) {
-  const userId = await getUserId()
+  const workspaceId = await workspaceFor('sources:manage')
   const sourceId = idSchema.parse(rawSourceId)
-  const source = await getOwnedSource(sourceId, userId)
+  const source = await getOwnedSource(sourceId, workspaceId)
 
   if (source.sourceType !== 'supabase') {
     throw new Error('Source is not a Supabase connection')
@@ -82,7 +86,7 @@ export async function scanSupabaseSourceSchema(rawSourceId: string) {
       lastConnected: new Date(),
       updatedAt: new Date(),
     })
-    .where(and(eq(dataSources.id, sourceId), eq(dataSources.userId, userId)))
+    .where(and(eq(dataSources.id, sourceId), eq(dataSources.workspaceId, workspaceId)))
 
   revalidatePath('/dashboard')
   return scan
@@ -93,11 +97,11 @@ export async function getSupabaseTableSampleAction(
   rawTableName: string,
   rawLimit = 25
 ) {
-  const userId = await getUserId()
+  const workspaceId = await workspaceFor('data:preview')
   const sourceId = idSchema.parse(rawSourceId)
   const tableName = z.string().trim().min(1).max(256).parse(rawTableName)
   const limit = z.number().int().min(1).max(500).parse(rawLimit)
-  const source = await getOwnedSource(sourceId, userId)
+  const source = await getOwnedSource(sourceId, workspaceId)
 
   if (source.sourceType !== 'supabase') {
     throw new Error('Source is not a Supabase connection')
@@ -111,10 +115,10 @@ export async function updateSupabaseSourceCredentials(
   rawSourceId: string,
   rawCredentials: SupabaseCredentials
 ) {
-  const userId = await getUserId()
+  const workspaceId = await workspaceFor('sources:manage')
   const sourceId = idSchema.parse(rawSourceId)
   const credentials = supabaseCredentialsSchema.parse(rawCredentials)
-  await getOwnedSource(sourceId, userId)
+  await getOwnedSource(sourceId, workspaceId)
   const test = await testSupabaseConnection(credentials)
 
   if (!test.ok) {
@@ -132,7 +136,7 @@ export async function updateSupabaseSourceCredentials(
       lastConnected: new Date(),
       updatedAt: new Date(),
     })
-    .where(and(eq(dataSources.id, sourceId), eq(dataSources.userId, userId)))
+    .where(and(eq(dataSources.id, sourceId), eq(dataSources.workspaceId, workspaceId)))
 
   revalidatePath('/dashboard')
   return { ok: true as const, scan, maskedCredentials: maskSupabaseCredentials(credentials) }

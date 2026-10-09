@@ -12,6 +12,7 @@ import PipelineEditor, { blankPipeline, SampleTable, type EditablePipeline } fro
 import RunHistory, { formatWhen, statusBadge } from '@/components/pipelines/run-history'
 import type { BuilderOptions } from '@/components/pipelines/step-editors'
 import { NOTIFICATIONS_CHANGED } from '@/components/dashboard/notification-bell'
+import { useCan } from '@/components/workspace/workspace-context'
 
 type PipelineRow = Awaited<ReturnType<typeof listPipelines>>[number]
 
@@ -40,6 +41,9 @@ export default function PipelineDesignerLayer() {
   const [running, setRunning] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [preview, setPreview] = useState<{ name: string; rows: Record<string, unknown>[] } | null>(null)
+  const canEdit = useCan('pipelines:edit')
+  const canRun = useCan('pipelines:run')
+  const canPreview = useCan('data:preview')
 
   const load = useCallback(async () => {
     try {
@@ -160,9 +164,11 @@ export default function PipelineDesignerLayer() {
             <h2 className="text-2xl font-bold">Pipelines</h2>
             <p className="mt-1 text-muted-foreground">Read from a data source, filter, map and validate rows, then write to a Nexus dataset or back into a database.</p>
           </div>
-          <Button onClick={() => setEditing(blankPipeline())} disabled={loading}>
-            <Plus className="mr-2 h-4 w-4" /> New pipeline
-          </Button>
+          {canEdit && (
+            <Button onClick={() => setEditing(blankPipeline())} disabled={loading}>
+              <Plus className="mr-2 h-4 w-4" /> New pipeline
+            </Button>
+          )}
         </div>
       </div>
 
@@ -196,9 +202,13 @@ export default function PipelineDesignerLayer() {
                 ? 'Create your first pipeline to move data from a connected source into a Nexus dataset or another database.'
                 : 'Connect a data source first (Data Sources tab), then create a pipeline that reads from it.'}
             </p>
-            <Button className="mt-4" onClick={() => setEditing(blankPipeline())}>
-              <Plus className="mr-2 h-4 w-4" /> New pipeline
-            </Button>
+            {canEdit ? (
+              <Button className="mt-4" onClick={() => setEditing(blankPipeline())}>
+                <Plus className="mr-2 h-4 w-4" /> New pipeline
+              </Button>
+            ) : (
+              <p className="mt-3 text-xs text-muted-foreground">Admins and data stewards create pipelines.</p>
+            )}
           </div>
         ) : (
           items.map((p) => {
@@ -234,28 +244,30 @@ export default function PipelineDesignerLayer() {
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    {schedule.type !== 'manual' && (
+                    {schedule.type !== 'manual' && canRun && (
                       <label className="flex items-center gap-2 rounded-md border border-border px-2 py-1 text-xs">
                         <input type="checkbox" checked={p.enabled ?? false} onChange={() => toggle(p)} />
                         Scheduled
                       </label>
                     )}
-                    <Button size="sm" onClick={() => run(p)} disabled={running !== null}>
+                    {canRun && <Button size="sm" onClick={() => run(p)} disabled={running !== null}>
                       {running === p.id ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Play className="mr-1 h-4 w-4" />}
                       {running === p.id ? 'Running…' : 'Run now'}
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => setEditing(toEditable(p))}>
-                      <Edit className="mr-1 h-4 w-4" /> Edit
-                    </Button>
+                    </Button>}
+                    {canEdit && (
+                      <Button size="sm" variant="outline" onClick={() => setEditing(toEditable(p))}>
+                        <Edit className="mr-1 h-4 w-4" /> Edit
+                      </Button>
+                    )}
                     <Button size="sm" variant="outline" onClick={() => setHistoryFor(p)}>
                       <History className="mr-1 h-4 w-4" /> History
                     </Button>
-                    {src?.mode === 'incremental' && p.syncPosition && (
+                    {src?.mode === 'incremental' && p.syncPosition && canEdit && (
                       <Button size="sm" variant="ghost" onClick={() => void resetSync(p)} title="Forget the sync position so the next run reads every row">
                         <RotateCcw className="mr-1 h-4 w-4" /> Reset sync
                       </Button>
                     )}
-                    {confirmDelete === p.id ? (
+                    {!canEdit ? null : confirmDelete === p.id ? (
                       <span className="flex items-center gap-1 text-xs">
                         Delete &ldquo;{p.name}&rdquo; and its run history?
                         <Button size="sm" variant="destructive" onClick={() => remove(p.id)}>Delete</Button>
@@ -292,7 +304,7 @@ export default function PipelineDesignerLayer() {
           </div>
           <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
             {options.datasets.map((d) => (
-              <button key={d.name} onClick={() => openPreview(d.name)} className={`rounded-lg border p-3 text-left text-sm hover:bg-muted/40 ${preview?.name === d.name ? 'border-primary' : 'border-border'}`}>
+              <button key={d.name} disabled={!canPreview} title={canPreview ? undefined : 'Your role cannot view dataset contents'} onClick={() => openPreview(d.name)} className={`rounded-lg border p-3 text-left text-sm hover:bg-muted/40 disabled:cursor-default disabled:hover:bg-transparent ${preview?.name === d.name ? 'border-primary' : 'border-border'}`}>
                 <div className="font-mono font-medium">{d.name}</div>
                 <div className="mt-1 text-xs text-muted-foreground">
                   {(d.rowCount ?? 0).toLocaleString()} rows · {d.columns.length} columns · loaded {formatWhen(d.lastLoadedAt)}

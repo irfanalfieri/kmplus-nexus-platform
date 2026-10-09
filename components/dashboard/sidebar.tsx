@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { BarChart3, Database, Zap, Settings, LogOut, Workflow } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { authClient } from '@/lib/auth-client'
+import WorkspaceSwitcher from '@/components/workspace/workspace-switcher'
 
 interface SidebarProps {
   activeTab: string
@@ -19,6 +20,9 @@ export default function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
           <h1 className="text-xl font-bold">KMPlus Nexus</h1>
         </div>
         <p className="text-xs text-muted-foreground mt-1">Enterprise Integration</p>
+        <div className="mt-4">
+          <WorkspaceSwitcher />
+        </div>
       </div>
 
       <nav className="flex-1 p-4 space-y-2 overflow-auto">
@@ -67,9 +71,14 @@ export default function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
       </nav>
 
       <div className="p-4 border-t border-border space-y-2">
-        <Button variant="outline" className="w-full justify-start" size="sm">
+        <Button
+          variant={activeTab === 'settings' ? 'default' : 'outline'}
+          className="w-full justify-start"
+          size="sm"
+          onClick={() => setActiveTab('settings')}
+        >
           <Settings className="w-4 h-4 mr-2" />
-          Settings
+          Workspace settings
         </Button>
         <Button
           variant="ghost"

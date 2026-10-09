@@ -6,7 +6,11 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test:engine": "node scripts/run-ts.mjs scripts/engine-tests.ts",
+    "test:connectors": "node --env-file=.env.local scripts/run-ts.mjs scripts/connector-harness.ts",
+    "db:migrate": "node --env-file=.env.local scripts/db-migrate.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",
@@ -47,5 +51,6 @@
     "overrides": {
       "hono": "4.12.25"
     }
-  }
+  },
+  "packageManager": "pnpm@10.34.6"
 }

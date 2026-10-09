@@ -6,19 +6,30 @@ import { revalidatePath } from 'next/cache'
 import { db } from '@/lib/db'
 import { auditLogs, dataSources, pipelines } from '@/lib/db/schema'
 import { assertConnectorInstalled } from '@/app/actions/connectors'
-import { isConnectorSlug } from '@/lib/connectors/catalog'
+import { getConnectorDefinition, isConnectorSlug } from '@/lib/connectors/catalog'
 import { decryptCredentials, encryptCredentials } from '@/lib/security/credentials'
-import { newId, requireUserId } from '@/lib/auth/session'
+import { newId, requireWorkspace, type WorkspaceContext } from '@/lib/auth/session'
 
 const idSchema = z.string().trim().min(1).max(100)
 const roleSchema = z.enum(['source', 'destination'])
+const credentialValues = z.record(z.string().max(100), z.union([z.string().max(20000), z.number(), z.boolean(), z.null()]))
 
-async function audit(userId: string, action: string, resourceId: string, changes?: Record<string, unknown>) {
-  await db.insert(auditLogs).values({ id: newId('audit'), userId, action, resource: 'data_source', resourceId, changes })
+async function audit(ctx: WorkspaceContext, action: string, resourceId: string, changes?: Record<string, unknown>) {
+  await db.insert(auditLogs).values({ id: newId('audit'), userId: ctx.userId, workspaceId: ctx.workspaceId, action, resource: 'data_source', resourceId, changes })
+}
+
+async function getOwned(ctx: WorkspaceContext, id: string) {
+  const [source] = await db
+    .select()
+    .from(dataSources)
+    .where(and(eq(dataSources.id, id), eq(dataSources.workspaceId, ctx.workspaceId)))
+    .limit(1)
+  if (!source) throw new Error('Data source not found')
+  return source
 }
 
 export async function getDataSources() {
-  const userId = await requireUserId()
+  const ctx = await requireWorkspace()
   // Never send credentials to the client.
   return db
     .select({
@@ -34,7 +45,7 @@ export async function getDataSources() {
       updatedAt: dataSources.updatedAt,
     })
     .from(dataSources)
-    .where(eq(dataSources.userId, userId))
+    .where(eq(dataSources.workspaceId, ctx.workspaceId))
     .orderBy(desc(dataSources.createdAt))
 }
 
@@ -46,11 +57,11 @@ const createInput = z.object({
     .object({ role: roleSchema.default('source'), schemaScan: z.unknown().optional() })
     .passthrough()
     .default({ role: 'source' }),
-  credentials: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).default({}),
+  credentials: credentialValues.default({}),
 })
 
 export async function createDataSource(input: z.input<typeof createInput>) {
-  const userId = await requireUserId()
+  const ctx = await requireWorkspace('sources:manage')
   const data = createInput.parse(input)
   if (!isConnectorSlug(data.sourceType)) throw new Error(`Unknown connector "${data.sourceType}".`)
   await assertConnectorInstalled(data.sourceType)
@@ -59,7 +70,8 @@ export async function createDataSource(input: z.input<typeof createInput>) {
   const hasSchemaScan = Boolean(data.config.schemaScan)
   await db.insert(dataSources).values({
     id,
-    userId,
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
     name: data.name,
     type: data.type,
     sourceType: data.sourceType,
@@ -68,87 +80,142 @@ export async function createDataSource(input: z.input<typeof createInput>) {
     status: hasSchemaScan ? 'connected' : 'disconnected',
     lastConnected: hasSchemaScan ? new Date() : undefined,
   })
-  await audit(userId, 'CREATE', id, { sourceType: data.sourceType, role: data.config.role })
+  await audit(ctx, 'CREATE', id, { sourceType: data.sourceType, role: data.config.role })
   revalidatePath('/dashboard')
   return id
 }
 
+function asStrings(values: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(values).map(([k, v]) => [k, v == null ? '' : String(v)]))
+}
+
+/** Tests the stored credentials and refreshes the schema scan. */
 export async function testConnection(rawId: string) {
-  const userId = await requireUserId()
-  const id = idSchema.parse(rawId)
-  const [source] = await db
-    .select()
-    .from(dataSources)
-    .where(and(eq(dataSources.id, id), eq(dataSources.userId, userId)))
-    .limit(1)
-  if (!source) throw new Error('Data source not found')
+  const ctx = await requireWorkspace('sources:manage')
+  const source = await getOwned(ctx, idSchema.parse(rawId))
   if (!isConnectorSlug(source.sourceType)) throw new Error(`Unknown connector "${source.sourceType}".`)
 
   const { testConnectorConnection, scanConnectorSchema } = await import('@/lib/connectors/runtime')
   await assertConnectorInstalled(source.sourceType)
-  const credentials = Object.fromEntries(
-    Object.entries(decryptCredentials(source.id, source.credentials)).map(([k, v]) => [k, v == null ? '' : String(v)])
-  )
+  const credentials = asStrings(decryptCredentials(source.id, source.credentials))
   const test = await testConnectorConnection(source.sourceType, credentials)
   if (!test.ok) throw new Error(test.message)
 
   const scan = await scanConnectorSchema(source.sourceType, credentials)
   await db
     .update(dataSources)
-    .set({
-      status: 'connected',
-      lastConnected: new Date(),
-      updatedAt: new Date(),
-      config: { ...(source.config as Record<string, unknown>), schemaScan: scan },
-    })
-    .where(and(eq(dataSources.id, id), eq(dataSources.userId, userId)))
+    .set({ status: 'connected', lastConnected: new Date(), updatedAt: new Date(), config: { ...(source.config as Record<string, unknown>), schemaScan: scan } })
+    .where(and(eq(dataSources.id, source.id), eq(dataSources.workspaceId, ctx.workspaceId)))
   revalidatePath('/dashboard')
   return { tables: scan.tables.length }
 }
 
+/**
+ * Non-secret credential values for the edit form. Secret fields (type
+ * "password" in the catalog) are never returned; the form leaves them blank.
+ */
+export async function getEditableCredentials(rawId: string) {
+  const ctx = await requireWorkspace('sources:manage')
+  const source = await getOwned(ctx, idSchema.parse(rawId))
+  const definition = getConnectorDefinition(source.sourceType)
+  if (!definition || !definition.credentialFields.length) {
+    return { supported: false as const, sourceType: source.sourceType }
+  }
+  const stored = asStrings(decryptCredentials(source.id, source.credentials))
+  const values: Record<string, string> = {}
+  const secretsSet: string[] = []
+  for (const field of definition.credentialFields) {
+    if (field.type === 'password') {
+      if (stored[field.key]) secretsSet.push(field.key)
+    } else {
+      values[field.key] = stored[field.key] ?? ''
+    }
+  }
+  return { supported: true as const, sourceType: source.sourceType, fields: definition.credentialFields, values, secretsSet }
+}
+
+/**
+ * Updates credentials: submitted values override stored ones, blank secret
+ * fields keep their stored value. The merged credentials must pass a
+ * connection test before they are saved (and the schema is re-scanned).
+ */
+export async function updateDataSourceCredentials(rawId: string, rawValues: Record<string, unknown>) {
+  const ctx = await requireWorkspace('sources:manage')
+  const source = await getOwned(ctx, idSchema.parse(rawId))
+  const values = asStrings(credentialValues.parse(rawValues))
+  const definition = getConnectorDefinition(source.sourceType)
+  if (!definition?.credentialFields.length || !isConnectorSlug(source.sourceType)) {
+    throw new Error('Editing credentials for this connector type is not supported yet. Re-create the data source instead.')
+  }
+  const known = new Map(definition.credentialFields.map((f) => [f.key, f]))
+  const merged = asStrings(decryptCredentials(source.id, source.credentials))
+  for (const [key, value] of Object.entries(values)) {
+    const field = known.get(key)
+    if (!field) continue
+    if (field.type === 'password' && value === '') continue // keep stored secret
+    merged[key] = value
+  }
+  const missing = definition.credentialFields.filter((f) => f.required && !merged[f.key]?.trim()).map((f) => f.label)
+  if (missing.length) throw new Error(`Required: ${missing.join(', ')}`)
+
+  const { testConnectorConnection, scanConnectorSchema } = await import('@/lib/connectors/runtime')
+  const test = await testConnectorConnection(source.sourceType, merged)
+  if (!test.ok) return { ok: false as const, message: test.message }
+  const scan = await scanConnectorSchema(source.sourceType, merged)
+
+  await db
+    .update(dataSources)
+    .set({
+      credentials: encryptCredentials(source.id, merged),
+      config: { ...(source.config as Record<string, unknown>), schemaScan: scan },
+      status: 'connected',
+      lastConnected: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(and(eq(dataSources.id, source.id), eq(dataSources.workspaceId, ctx.workspaceId)))
+  // Record which fields changed, never their values.
+  await audit(ctx, 'UPDATE_CREDENTIALS', source.id, { fields: Object.keys(values).filter((k) => known.has(k) && values[k] !== '') })
+  revalidatePath('/dashboard')
+  return { ok: true as const, message: `${test.message} Found ${scan.tables.length} objects.` }
+}
+
 export async function renameDataSource(rawId: string, rawName: string) {
-  const userId = await requireUserId()
+  const ctx = await requireWorkspace('sources:manage')
   const id = idSchema.parse(rawId)
   const name = z.string().trim().min(1, 'Name is required').max(120).parse(rawName)
   await db
     .update(dataSources)
     .set({ name, updatedAt: new Date() })
-    .where(and(eq(dataSources.id, id), eq(dataSources.userId, userId)))
-  await audit(userId, 'UPDATE', id, { name })
+    .where(and(eq(dataSources.id, id), eq(dataSources.workspaceId, ctx.workspaceId)))
+  await audit(ctx, 'UPDATE', id, { name })
   revalidatePath('/dashboard')
 }
 
 /** Switches a data source between source and destination (pipelines only write to destinations). */
 export async function setDataSourceRole(rawId: string, rawRole: string) {
-  const userId = await requireUserId()
-  const id = idSchema.parse(rawId)
+  const ctx = await requireWorkspace('sources:manage')
+  const source = await getOwned(ctx, idSchema.parse(rawId))
   const role = roleSchema.parse(rawRole)
-  const [source] = await db
-    .select({ config: dataSources.config })
-    .from(dataSources)
-    .where(and(eq(dataSources.id, id), eq(dataSources.userId, userId)))
-    .limit(1)
-  if (!source) throw new Error('Data source not found')
   await db
     .update(dataSources)
     .set({ config: { ...(source.config as Record<string, unknown>), role }, updatedAt: new Date() })
-    .where(and(eq(dataSources.id, id), eq(dataSources.userId, userId)))
-  await audit(userId, 'UPDATE', id, { role })
+    .where(and(eq(dataSources.id, source.id), eq(dataSources.workspaceId, ctx.workspaceId)))
+  await audit(ctx, 'UPDATE', source.id, { role })
   revalidatePath('/dashboard')
 }
 
 export async function deleteDataSource(rawId: string) {
-  const userId = await requireUserId()
+  const ctx = await requireWorkspace('sources:manage')
   const id = idSchema.parse(rawId)
   const used = await db
     .select({ name: pipelines.name, sourceId: pipelines.sourceId, destinationId: pipelines.destinationId })
     .from(pipelines)
-    .where(eq(pipelines.userId, userId))
+    .where(eq(pipelines.workspaceId, ctx.workspaceId))
   const dependents = used.filter((p) => p.sourceId === id || p.destinationId === id).map((p) => p.name)
   if (dependents.length) {
     throw new Error(`Used by pipeline${dependents.length > 1 ? 's' : ''} ${dependents.map((n) => `"${n}"`).join(', ')}. Change or delete ${dependents.length > 1 ? 'them' : 'it'} first.`)
   }
-  await db.delete(dataSources).where(and(eq(dataSources.id, id), eq(dataSources.userId, userId)))
-  await audit(userId, 'DELETE', id)
+  await db.delete(dataSources).where(and(eq(dataSources.id, id), eq(dataSources.workspaceId, ctx.workspaceId)))
+  await audit(ctx, 'DELETE', id)
   revalidatePath('/dashboard')
 }

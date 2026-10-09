@@ -4,8 +4,8 @@ import { z } from 'zod'
 import { and, desc, eq, gte, inArray, isNull, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/lib/db'
-import { executionLogs, nexusDatasets, notifications, pipelines } from '@/lib/db/schema'
-import { requireUserId } from '@/lib/auth/session'
+import { connectorInstalls, dataSources, executionLogs, nexusDatasets, notifications, pipelines } from '@/lib/db/schema'
+import { requireWorkspace } from '@/lib/auth/session'
 import { scheduleSchema } from '@/lib/pipelines/definition'
 
 const TZ = 'Asia/Jakarta'
@@ -20,7 +20,7 @@ function jakartaDay(d: Date) {
 }
 
 export async function getMonitoringOverview() {
-  const userId = await requireUserId()
+  const ctx = await requireWorkspace()
   const now = Date.now()
   const since = new Date(now - 8 * 24 * 60 * 60 * 1000)
 
@@ -37,7 +37,7 @@ export async function getMonitoringOverview() {
         version: pipelines.version,
       })
       .from(pipelines)
-      .where(eq(pipelines.userId, userId)),
+      .where(eq(pipelines.workspaceId, ctx.workspaceId)),
     db
       .select({
         id: executionLogs.id,
@@ -52,12 +52,12 @@ export async function getMonitoringOverview() {
         errorMessage: executionLogs.errorMessage,
       })
       .from(executionLogs)
-      .where(and(eq(executionLogs.userId, userId), gte(executionLogs.startTime, since)))
+      .where(and(eq(executionLogs.workspaceId, ctx.workspaceId), gte(executionLogs.startTime, since)))
       .orderBy(desc(executionLogs.startTime)),
     db
       .select({ name: nexusDatasets.name, rowCount: nexusDatasets.rowCount, lastLoadedAt: nexusDatasets.lastLoadedAt, columns: nexusDatasets.columns, pipelineId: nexusDatasets.pipelineId })
       .from(nexusDatasets)
-      .where(eq(nexusDatasets.userId, userId))
+      .where(eq(nexusDatasets.workspaceId, ctx.workspaceId))
       .orderBy(desc(nexusDatasets.lastLoadedAt)),
   ])
 
@@ -144,29 +144,88 @@ export async function getMonitoringOverview() {
 // ── Notifications (bell) ─────────────────────────────────────────────────────
 
 export async function listNotifications(limit = 20) {
-  const userId = await requireUserId()
+  const ctx = await requireWorkspace()
   const take = z.number().int().min(1).max(100).parse(limit)
   const [rows, [{ unread }]] = await Promise.all([
     db
       .select()
       .from(notifications)
-      .where(eq(notifications.userId, userId))
+      .where(and(eq(notifications.userId, ctx.userId), eq(notifications.workspaceId, ctx.workspaceId)))
       .orderBy(desc(notifications.createdAt))
       .limit(take),
     db
       .select({ unread: sql<number>`count(*)::int` })
       .from(notifications)
-      .where(and(eq(notifications.userId, userId), isNull(notifications.readAt))),
+      .where(and(eq(notifications.userId, ctx.userId), eq(notifications.workspaceId, ctx.workspaceId), isNull(notifications.readAt))),
   ])
   return { unread, items: rows }
 }
 
 export async function markNotificationsRead(ids?: string[]) {
-  const userId = await requireUserId()
+  const ctx = await requireWorkspace()
   const parsed = z.array(z.string().min(1).max(100)).max(200).optional().parse(ids)
   const scope = parsed?.length
-    ? and(eq(notifications.userId, userId), inArray(notifications.id, parsed))
-    : eq(notifications.userId, userId)
+    ? and(eq(notifications.userId, ctx.userId), eq(notifications.workspaceId, ctx.workspaceId), inArray(notifications.id, parsed))
+    : and(eq(notifications.userId, ctx.userId), eq(notifications.workspaceId, ctx.workspaceId))
   await db.update(notifications).set({ readAt: new Date() }).where(and(scope, isNull(notifications.readAt)))
   revalidatePath('/dashboard')
+}
+
+// ── Overview (dashboard home) ────────────────────────────────────────────────
+
+export async function getOverview() {
+  const ctx = await requireWorkspace()
+  const since24h = new Date(Date.now() - 86_400_000)
+  const [[sources], [installs], [pipes], [runs24], [datasets], attention] = await Promise.all([
+    db
+      .select({ total: sql<number>`count(*)::int`, connected: sql<number>`count(*) filter (where ${dataSources.status} = 'connected')::int` })
+      .from(dataSources)
+      .where(eq(dataSources.workspaceId, ctx.workspaceId)),
+    db
+      .select({ installed: sql<number>`count(*) filter (where ${connectorInstalls.installedAt} is not null)::int` })
+      .from(connectorInstalls)
+      .where(eq(connectorInstalls.workspaceId, ctx.workspaceId)),
+    db
+      .select({
+        total: sql<number>`count(*)::int`,
+        scheduled: sql<number>`count(*) filter (where ${pipelines.enabled} and ${pipelines.nextRunAt} is not null)::int`,
+        failing: sql<number>`count(*) filter (where ${pipelines.lastRunStatus} = 'failed')::int`,
+        everRun: sql<number>`count(*) filter (where ${pipelines.lastRunAt} is not null)::int`,
+      })
+      .from(pipelines)
+      .where(eq(pipelines.workspaceId, ctx.workspaceId)),
+    db
+      .select({
+        runs: sql<number>`count(*)::int`,
+        failed: sql<number>`count(*) filter (where ${executionLogs.status} = 'failed')::int`,
+        written: sql<number>`coalesce(sum(${executionLogs.recordsSuccess}), 0)::int`,
+      })
+      .from(executionLogs)
+      .where(and(eq(executionLogs.workspaceId, ctx.workspaceId), gte(executionLogs.startTime, since24h))),
+    db
+      .select({ count: sql<number>`count(*)::int`, rows: sql<number>`coalesce(sum(${nexusDatasets.rowCount}), 0)::int` })
+      .from(nexusDatasets)
+      .where(eq(nexusDatasets.workspaceId, ctx.workspaceId)),
+    db
+      .select({ id: pipelines.id, name: pipelines.name, lastRunStatus: pipelines.lastRunStatus, lastRunAt: pipelines.lastRunAt })
+      .from(pipelines)
+      .where(and(eq(pipelines.workspaceId, ctx.workspaceId), inArray(pipelines.lastRunStatus, ['failed', 'partial'])))
+      .orderBy(desc(pipelines.lastRunAt))
+      .limit(5),
+  ])
+  return {
+    sources,
+    connectorsInstalled: installs?.installed ?? 0,
+    pipelines: pipes,
+    last24h: runs24,
+    datasets,
+    attention,
+    checklist: [
+      { key: 'connector', label: 'Install a connector', done: (installs?.installed ?? 0) > 0, tab: 'connectors' },
+      { key: 'source', label: 'Connect a data source', done: sources.connected > 0, tab: 'sources' },
+      { key: 'pipeline', label: 'Create a pipeline', done: pipes.total > 0, tab: 'pipelines' },
+      { key: 'run', label: 'Run it once', done: pipes.everRun > 0, tab: 'pipelines' },
+      { key: 'schedule', label: 'Put it on a schedule', done: pipes.scheduled > 0, tab: 'pipelines' },
+    ],
+  }
 }

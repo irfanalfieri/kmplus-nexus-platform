@@ -180,7 +180,8 @@ export function parseRestConfig(raw: ConnectorCredentials): RestConfig {
     dataPath: get('dataPath'),
     queryParams: get('queryParams'),
     graphqlQuery: get('graphqlQuery'),
-    apiKeyHeader: get('apiKeyHeader', get('authHeader', 'X-API-Key')),
+    // authHeader: legacy credential key from older saved REST sources.
+    apiKeyHeader: get('apiKeyHeader', raw.authHeader?.trim() || 'X-API-Key'),
     apiKeyValue: get('apiKeyValue', raw.apiKey ?? ''),
     apiKeyLocation: (get('apiKeyLocation', 'header') as 'header' | 'query') || 'header',
     apiKeyPrefix: get('apiKeyPrefix'),
