@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { Check, Copy, Link2, Loader2, LogOut, Save, Settings, Trash2, UserPlus, Users } from 'lucide-react'
+import { Check, Copy, Link2, Loader2, LogOut, RotateCcw, Save, Settings, ShieldAlert, ShieldCheck, Trash2, UserPlus, Users } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -11,12 +11,14 @@ import {
   listInvites,
   listMembers,
   removeMember,
+  resetMemberTwoFactor,
   renameWorkspace,
   revokeInvite,
-} from '@/app/actions/workspaces'
+} from '@/lib/actions/workspaces'
 import { ROLE_INFO, ROLES, type Role } from '@/lib/auth/permissions'
 import { useCan, useWorkspace } from '@/components/workspace/workspace-context'
 import { AuditLog } from '@/components/workspace/audit-log'
+import { AccountSecurity } from '@/components/workspace/account-security'
 
 type Member = Awaited<ReturnType<typeof listMembers>>[number]
 type Invite = Awaited<ReturnType<typeof listInvites>>[number]
@@ -39,6 +41,7 @@ export default function WorkspaceSettingsLayer() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [confirmLeave, setConfirmLeave] = useState(false)
+  const [confirmReset, setConfirmReset] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -105,6 +108,8 @@ export default function WorkspaceSettingsLayer() {
       {error && <p className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
       {notice && <p className="rounded-lg border border-green-600/30 bg-green-600/10 p-3 text-sm text-green-700 dark:text-green-400">{notice}</p>}
 
+      <AccountSecurity />
+
       <section className="rounded-xl border border-border bg-card p-5">
         <h3 className="mb-3 font-semibold">Workspace name</h3>
         <form
@@ -129,11 +134,12 @@ export default function WorkspaceSettingsLayer() {
           <h3 className="font-semibold">Members ({members.length})</h3>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[640px] text-sm">
+          <table className="w-full min-w-[720px] text-sm">
             <thead>
               <tr className="border-b border-border text-left text-xs uppercase text-muted-foreground">
                 <th className="px-2 py-2">Member</th>
                 <th className="px-2 py-2">Role</th>
+                <th className="px-2 py-2">2FA</th>
                 <th className="px-2 py-2">Joined</th>
                 <th className="px-2 py-2" />
               </tr>
@@ -166,12 +172,44 @@ export default function WorkspaceSettingsLayer() {
                       ROLE_INFO[m.role].label
                     )}
                   </td>
+                  <td className="px-2 py-2">
+                    {m.twoFactorEnabled ? (
+                      <span className="flex items-center gap-1 text-green-700 dark:text-green-400"><ShieldCheck className="h-4 w-4" aria-hidden /> On</span>
+                    ) : (
+                      <span className="flex items-center gap-1 text-amber-700 dark:text-amber-300"><ShieldAlert className="h-4 w-4" aria-hidden /> Setup pending</span>
+                    )}
+                  </td>
                   <td className="px-2 py-2 text-muted-foreground">{when(m.joinedAt)}</td>
                   <td className="px-2 py-2 text-right">
                     {isAdmin && !m.isYou && (
-                      <Button size="sm" variant="ghost" disabled={busy !== null} onClick={() => void act(`remove:${m.userId}`, () => removeMember(m.userId), `${m.email} removed.`)} aria-label={`Remove ${m.email}`}>
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      confirmReset === m.userId ? (
+                        <span className="inline-flex items-center gap-1 text-xs">
+                          Reset 2FA and sign them out?
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            disabled={busy !== null}
+                            onClick={() => {
+                              setConfirmReset(null)
+                              void act(`reset:${m.userId}`, () => resetMemberTwoFactor(m.userId), `2FA reset for ${m.email}. They set it up again at their next sign-in.`)
+                            }}
+                          >
+                            Reset
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => setConfirmReset(null)}>Cancel</Button>
+                        </span>
+                      ) : (
+                        <span className="inline-flex gap-1">
+                          {m.twoFactorEnabled && (
+                            <Button size="sm" variant="ghost" disabled={busy !== null} onClick={() => setConfirmReset(m.userId)} aria-label={`Reset 2FA for ${m.email}`} title="Reset 2FA (lost phone)">
+                              <RotateCcw className="h-4 w-4" />
+                            </Button>
+                          )}
+                          <Button size="sm" variant="ghost" disabled={busy !== null} onClick={() => void act(`remove:${m.userId}`, () => removeMember(m.userId), `${m.email} removed.`)} aria-label={`Remove ${m.email}`}>
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </span>
+                      )
                     )}
                   </td>
                 </tr>

@@ -18,7 +18,7 @@ import {
 } from '@/lib/pipelines/definition'
 import { describeSchedule, formatInTimezone, nextRunTimes } from '@/lib/pipelines/schedule'
 import type { EngineResult } from '@/lib/pipelines/engine'
-import { savePipeline, testPipeline } from '@/app/actions/pipelines'
+import { savePipeline, testPipeline } from '@/lib/actions/pipelines'
 import {
   DestinationEditor,
   FilterEditor,
@@ -432,7 +432,7 @@ function ScheduleSection({
 
 export function SampleTable({ rows }: { rows: Record<string, unknown>[] }) {
   const cols = Array.from(new Set(rows.flatMap((r) => Object.keys(r)))).slice(0, 20)
-  const show = (v: unknown) => (v === null || v === undefined ? '∅' : typeof v === 'object' ? JSON.stringify(v) : String(v))
+  const show = (v: unknown) => (v === null || v === undefined ? '∅' : v instanceof Date ? v.toISOString() : typeof v === 'object' ? JSON.stringify(v) : String(v))
   return (
     <div className="mt-3 max-h-72 overflow-auto rounded-md border border-border">
       <table className="w-full text-xs">

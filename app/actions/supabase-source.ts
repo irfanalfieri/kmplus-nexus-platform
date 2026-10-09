@@ -16,6 +16,7 @@ import { requireWorkspace } from '@/lib/auth/session'
 import { recordAudit } from '@/lib/audit'
 import type { Permission } from '@/lib/auth/permissions'
 import { revalidatePath } from 'next/cache'
+import { guard } from '@/lib/server-action'
 
 /** Resolves the active workspace and enforces the permission; returns its id for scoping. */
 async function workspaceFor(permission: Permission) {
@@ -54,17 +55,17 @@ async function getOwnedSource(sourceId: string, workspaceId: string) {
   return source
 }
 
-export async function testSupabaseConnectionAction(rawCredentials: SupabaseCredentials) {
+async function testSupabaseConnectionActionImpl(rawCredentials: SupabaseCredentials) {
   await workspaceFor('sources:manage')
   return testSupabaseConnection(supabaseCredentialsSchema.parse(rawCredentials))
 }
 
-export async function scanSupabaseSchemaAction(rawCredentials: SupabaseCredentials) {
+async function scanSupabaseSchemaActionImpl(rawCredentials: SupabaseCredentials) {
   await workspaceFor('sources:manage')
   return scanSupabaseSchema(supabaseCredentialsSchema.parse(rawCredentials))
 }
 
-export async function scanSupabaseSourceSchema(rawSourceId: string) {
+async function scanSupabaseSourceSchemaImpl(rawSourceId: string) {
   const workspaceId = await workspaceFor('sources:manage')
   const sourceId = idSchema.parse(rawSourceId)
   const source = await getOwnedSource(sourceId, workspaceId)
@@ -93,7 +94,7 @@ export async function scanSupabaseSourceSchema(rawSourceId: string) {
   return scan
 }
 
-export async function getSupabaseTableSampleAction(
+async function getSupabaseTableSampleActionImpl(
   rawSourceId: string,
   rawTableName: string,
   rawLimit = 25
@@ -114,7 +115,7 @@ export async function getSupabaseTableSampleAction(
   return fetchSupabaseTableSample(credentials, tableName, limit)
 }
 
-export async function updateSupabaseSourceCredentials(
+async function updateSupabaseSourceCredentialsImpl(
   rawSourceId: string,
   rawCredentials: SupabaseCredentials
 ) {
@@ -143,4 +144,27 @@ export async function updateSupabaseSourceCredentials(
 
   revalidatePath('/dashboard')
   return { ok: true as const, scan, maskedCredentials: maskSupabaseCredentials(credentials) }
+}
+
+// ── Server actions: thin wrappers that return errors as values so their messages
+// reach the user in production. Call them through lib/actions/supabase-source.ts. ──
+
+export async function testSupabaseConnectionAction(...args: Parameters<typeof testSupabaseConnectionActionImpl>) {
+  return guard(() => testSupabaseConnectionActionImpl(...args))
+}
+
+export async function scanSupabaseSchemaAction(...args: Parameters<typeof scanSupabaseSchemaActionImpl>) {
+  return guard(() => scanSupabaseSchemaActionImpl(...args))
+}
+
+export async function scanSupabaseSourceSchema(...args: Parameters<typeof scanSupabaseSourceSchemaImpl>) {
+  return guard(() => scanSupabaseSourceSchemaImpl(...args))
+}
+
+export async function getSupabaseTableSampleAction(...args: Parameters<typeof getSupabaseTableSampleActionImpl>) {
+  return guard(() => getSupabaseTableSampleActionImpl(...args))
+}
+
+export async function updateSupabaseSourceCredentials(...args: Parameters<typeof updateSupabaseSourceCredentialsImpl>) {
+  return guard(() => updateSupabaseSourceCredentialsImpl(...args))
 }

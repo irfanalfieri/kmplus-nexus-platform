@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { History, Loader2, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { listAuditLogs } from '@/app/actions/audit'
+import { listAuditLogs } from '@/lib/actions/audit'
 
 type Row = Awaited<ReturnType<typeof listAuditLogs>>['rows'][number]
 

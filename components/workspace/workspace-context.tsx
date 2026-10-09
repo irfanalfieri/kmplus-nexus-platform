@@ -1,7 +1,7 @@
 'use client'
 
 import { createContext, useContext } from 'react'
-import type { getWorkspaceContext } from '@/app/actions/workspaces'
+import type { getWorkspaceContext } from '@/lib/actions/workspaces'
 import { can, ROLE_INFO, type Permission } from '@/lib/auth/permissions'
 
 export type WorkspaceInfo = Awaited<ReturnType<typeof getWorkspaceContext>>

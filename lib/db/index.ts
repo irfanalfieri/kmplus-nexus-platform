@@ -1,5 +1,5 @@
 import { drizzle } from 'drizzle-orm/node-postgres'
-import { Pool } from 'pg'
+import { Pool, types } from 'pg'
 import * as schema from './schema'
 import { SUPABASE_ROOT_CA } from './supabase-ca'
 
@@ -21,9 +21,16 @@ export function databaseSsl(connectionString = process.env.DATABASE_URL) {
   return { ca: override || SUPABASE_ROOT_CA, rejectUnauthorized: true }
 }
 
+/** DATE stays 'YYYY-MM-DD' text: as a JS Date it would shift by the server's timezone. */
+const PG_DATE_OID = 1082
+const nexusTypes = {
+  getTypeParser: ((oid: number, format?: 'text' | 'binary') => (oid === PG_DATE_OID ? (value: string) => value : types.getTypeParser(oid, format))) as typeof types.getTypeParser,
+}
+
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: databaseSsl(),
+  types: nexusTypes,
 })
 
 export const db = drizzle(pool, { schema })

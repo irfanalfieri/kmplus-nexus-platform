@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { acceptInvite } from '@/app/actions/workspaces'
+import { acceptInvite } from '@/lib/actions/workspaces'
 
 export default function AcceptInviteButton({ token }: { token: string }) {
   const router = useRouter()

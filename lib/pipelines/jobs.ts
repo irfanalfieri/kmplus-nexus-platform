@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { and, eq, inArray, lte, or, lt, sql } from 'drizzle-orm'
+import { and, eq, inArray, lt, sql } from 'drizzle-orm'
 import { db, pool } from '@/lib/db'
 import { executionLogs, pipelineJobSeen, pipelineJobs, pipelineRunRejects, pipelines } from '@/lib/db/schema'
 import { newId } from '@/lib/auth/session'
@@ -109,13 +109,19 @@ export async function enqueueRun(pipelineId: string, scope: RunScope, trigger: '
 
 // ── Worker ───────────────────────────────────────────────────────────────────
 
-/** Atomically takes the oldest runnable job: queued and due, or running with an expired lease. */
+/** Runnable: queued and due, running with an expired lease (abandoned), or a cancel request no worker is handling. */
+const RUNNABLE_SQL = `(status = 'queued' AND "availableAt" <= now())
+  OR (status = 'running' AND "leaseUntil" < now())
+  OR (status = 'cancelling' AND ("leaseUntil" IS NULL OR "leaseUntil" < now()))`
+
+/** Atomically takes the oldest runnable job. A cancel request stays "cancelling" so the worker closes it out. */
 async function claimJob(): Promise<Job | null> {
   const { rows } = await pool.query<Job>(
-    `UPDATE pipeline_jobs SET status = 'running', "leaseUntil" = now() + make_interval(secs => $1), "updatedAt" = now()
+    `UPDATE pipeline_jobs SET status = CASE WHEN status = 'cancelling' THEN 'cancelling' ELSE 'running' END,
+            "leaseUntil" = now() + make_interval(secs => $1), "updatedAt" = now()
       WHERE id = (
         SELECT id FROM pipeline_jobs
-         WHERE (status = 'queued' AND "availableAt" <= now()) OR (status = 'running' AND "leaseUntil" < now())
+         WHERE ${RUNNABLE_SQL}
          ORDER BY "createdAt"
          FOR UPDATE SKIP LOCKED
          LIMIT 1)
@@ -133,15 +139,43 @@ export async function hasRunnableJobs(workspaceId?: string) {
     .where(
       and(
         workspaceId ? eq(pipelineJobs.workspaceId, workspaceId) : undefined,
-        or(
-          and(eq(pipelineJobs.status, 'queued'), lte(pipelineJobs.availableAt, new Date())),
-          and(eq(pipelineJobs.status, 'running'), lt(pipelineJobs.leaseUntil, new Date()))
-        )
+        sql.raw(`(${RUNNABLE_SQL})`)
       )
     )
     .limit(1)
   return Boolean(row)
 }
+
+/**
+ * Cancels a queued or running run (Monitoring → Cancel). A job no worker holds
+ * is closed at once; a running one stops before its next chunk. Rows already
+ * written stay; a dataset "replace" keeps the previous data.
+ */
+export async function cancelRun(runId: string, workspaceId: string): Promise<'cancelled' | 'cancelling' | 'not_active'> {
+  const { rows } = await pool.query<{ was: string; leaseUntil: Date | null }>(
+    `WITH prev AS (
+       SELECT id, status, "leaseUntil" FROM pipeline_jobs
+        WHERE id = $1 AND "workspaceId" = $2 AND status IN ('queued', 'running') FOR UPDATE)
+     UPDATE pipeline_jobs j SET status = 'cancelling', "updatedAt" = now() FROM prev WHERE j.id = prev.id
+     RETURNING prev.status AS was, prev."leaseUntil" AS "leaseUntil"`,
+    [runId, workspaceId]
+  )
+  if (!rows.length) return 'not_active'
+  const held = rows[0].was === 'running' && rows[0].leaseUntil && new Date(rows[0].leaseUntil).getTime() > Date.now()
+  if (held) return 'cancelling'
+  const [job] = await db.select().from(pipelineJobs).where(eq(pipelineJobs.id, runId)).limit(1)
+  let def: PipelineDefinition | null = null
+  try {
+    def = parseDefinition((job.progress as JobProgress).config)
+  } catch {
+    // Closing out a cancelled run doesn't need a valid definition.
+  }
+  await finishJob(job, job.progress as JobProgress, def, { cancelled: true })
+  return 'cancelled'
+}
+
+const isCancelling = async (jobId: string) =>
+  (await db.select({ status: pipelineJobs.status }).from(pipelineJobs).where(eq(pipelineJobs.id, jobId)).limit(1))[0]?.status === 'cancelling'
 
 /** Works through runnable jobs until the time budget is used. Safe to call concurrently. */
 export async function processJobs(opts: { budgetMs?: number; maxJobs?: number; /** Tests: pause each job after this many chunks. */ maxChunksPerSlice?: number } = {}) {
@@ -202,8 +236,9 @@ async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promi
   try {
     def = parseDefinition(progress.config)
   } catch (err) {
-    return finishJob(job, progress, null, { error: errorInfo(err).message })
+    return finishJob(job, progress, null, job.status === 'cancelling' ? { cancelled: true } : { error: errorInfo(err).message })
   }
+  if (job.status === 'cancelling') return finishJob(job, progress, def, { cancelled: true })
 
   const source = def.steps[0] as SourceStep
   const dest = def.steps[def.steps.length - 1]
@@ -231,14 +266,21 @@ async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promi
     let sliceChunks = 0
     while (!progress.exhausted) {
       // Every slice makes progress (one chunk at least), then stops near the deadline.
+      if (await isCancelling(job.id)) return finishJob(job, progress, def, { cancelled: true })
       if (sliceChunks >= maxChunks || (sliceChunks > 0 && Date.now() > deadline - CHUNK_HEADROOM_MS)) {
-        // Out of time: release the job; the next tick (or page poll) resumes it.
-        await db.update(pipelineJobs).set({ status: 'queued', leaseUntil: null, availableAt: new Date(), progress, updatedAt: new Date() }).where(eq(pipelineJobs.id, job.id))
-        return 'paused'
+        // Out of time: release the job; the next tick (or page poll) resumes it. Never overwrite a cancel request.
+        const released = await db
+          .update(pipelineJobs)
+          .set({ status: 'queued', leaseUntil: null, availableAt: new Date(), progress, updatedAt: new Date() })
+          .where(and(eq(pipelineJobs.id, job.id), eq(pipelineJobs.status, 'running')))
+          .returning({ id: pipelineJobs.id })
+        return released.length ? 'paused' : finishJob(job, progress, def, { cancelled: true })
       }
       const started = Date.now()
       const read = await readSourceChunk(sourceDs, source.table, { offset: progress.offset, limit: CHUNK_ROWS, maxRows: source.maxRows, watermark, cache })
-      const out = transformChunk(def, read.rows, totals, seen)
+      const readMs = Date.now() - started
+      const out = transformChunk(def, read.rows, totals, seen, read.types)
+      totals.steps[0].durationMs += readMs
       const destStat = totals.steps[totals.steps.length - 1]
 
       if (out.rows.length) {
@@ -276,18 +318,21 @@ async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promi
     const info = errorInfo(err)
     progress.attempts.push({ attempt: progress.attempts.length + 1, error: info.message, at: new Date().toISOString() })
     const failures = job.attempts + 1
+    if (await isCancelling(job.id)) return finishJob(job, progress, def, { cancelled: true })
     if (info.retryable && failures <= def.settings.retries) {
       const delaySec = Math.min(300, def.settings.retryDelaySeconds * 2 ** (failures - 1))
-      await db
+      const requeued = await db
         .update(pipelineJobs)
         .set({ status: 'queued', attempts: failures, availableAt: new Date(Date.now() + delaySec * 1000), leaseUntil: null, progress, updatedAt: new Date() })
-        .where(eq(pipelineJobs.id, job.id))
+        .where(and(eq(pipelineJobs.id, job.id), eq(pipelineJobs.status, 'running')))
+        .returning({ id: pipelineJobs.id })
+      if (!requeued.length) return finishJob(job, progress, def, { cancelled: true })
       await db.update(executionLogs).set({ errorMessage: `Attempt ${failures} failed, retrying in ${delaySec}s: ${info.message}`, updatedAt: new Date() }).where(eq(executionLogs.id, job.id))
       return 'retrying'
     }
     return finishJob(job, progress, def, { error: info.message })
   }
-  return finishJob(job, progress, def, {})
+  return finishJob(job, progress, def, (await isCancelling(job.id)) ? { cancelled: true } : {})
 }
 
 /** Persists one chunk's outcome atomically: rejects, new "unique" hashes, counters and the cursor. */
@@ -331,13 +376,14 @@ async function checkpoint(job: Job, progress: JobProgress, scope: RunScope, reje
 }
 
 /** Completes a run: dataset swap/record, run log, pipeline state, audit, alerts. */
-async function finishJob(job: Job, progress: JobProgress, def: PipelineDefinition | null, outcome: { error?: string }): Promise<string> {
+async function finishJob(job: Job, progress: JobProgress, def: PipelineDefinition | null, outcome: { error?: string; cancelled?: boolean }): Promise<string> {
+  const cancelled = Boolean(outcome.cancelled)
   const scope: RunScope = { workspaceId: job.workspaceId, actorId: job.actorId }
   const totals = progress.totals ?? (def ? newRunTotals(def) : { steps: [], rowsRead: 0, rowsWritten: 0, rejectedCount: 0, columns: [] })
   let error = outcome.error
   const dest = def?.steps[def.steps.length - 1]
 
-  if (!error && dest?.type === 'destination' && dest.kind === 'dataset') {
+  if (!error && !cancelled && dest?.type === 'destination' && dest.kind === 'dataset') {
     try {
       const tableName = await datasetTable(scope.workspaceId, dest.datasetName)
       const columns = totals.columns.length ? totals.columns : outputColumns(def!, [])
@@ -358,12 +404,13 @@ async function finishJob(job: Job, progress: JobProgress, def: PipelineDefinitio
       error = `Finishing the dataset failed: ${errorInfo(err).message}`
     }
   }
-  if (error && dest?.type === 'destination' && dest.kind === 'dataset' && dest.mode === 'replace') {
+  if ((error || cancelled) && dest?.type === 'destination' && dest.kind === 'dataset' && dest.mode === 'replace') {
     // Leave the live dataset untouched; drop what this run staged.
     await dropDatasetTable(stagingTableName(await datasetTable(scope.workspaceId, dest.datasetName), job.id)).catch(() => undefined)
   }
 
   const status: EngineResult['status'] = error ? 'failed' : totalsStatus(totals)
+  const runStatus = cancelled ? 'cancelled' : status
   if (error && !progress.attempts.some((a) => a.error === error)) progress.attempts.push({ attempt: progress.attempts.length + 1, error, at: new Date().toISOString() })
   if (!progress.attempts.length) progress.attempts.push({ attempt: 1, at: new Date().toISOString() })
   const result: EngineResult = {
@@ -384,11 +431,11 @@ async function finishJob(job: Job, progress: JobProgress, def: PipelineDefinitio
   await db
     .update(executionLogs)
     .set({
-      status,
+      status: runStatus,
       recordsProcessed: totals.rowsRead,
       recordsSuccess: totals.rowsWritten,
       recordsError: totals.rejectedCount,
-      errorMessage: error ?? null,
+      errorMessage: cancelled ? 'Cancelled by a user.' : (error ?? null),
       endTime,
       duration: Math.round((endTime.getTime() - startTime.getTime()) / 1000),
       executionDetails: { steps: totals.steps, destination: progress.destination, columns: totals.columns, attempts: progress.attempts, watermark: totals.watermark, chunks: progress.chunks },
@@ -401,7 +448,7 @@ async function finishJob(job: Job, progress: JobProgress, def: PipelineDefinitio
     // Advance the incremental watermark only after the whole run succeeded.
     let state = pipeline.state as PipelineState | null
     const source = def?.steps[0]
-    if (status !== 'failed' && totals.watermark?.value && source?.type === 'source' && source.mode === 'incremental') {
+    if (!cancelled && status !== 'failed' && totals.watermark?.value && source?.type === 'source' && source.mode === 'incremental') {
       state = { ...(state ?? {}), watermark: { column: totals.watermark.column, value: totals.watermark.value, sourceKey: watermarkKey(source) } }
     }
     const schedule = scheduleSchema.safeParse(pipeline.schedule ?? {})
@@ -409,7 +456,8 @@ async function finishJob(job: Job, progress: JobProgress, def: PipelineDefinitio
       .update(pipelines)
       .set({
         lastRunAt: endTime,
-        lastRunStatus: status,
+        // A cancelled run doesn't change the pipeline's health.
+        lastRunStatus: cancelled ? pipeline.lastRunStatus : status,
         status: pipeline.status === 'draft' ? 'active' : pipeline.status,
         // A schedule that came due during a long run fires at its next slot instead of immediately.
         nextRunAt: pipeline.enabled && schedule.success ? nextRunAt(schedule.data) : null,
@@ -426,11 +474,12 @@ async function finishJob(job: Job, progress: JobProgress, def: PipelineDefinitio
     action: 'RUN',
     resource: 'pipeline',
     resourceId: job.pipelineId,
-    changes: { runId: job.id, trigger: job.trigger, status, attempts: progress.attempts.length, chunks: progress.chunks, rowsRead: totals.rowsRead, rowsWritten: totals.rowsWritten, rejected: totals.rejectedCount },
+    changes: { runId: job.id, trigger: job.trigger, status: runStatus, attempts: progress.attempts.length, chunks: progress.chunks, rowsRead: totals.rowsRead, rowsWritten: totals.rowsWritten, rejected: totals.rejectedCount },
   })
+  if (cancelled) return runStatus
   const message = summarize(result)
   await alertIfNeeded({ def, pipelineName: pipeline?.name ?? 'Pipeline', pipelineId: job.pipelineId, scope, runId: job.id, trigger: job.trigger, result, attempts: progress.attempts.length, message })
-  return status
+  return runStatus
 }
 
 /** Queued/running jobs of a workspace, for the Monitoring view. */
@@ -451,6 +500,6 @@ export async function activeJobs(workspaceId: string) {
       chunks: sql<number>`coalesce((${pipelineJobs.progress}->>'chunks')::int, 0)`,
     })
     .from(pipelineJobs)
-    .where(and(eq(pipelineJobs.workspaceId, workspaceId), inArray(pipelineJobs.status, ['queued', 'running'])))
+    .where(and(eq(pipelineJobs.workspaceId, workspaceId), inArray(pipelineJobs.status, ['queued', 'running', 'cancelling'])))
     .orderBy(pipelineJobs.createdAt)
 }

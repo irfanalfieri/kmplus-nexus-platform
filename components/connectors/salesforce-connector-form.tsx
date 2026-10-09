@@ -12,7 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { startSalesforceWebAuth } from '@/app/actions/salesforce-oauth'
+import { startSalesforceWebAuth } from '@/lib/actions/salesforce-oauth'
 
 export const SALESFORCE_DEFAULTS: Record<string, string> = {
   authMethod: 'web_oauth',

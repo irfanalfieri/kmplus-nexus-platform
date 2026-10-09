@@ -325,6 +325,19 @@ export interface ChunkRead {
   rows: Row[]
   /** No rows after this chunk. */
   exhausted: boolean
+  /** Column types the source database reported (SQL sources only). */
+  types?: Record<string, ColumnType>
+}
+
+/** Postgres type OIDs → dataset column types. */
+const PG_OID_TYPES: Record<number, ColumnType> = {
+  20: 'integer', 21: 'integer', 23: 'integer', 700: 'numeric', 701: 'numeric', 1700: 'numeric',
+  16: 'boolean', 1082: 'date', 1114: 'timestamp', 1184: 'timestamp', 114: 'json', 3802: 'json',
+}
+/** mysql2 column type codes → dataset column types. */
+const MYSQL_TYPES: Record<number, ColumnType> = {
+  1: 'integer', 2: 'integer', 3: 'integer', 8: 'integer', 9: 'integer', 4: 'numeric', 5: 'numeric', 0: 'numeric', 246: 'numeric',
+  10: 'date', 7: 'timestamp', 12: 'timestamp', 245: 'json',
 }
 
 /** Per-invocation cache: API reads (read once, sliced per chunk) and resolved sort keys. */
@@ -388,7 +401,8 @@ export async function readSourceChunk(
         `SELECT * FROM ${qIdent(pg.schema)}.${qIdent(table)} ${wm?.after != null ? `WHERE ${qIdent(wm.column)} > $3` : ''} ${order.length ? `ORDER BY ${order.join(', ')}` : ''} LIMIT $1 OFFSET $2`,
         params
       )
-      return { rows: res.rows as Row[], exhausted: res.rows.length < limit || offset + limit >= opts.maxRows }
+      const types = Object.fromEntries(res.fields.flatMap((f) => (PG_OID_TYPES[f.dataTypeID] ? [[f.name, PG_OID_TYPES[f.dataTypeID]]] : [])))
+      return { rows: res.rows as Row[], exhausted: res.rows.length < limit || offset + limit >= opts.maxRows, types }
     } finally {
       await p.end()
     }
@@ -399,11 +413,12 @@ export async function readSourceChunk(
     try {
       const order = [...(wm ? [mIdent(wm.column)] : []), ...(await mysqlOrderKeys(conn, table, cache))]
       const params: unknown[] = wm?.after != null ? [wm.after, limit, offset] : [limit, offset]
-      const [rows] = await conn.query<mysql.RowDataPacket[]>(
+      const [rows, fields] = await conn.query<mysql.RowDataPacket[]>(
         `SELECT * FROM ${mIdent(table)} ${wm?.after != null ? `WHERE ${mIdent(wm.column)} > ?` : ''} ${order.length ? `ORDER BY ${order.join(', ')}` : ''} LIMIT ? OFFSET ?`,
         params
       )
-      return { rows: rows as Row[], exhausted: rows.length < limit || offset + limit >= opts.maxRows }
+      const types = Object.fromEntries((fields ?? []).flatMap((f) => (f.type !== undefined && MYSQL_TYPES[f.type] ? [[f.name, MYSQL_TYPES[f.type]]] : [])))
+      return { rows: rows as Row[], exhausted: rows.length < limit || offset + limit >= opts.maxRows, types }
     } finally {
       await conn.end()
     }

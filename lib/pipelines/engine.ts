@@ -1,6 +1,6 @@
 import type { DestinationStep, PipelineDefinition, PipelineStep, SourceStep } from './definition'
 import { applyMap, matchesFilter, validateRow, type Row } from './transforms'
-import { compareWatermarks, inferColumns, maxWatermark, type OutputColumn } from './columns'
+import { compareWatermarks, inferColumns, maxWatermark, type OutputColumn, type TypeHints } from './columns'
 
 export interface StepStat {
   id: string
@@ -61,16 +61,16 @@ export function stepLabel(step: PipelineStep): string {
 }
 
 /** Output columns: declared by the last Map step, otherwise inferred from data. */
-export function outputColumns(def: PipelineDefinition, rows: Row[]): OutputColumn[] {
+export function outputColumns(def: PipelineDefinition, rows: Row[], hints: TypeHints = {}): OutputColumn[] {
   const maps = def.steps.filter((s) => s.type === 'map')
   const lastMap = maps[maps.length - 1]
   if (lastMap?.type === 'map') {
     const declared: OutputColumn[] = lastMap.fields.map((f) => ({ name: f.to, type: f.type }))
     if (!lastMap.keepUnmapped) return declared
     const names = new Set(declared.map((c) => c.name))
-    return [...declared, ...inferColumns(rows).filter((c) => !names.has(c.name))]
+    return [...declared, ...inferColumns(rows, hints).filter((c) => !names.has(c.name))]
   }
-  return inferColumns(rows)
+  return inferColumns(rows, hints)
 }
 
 export async function runEngine(def: PipelineDefinition, io: EngineIO, opts: { sampleSize?: number } = {}): Promise<EngineResult> {
@@ -213,7 +213,7 @@ export interface ChunkOutput {
  * adding to `totals`. `seen` carries values of "unique" rules across chunks.
  * Throws (retryable: false) when a Validate step set to abort fails.
  */
-export function transformChunk(def: PipelineDefinition, input: Row[], totals: RunTotals, seen: Map<string, Set<string>>): ChunkOutput {
+export function transformChunk(def: PipelineDefinition, input: Row[], totals: RunTotals, seen: Map<string, Set<string>>, hints: TypeHints = {}): ChunkOutput {
   const rejects: Reject[] = []
   let rows = input
   def.steps.forEach((step, i) => {
@@ -276,7 +276,7 @@ export function transformChunk(def: PipelineDefinition, input: Row[], totals: Ru
         // Columns: declared by the last Map, else inferred; later chunks can add inferred columns.
         if (rows.length) {
           const known = new Set(totals.columns.map((c) => c.name))
-          totals.columns = [...totals.columns, ...outputColumns(def, rows).filter((c) => !known.has(c.name))]
+          totals.columns = [...totals.columns, ...outputColumns(def, rows, hints).filter((c) => !known.has(c.name))]
         }
         stat.rowsIn += rows.length
         break

@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { requirePageUser } from '@/lib/auth/session'
-import { describeInvite } from '@/app/actions/workspaces'
+import { describeInvite } from '@/lib/actions/workspaces'
 import { ROLE_INFO } from '@/lib/auth/permissions'
 import { Card } from '@/components/ui/card'
 import AcceptInviteButton from './accept-button'

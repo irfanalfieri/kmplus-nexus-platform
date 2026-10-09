@@ -5,12 +5,14 @@ import { pipelines } from '@/lib/db/schema'
 import { scheduleSchema } from '@/lib/pipelines/definition'
 import { nextRunAt } from '@/lib/pipelines/schedule'
 import { enqueueRun, processJobs, WORKER_BUDGET_MS } from '@/lib/pipelines/jobs'
+import { applyDueRetention } from '@/lib/governance/retention'
 
 /**
  * Scheduler tick. Called every minute by Supabase pg_cron (see
  * drizzle/0011_scheduler_jobs.sql) with `Authorization: Bearer $CRON_SECRET`.
  * Queues pipelines whose nextRunAt is due, then works through the job queue
- * (new runs, retries, and runs resuming from a checkpoint) within the budget.
+ * (new runs, retries, and runs resuming from a checkpoint) within the budget,
+ * and enforces dataset retention policies (hourly per dataset).
  */
 export const maxDuration = 300
 export const dynamic = 'force-dynamic'
@@ -56,6 +58,7 @@ async function tick(request: Request) {
     }
   }
 
+  await applyDueRetention()
   const processed = await processJobs({ budgetMs: WORKER_BUDGET_MS })
   return Response.json({ due: due.length, queued, processed })
 }

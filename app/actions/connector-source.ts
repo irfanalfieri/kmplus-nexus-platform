@@ -3,7 +3,7 @@
 import { z } from 'zod'
 import { db } from '@/lib/db'
 import { dataSources } from '@/lib/db/schema'
-import { assertConnectorInstalled } from '@/app/actions/connectors'
+import { assertConnectorInstalled } from '@/lib/connectors/install-check'
 import { isConnectorSlug } from '@/lib/connectors/catalog'
 import type { ConnectorCredentials, ConnectorSlug } from '@/lib/connectors/types'
 import {
@@ -20,6 +20,7 @@ import { recordAudit } from '@/lib/audit'
 import { restoreSecrets } from '@/lib/connectors/secret-mask'
 import type { Permission } from '@/lib/auth/permissions'
 import { revalidatePath } from 'next/cache'
+import { guard } from '@/lib/server-action'
 
 const slugSchema = z.string().trim().min(1).max(60)
 const idSchema = z.string().trim().min(1).max(100)
@@ -60,7 +61,7 @@ async function getOwnedSource(sourceId: string, workspaceId: string) {
   return source
 }
 
-export async function testConnectorConnectionAction(rawSlug: string, rawCredentials: ConnectorCredentials) {
+async function testConnectorConnectionActionImpl(rawSlug: string, rawCredentials: ConnectorCredentials) {
   await workspaceFor('sources:manage')
   const slug = parseSlug(rawSlug)
   const credentials = credentialsSchema.parse(rawCredentials)
@@ -68,7 +69,7 @@ export async function testConnectorConnectionAction(rawSlug: string, rawCredenti
   return testConnectorConnection(slug, credentials)
 }
 
-export async function scanConnectorSchemaAction(rawSlug: string, rawCredentials: ConnectorCredentials) {
+async function scanConnectorSchemaActionImpl(rawSlug: string, rawCredentials: ConnectorCredentials) {
   await workspaceFor('sources:manage')
   const slug = parseSlug(rawSlug)
   const credentials = credentialsSchema.parse(rawCredentials)
@@ -76,7 +77,7 @@ export async function scanConnectorSchemaAction(rawSlug: string, rawCredentials:
   return scanConnectorSchema(slug, credentials)
 }
 
-export async function scanDataSourceSchema(rawSourceId: string) {
+async function scanDataSourceSchemaImpl(rawSourceId: string) {
   const workspaceId = await workspaceFor('sources:manage')
   const sourceId = idSchema.parse(rawSourceId)
   const source = await getOwnedSource(sourceId, workspaceId)
@@ -107,7 +108,7 @@ export async function scanDataSourceSchema(rawSourceId: string) {
   return scan
 }
 
-export async function getDataSourceTableSample(rawSourceId: string, rawTableName: string, rawLimit = 25) {
+async function getDataSourceTableSampleImpl(rawSourceId: string, rawTableName: string, rawLimit = 25) {
   const ctx = await requireWorkspace('data:preview')
   const workspaceId = ctx.workspaceId
   const sourceId = idSchema.parse(rawSourceId)
@@ -123,7 +124,7 @@ export async function getDataSourceTableSample(rawSourceId: string, rawTableName
 }
 
 /** Live REST request preview. With sourceId (edit form), masked secrets are filled from that source. */
-export async function previewRestConnection(rawCredentials: ConnectorCredentials, rawSourceId?: string) {
+async function previewRestConnectionImpl(rawCredentials: ConnectorCredentials, rawSourceId?: string) {
   const workspaceId = await workspaceFor('sources:manage')
   let credentials = credentialsSchema.parse(rawCredentials)
   if (rawSourceId) {
@@ -134,7 +135,7 @@ export async function previewRestConnection(rawCredentials: ConnectorCredentials
   return previewRestRequest(parseRestConfig(credentials))
 }
 
-export async function testAndScanDataSource(
+async function testAndScanDataSourceImpl(
   rawSlug: string,
   rawCredentials: ConnectorCredentials
 ) {
@@ -159,4 +160,31 @@ export async function testAndScanDataSource(
     scan,
     preview: 'preview' in test ? (test as { preview?: unknown }).preview : undefined,
   }
+}
+
+// ── Server actions: thin wrappers that return errors as values so their messages
+// reach the user in production. Call them through lib/actions/connector-source.ts. ──
+
+export async function testConnectorConnectionAction(...args: Parameters<typeof testConnectorConnectionActionImpl>) {
+  return guard(() => testConnectorConnectionActionImpl(...args))
+}
+
+export async function scanConnectorSchemaAction(...args: Parameters<typeof scanConnectorSchemaActionImpl>) {
+  return guard(() => scanConnectorSchemaActionImpl(...args))
+}
+
+export async function scanDataSourceSchema(...args: Parameters<typeof scanDataSourceSchemaImpl>) {
+  return guard(() => scanDataSourceSchemaImpl(...args))
+}
+
+export async function getDataSourceTableSample(...args: Parameters<typeof getDataSourceTableSampleImpl>) {
+  return guard(() => getDataSourceTableSampleImpl(...args))
+}
+
+export async function previewRestConnection(...args: Parameters<typeof previewRestConnectionImpl>) {
+  return guard(() => previewRestConnectionImpl(...args))
+}
+
+export async function testAndScanDataSource(...args: Parameters<typeof testAndScanDataSourceImpl>) {
+  return guard(() => testAndScanDataSourceImpl(...args))
 }

@@ -5,7 +5,7 @@ import { X, Eye, EyeOff, CheckCircle2, Loader } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { updateSupabaseSourceCredentials } from '@/app/actions/supabase-source'
+import { updateSupabaseSourceCredentials } from '@/lib/actions/supabase-source'
 
 interface DataSourceAuthModalProps {
   isOpen: boolean
@@ -133,7 +133,7 @@ export default function DataSourceAuthModal({
   if (!isOpen) return null
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" role="dialog" aria-modal="true" aria-label="Data source credentials">
       <div className="bg-card rounded-lg border border-border p-6 max-w-md w-full">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-semibold">Authorize Data Source</h3>

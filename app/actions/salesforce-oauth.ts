@@ -14,6 +14,7 @@ import {
   parseSalesforceLoginHost,
   signOAuthState,
 } from '@/lib/connectors/salesforce/oauth'
+import { guard } from '@/lib/server-action'
 
 const startInput = z.object({
   clientId: z.string().trim().min(1, 'Consumer Key is required').max(500),
@@ -23,7 +24,7 @@ const startInput = z.object({
   sourceId: z.string().trim().min(1).max(100).optional(),
 })
 
-export async function startSalesforceWebAuth(input: {
+async function startSalesforceWebAuthImpl(input: {
   clientId: string
   clientSecret: string
   loginHost?: string
@@ -68,4 +69,11 @@ export async function startSalesforceWebAuth(input: {
 
   const authorizeUrl = buildSalesforceAuthorizeUrl({ clientId, loginHost, state: nonce })
   return { authorizeUrl }
+}
+
+// ── Server actions: thin wrappers that return errors as values so their messages
+// reach the user in production. Call them through lib/actions/salesforce-oauth.ts. ──
+
+export async function startSalesforceWebAuth(...args: Parameters<typeof startSalesforceWebAuthImpl>) {
+  return guard(() => startSalesforceWebAuthImpl(...args))
 }

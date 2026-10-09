@@ -3,11 +3,15 @@
  * No database or network. Run: node scripts/run-ts.mjs scripts/engine-tests.ts
  */
 import assert from 'node:assert/strict'
-import { compareWatermarks, maxWatermark } from '@/lib/pipelines/columns'
+import { compareWatermarks, inferColumns, maxWatermark } from '@/lib/pipelines/columns'
 import { definitionSchema, scheduleSchema, settingsSchema } from '@/lib/pipelines/definition'
 import { checkDestination, newRunTotals, runEngine, transformChunk } from '@/lib/pipelines/engine'
 import { describeSchedule, nextRunTimes } from '@/lib/pipelines/schedule'
 import { formatDate, parseDate } from '@/lib/pipelines/transforms'
+import { widgetSchema } from '@/lib/analytics/definition'
+import { buildWidgetSql, WidgetQueryError } from '@/lib/analytics/query'
+import { suggestColumnPolicy } from '@/lib/governance/definition'
+import { applyMasks, maskValue } from '@/lib/governance/masking'
 
 let passed = 0
 async function test(name: string, fn: () => void | Promise<void>) {
@@ -162,6 +166,62 @@ async function main() {
     assert.throws(() => transformChunk(abortDef, hr, newRunTotals(abortDef), new Map()), (e: { retryable?: boolean }) => e.retryable === false)
     const noKey = definitionSchema.parse({ steps: [base.steps[0], base.steps[4]] })
     assert.throws(() => checkDestination(noKey, [{ name: 'PERNR', type: 'text' }]), (e: { retryable?: boolean }) => e.retryable === false)
+  })
+
+  await test('analytics: widget SQL is built only from known columns, values are bound', () => {
+    const cols = [
+      { name: 'department', type: 'text' },
+      { name: 'salary', type: 'numeric' },
+      { name: 'hire_date', type: 'date' },
+      { name: 'email', type: 'text' },
+    ]
+    const T = '"nexus_data"."ds_x"'
+    const base = { id: 'w', title: '', dataset: 'emp', filters: [], sort: 'value_desc', limit: 5, size: 'small' } as const
+    const kpi = buildWidgetSql(widgetSchema.parse({ ...base, type: 'kpi', measure: { agg: 'count' } }), T, cols)
+    assert.equal(kpi.text, `SELECT count(*) AS value FROM ${T}`)
+    const bar = buildWidgetSql(
+      widgetSchema.parse({ ...base, type: 'bar', measure: { agg: 'avg', column: 'salary' }, dimension: { column: 'department' }, filters: [{ column: 'email', op: 'contains', value: "x'; DROP TABLE t; --" }] }),
+      T,
+      cols
+    )
+    assert.match(bar.text, /^SELECT "department"::text AS label, avg\("salary"::numeric\) AS value FROM .* WHERE "email"::text ILIKE '%' \|\| \$1 \|\| '%' GROUP BY 1 ORDER BY value DESC NULLS LAST, label ASC LIMIT 6$/)
+    assert.deepEqual(bar.params, ["x'; DROP TABLE t; --"], 'user values are parameters, never SQL')
+    const line = buildWidgetSql(widgetSchema.parse({ ...base, type: 'line', measure: { agg: 'count' }, dimension: { column: 'hire_date', grain: 'month' }, filters: [{ column: 'salary', op: 'gte', value: '1000' }] }), T, cols)
+    assert.match(line.text, /to_char\(date_trunc\('month', "hire_date"::timestamptz\), 'YYYY-MM'\) AS label/)
+    assert.match(line.text, /"salary"::numeric >= \$1::numeric/)
+    assert.match(line.text, /ORDER BY label ASC/)
+    const bad = (w: object, re: RegExp, blocked: string[] = []) =>
+      assert.throws(() => buildWidgetSql(widgetSchema.parse({ ...base, ...w }), T, cols, { blockedColumns: blocked }), (e: Error) => e instanceof WidgetQueryError && re.test(e.message))
+    bad({ type: 'bar', measure: { agg: 'count' }, dimension: { column: 'x" FROM pg_user; --' } }, /not in dataset/)
+    bad({ type: 'kpi', measure: { agg: 'sum', column: 'department' } }, /needs a number column/)
+    bad({ type: 'bar', measure: { agg: 'count' }, dimension: { column: 'department', grain: 'month' } }, /needs a date column/)
+    bad({ type: 'bar', measure: { agg: 'count' }, dimension: { column: 'email' } }, /masked by a dataset policy/, ['email'])
+    bad({ type: 'kpi', measure: { agg: 'count' }, filters: [{ column: 'email', op: 'eq', value: 'a' }] }, /masked/, ['email'])
+    bad({ type: 'kpi', measure: { agg: 'count' }, filters: [{ column: 'salary', op: 'gt', value: '1; DROP' }] }, /needs a number/)
+    assert.equal(widgetSchema.safeParse({ ...base, type: 'bar', measure: { agg: 'count' } }).success, false, 'charts need a group-by')
+  })
+
+  await test('column types: database hints beat string guesses; codes with leading zeros stay text', () => {
+    const rows = [{ code: '00123', salary: '8037919.50', hired: '2021-03-15', name: 'Budi' }]
+    assert.deepEqual(inferColumns(rows).map((c) => c.type), ['text', 'text', 'text', 'text'], 'without hints, strings stay text')
+    assert.deepEqual(
+      inferColumns(rows, { salary: 'numeric', hired: 'date' }).map((c) => [c.name, c.type]),
+      [['code', 'text'], ['salary', 'numeric'], ['hired', 'date'], ['name', 'text']]
+    )
+    assert.deepEqual(inferColumns([{ a: null }], { a: 'integer' }), [{ name: 'a', type: 'integer' }], 'all-null column takes the hint')
+  })
+
+  await test('governance: masks and suggestions', () => {
+    assert.equal(maskValue('budi@kmplus.co.id', 'partial'), '••••o.id')
+    assert.equal(maskValue('12345678', 'full'), '••••••')
+    assert.equal(maskValue('E00123', 'hash'), maskValue('E00123', 'hash'), 'hash is a stable pseudonym')
+    assert.notEqual(maskValue('E00123', 'hash'), 'E00123')
+    assert.equal(maskValue(null, 'full'), null)
+    assert.deepEqual(applyMasks([{ a: 'x', email: 'someone@x.io' }], { email: 'partial' }), [{ a: 'x', email: '••••x.io' }])
+    assert.equal(suggestColumnPolicy('work_email').mask, 'partial')
+    assert.equal(suggestColumnPolicy('base_salary').classification, 'sensitive')
+    assert.equal(suggestColumnPolicy('nik').classification, 'personal')
+    assert.equal(suggestColumnPolicy('department').mask, 'none')
   })
 
   console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`)

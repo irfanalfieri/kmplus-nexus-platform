@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Check, ChevronsUpDown, Loader2, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { createWorkspace, switchWorkspace } from '@/app/actions/workspaces'
+import { createWorkspace, switchWorkspace } from '@/lib/actions/workspaces'
 import { ROLE_INFO } from '@/lib/auth/permissions'
 import { useWorkspace } from './workspace-context'
 

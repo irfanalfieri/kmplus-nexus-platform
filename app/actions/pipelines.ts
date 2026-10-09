@@ -10,10 +10,12 @@ import { dataSources, executionLogs, nexusDatasets, pipelineRunRejects, pipeline
 import { definitionSchema, scheduleSchema, type PipelineSchedule } from '@/lib/pipelines/definition'
 import { assertValidSchedule, nextRunAt } from '@/lib/pipelines/schedule'
 import { currentWatermark, parseDefinition, testRunDefinition } from '@/lib/pipelines/runner'
-import { enqueueRun } from '@/lib/pipelines/jobs'
+import { cancelRun, enqueueRun } from '@/lib/pipelines/jobs'
 import { nudgeWorker, startWorker } from '@/lib/pipelines/worker'
 import { readDatasetSample } from '@/lib/pipelines/io'
+import { applyMasks, masksFor } from '@/lib/governance/masking'
 import type { SchemaScanResult } from '@/lib/connectors/types'
+import { guard } from '@/lib/server-action'
 
 const idSchema = z.string().trim().min(1).max(100)
 
@@ -35,7 +37,7 @@ const scope = (ctx: WorkspaceContext) => ({ workspaceId: ctx.workspaceId, actorI
 
 // ── Queries ──────────────────────────────────────────────────────────────────
 
-export async function listPipelines() {
+async function listPipelinesImpl() {
   const ctx = await requireWorkspace()
   return db
     .select({
@@ -65,7 +67,7 @@ export async function listPipelines() {
 }
 
 /** Everything the builder needs to populate pickers (no credentials). */
-export async function getBuilderOptions() {
+async function getBuilderOptionsImpl() {
   const ctx = await requireWorkspace()
   const [sources, datasets] = await Promise.all([
     db
@@ -98,7 +100,7 @@ export async function getBuilderOptions() {
   }
 }
 
-export async function listRuns(rawPipelineId: string, limit = 20) {
+async function listRunsImpl(rawPipelineId: string, limit = 20) {
   const ctx = await requireWorkspace()
   const pipelineId = idSchema.parse(rawPipelineId)
   await getOwned(ctx, pipelineId)
@@ -111,7 +113,7 @@ export async function listRuns(rawPipelineId: string, limit = 20) {
 }
 
 /** Rejected rows contain source data, so they need data:preview. */
-export async function getRunRejects(rawRunId: string, limit = 100) {
+async function getRunRejectsImpl(rawRunId: string, limit = 100) {
   const ctx = await requireWorkspace('data:preview')
   const runId = idSchema.parse(rawRunId)
   return db
@@ -125,7 +127,7 @@ export async function getRunRejects(rawRunId: string, limit = 100) {
     })
 }
 
-export async function listVersions(rawPipelineId: string) {
+async function listVersionsImpl(rawPipelineId: string) {
   const ctx = await requireWorkspace()
   const pipelineId = idSchema.parse(rawPipelineId)
   await getOwned(ctx, pipelineId)
@@ -136,7 +138,7 @@ export async function listVersions(rawPipelineId: string) {
     .orderBy(desc(pipelineVersions.version))
 }
 
-export async function getDatasetPreview(rawName: string) {
+async function getDatasetPreviewImpl(rawName: string) {
   const ctx = await requireWorkspace('data:preview')
   const name = z.string().trim().min(1).max(64).parse(rawName)
   const [dataset] = await db
@@ -145,8 +147,12 @@ export async function getDatasetPreview(rawName: string) {
     .where(and(eq(nexusDatasets.workspaceId, ctx.workspaceId), eq(nexusDatasets.name, name)))
     .limit(1)
   if (!dataset) throw new Error('Dataset not found')
-  await audit(ctx, 'VIEW_DATA', dataset.id, { what: 'dataset_preview', dataset: dataset.name }, 'dataset')
-  return { name: dataset.name, rowCount: dataset.rowCount, lastLoadedAt: dataset.lastLoadedAt, rows: await readDatasetSample(dataset.tableName, 50) }
+  // Dataset policies: masked columns for roles without data:unmasked (GV-5).
+  const masks = await masksFor(ctx.workspaceId, dataset.name, ctx.role)
+  const masked = Object.keys(masks)
+  await audit(ctx, 'VIEW_DATA', dataset.id, { what: 'dataset_preview', dataset: dataset.name, ...(masked.length ? { masked } : {}) }, 'dataset')
+  const rows = applyMasks(await readDatasetSample(dataset.tableName, 50), masks)
+  return { name: dataset.name, rowCount: dataset.rowCount, lastLoadedAt: dataset.lastLoadedAt, rows, masked }
 }
 
 // ── Mutations ────────────────────────────────────────────────────────────────
@@ -206,11 +212,11 @@ async function savePipelineAs(ctx: WorkspaceContext, input: z.input<typeof saveI
   return { id, version }
 }
 
-export async function savePipeline(input: z.input<typeof saveInput>) {
+async function savePipelineImpl(input: z.input<typeof saveInput>) {
   return savePipelineAs(await requireWorkspace('pipelines:edit'), input)
 }
 
-export async function setPipelineEnabled(rawId: string, rawEnabled: boolean) {
+async function setPipelineEnabledImpl(rawId: string, rawEnabled: boolean) {
   const ctx = await requireWorkspace('pipelines:run')
   const id = idSchema.parse(rawId)
   const enabled = z.boolean().parse(rawEnabled)
@@ -224,7 +230,7 @@ export async function setPipelineEnabled(rawId: string, rawEnabled: boolean) {
   revalidatePath('/dashboard')
 }
 
-export async function deletePipeline(rawId: string) {
+async function deletePipelineImpl(rawId: string) {
   const ctx = await requireWorkspace('pipelines:edit')
   const id = idSchema.parse(rawId)
   await getOwned(ctx, id)
@@ -238,7 +244,7 @@ export async function deletePipeline(rawId: string) {
   revalidatePath('/dashboard')
 }
 
-export async function restoreVersion(rawId: string, rawVersion: number) {
+async function restoreVersionImpl(rawId: string, rawVersion: number) {
   const ctx = await requireWorkspace('pipelines:edit')
   const id = idSchema.parse(rawId)
   const version = z.number().int().min(1).parse(rawVersion)
@@ -262,11 +268,44 @@ export async function restoreVersion(rawId: string, rawVersion: number) {
 }
 
 /** Queues a run and starts a background worker for it; returns immediately. */
-export async function runPipelineNow(rawId: string) {
+async function runPipelineNowImpl(rawId: string) {
   const ctx = await requireWorkspace('pipelines:run')
   const id = idSchema.parse(rawId)
   const outcome = await enqueueRun(id, scope(ctx), 'manual')
   if (outcome.status === 'queued') startWorker()
+  revalidatePath('/dashboard')
+  return outcome
+}
+
+/** Cancels a queued or running run. Rows already written stay; a dataset "replace" keeps its previous data. */
+async function cancelPipelineRunImpl(rawRunId: string) {
+  const ctx = await requireWorkspace('pipelines:run')
+  const runId = idSchema.parse(rawRunId)
+  const result = await cancelRun(runId, ctx.workspaceId)
+  if (result === 'not_active') throw new Error('This run has already finished.')
+  await audit(ctx, 'CANCEL', runId, { result }, 'run')
+  if (result === 'cancelling') await nudgeWorker(ctx.workspaceId)
+  revalidatePath('/dashboard')
+  return {
+    status: result,
+    message: result === 'cancelled' ? 'Run cancelled.' : 'Cancelling: the run stops after the chunk it is writing now.',
+  }
+}
+
+/** Runs a finished run's pipeline again (Monitoring → Retry). Uses the current published version. */
+async function retryPipelineRunImpl(rawRunId: string) {
+  const ctx = await requireWorkspace('pipelines:run')
+  const runId = idSchema.parse(rawRunId)
+  const [run] = await db
+    .select({ pipelineId: executionLogs.pipelineId, status: executionLogs.status })
+    .from(executionLogs)
+    .where(and(eq(executionLogs.id, runId), eq(executionLogs.workspaceId, ctx.workspaceId)))
+    .limit(1)
+  if (!run) throw new Error('Run not found')
+  if (run.status === 'queued' || run.status === 'running') throw new Error('This run is still in progress.')
+  const outcome = await enqueueRun(run.pipelineId, scope(ctx), 'manual')
+  if (outcome.status === 'queued') startWorker()
+  await audit(ctx, 'RETRY', run.pipelineId, { previousRunId: runId, runId: outcome.runId })
   revalidatePath('/dashboard')
   return outcome
 }
@@ -276,7 +315,7 @@ export async function runPipelineNow(rawId: string) {
  * waiting (paused between invocations, or due for a retry), so runs progress
  * even where no scheduler runs (development and preview).
  */
-export async function getRunStatus(rawRunId: string) {
+async function getRunStatusImpl(rawRunId: string) {
   const ctx = await requireWorkspace()
   const runId = idSchema.parse(rawRunId)
   const [run] = await db
@@ -285,13 +324,13 @@ export async function getRunStatus(rawRunId: string) {
     .where(and(eq(executionLogs.id, runId), eq(executionLogs.workspaceId, ctx.workspaceId)))
     .limit(1)
   if (!run) throw new Error('Run not found')
-  const active = run.status === 'queued' || run.status === 'running'
+  const active = run.status === 'queued' || run.status === 'running' || run.status === 'cancelling'
   if (active) await nudgeWorker(ctx.workspaceId)
   return { ...run, active }
 }
 
 /** Test run of an unsaved definition: real source data, nothing written. Uses the saved sync position when editing. */
-export async function testPipeline(definition: unknown, rawPipelineId?: string) {
+async function testPipelineImpl(definition: unknown, rawPipelineId?: string) {
   const ctx = await requireWorkspace('pipelines:edit')
   try {
     let state: unknown = null
@@ -306,7 +345,7 @@ export async function testPipeline(definition: unknown, rawPipelineId?: string) 
 }
 
 /** Forget the incremental sync position so the next run reads everything again. */
-export async function resetSyncPosition(rawId: string) {
+async function resetSyncPositionImpl(rawId: string) {
   const ctx = await requireWorkspace('pipelines:edit')
   const id = idSchema.parse(rawId)
   const existing = await getOwned(ctx, id)
@@ -315,4 +354,71 @@ export async function resetSyncPosition(rawId: string) {
   await db.update(pipelines).set({ state, updatedAt: new Date() }).where(and(eq(pipelines.id, id), eq(pipelines.workspaceId, ctx.workspaceId)))
   await audit(ctx, 'RESET_SYNC', id)
   revalidatePath('/dashboard')
+}
+
+// ── Server actions: thin wrappers that return errors as values so their messages
+// reach the user in production. Call them through lib/actions/pipelines.ts. ──
+
+export async function listPipelines(...args: Parameters<typeof listPipelinesImpl>) {
+  return guard(() => listPipelinesImpl(...args))
+}
+
+export async function getBuilderOptions(...args: Parameters<typeof getBuilderOptionsImpl>) {
+  return guard(() => getBuilderOptionsImpl(...args))
+}
+
+export async function listRuns(...args: Parameters<typeof listRunsImpl>) {
+  return guard(() => listRunsImpl(...args))
+}
+
+export async function getRunRejects(...args: Parameters<typeof getRunRejectsImpl>) {
+  return guard(() => getRunRejectsImpl(...args))
+}
+
+export async function listVersions(...args: Parameters<typeof listVersionsImpl>) {
+  return guard(() => listVersionsImpl(...args))
+}
+
+export async function getDatasetPreview(...args: Parameters<typeof getDatasetPreviewImpl>) {
+  return guard(() => getDatasetPreviewImpl(...args))
+}
+
+export async function savePipeline(...args: Parameters<typeof savePipelineImpl>) {
+  return guard(() => savePipelineImpl(...args))
+}
+
+export async function setPipelineEnabled(...args: Parameters<typeof setPipelineEnabledImpl>) {
+  return guard(() => setPipelineEnabledImpl(...args))
+}
+
+export async function deletePipeline(...args: Parameters<typeof deletePipelineImpl>) {
+  return guard(() => deletePipelineImpl(...args))
+}
+
+export async function restoreVersion(...args: Parameters<typeof restoreVersionImpl>) {
+  return guard(() => restoreVersionImpl(...args))
+}
+
+export async function runPipelineNow(...args: Parameters<typeof runPipelineNowImpl>) {
+  return guard(() => runPipelineNowImpl(...args))
+}
+
+export async function cancelPipelineRun(...args: Parameters<typeof cancelPipelineRunImpl>) {
+  return guard(() => cancelPipelineRunImpl(...args))
+}
+
+export async function retryPipelineRun(...args: Parameters<typeof retryPipelineRunImpl>) {
+  return guard(() => retryPipelineRunImpl(...args))
+}
+
+export async function getRunStatus(...args: Parameters<typeof getRunStatusImpl>) {
+  return guard(() => getRunStatusImpl(...args))
+}
+
+export async function testPipeline(...args: Parameters<typeof testPipelineImpl>) {
+  return guard(() => testPipelineImpl(...args))
+}
+
+export async function resetSyncPosition(...args: Parameters<typeof resetSyncPositionImpl>) {
+  return guard(() => resetSyncPositionImpl(...args))
 }

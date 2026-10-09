@@ -2,15 +2,16 @@
 
 import { createHash, randomBytes } from 'node:crypto'
 import { z } from 'zod'
-import { and, asc, desc, eq, gt, isNull, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, isNull, like, sql } from 'drizzle-orm'
 import { cookies } from 'next/headers'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/lib/db'
-import { user, workspaceInvites, workspaceMembers, workspaces } from '@/lib/db/schema'
+import { session, twoFactor, user, verification, workspaceInvites, workspaceMembers, workspaces } from '@/lib/db/schema'
 import { ACTIVE_WORKSPACE_COOKIE, getMembership, newId, requireUserId, requireWorkspace, type WorkspaceContext } from '@/lib/auth/session'
 import { ROLE_INFO, ROLES, type Role } from '@/lib/auth/permissions'
 import { recordAudit, type AuditAction } from '@/lib/audit'
 import { appUrl, sendEmail, smtpConfigured } from '@/lib/email'
+import { guard } from '@/lib/server-action'
 
 const roleSchema = z.enum(ROLES)
 const idSchema = z.string().trim().min(1).max(100)
@@ -44,7 +45,7 @@ async function adminCount(workspaceId: string) {
 // ── Context & switching ──────────────────────────────────────────────────────
 
 /** Current workspace, the user's role in it, and every workspace they belong to. */
-export async function getWorkspaceContext() {
+async function getWorkspaceContextImpl() {
   const ctx = await requireWorkspace()
   const mine = await db
     .select({ id: workspaces.id, name: workspaces.name, role: workspaceMembers.role })
@@ -60,7 +61,7 @@ export async function getWorkspaceContext() {
   }
 }
 
-export async function switchWorkspace(rawId: string) {
+async function switchWorkspaceImpl(rawId: string) {
   const userId = await requireUserId()
   const workspaceId = idSchema.parse(rawId)
   if (!(await getMembership(userId, workspaceId))) throw new Error('You are not a member of that workspace.')
@@ -68,7 +69,7 @@ export async function switchWorkspace(rawId: string) {
   revalidatePath('/dashboard')
 }
 
-export async function createWorkspace(rawName: string) {
+async function createWorkspaceImpl(rawName: string) {
   const userId = await requireUserId()
   const name = nameSchema.parse(rawName)
   const id = newId('ws')
@@ -80,7 +81,7 @@ export async function createWorkspace(rawName: string) {
   return { id }
 }
 
-export async function renameWorkspace(rawName: string) {
+async function renameWorkspaceImpl(rawName: string) {
   const ctx = await requireWorkspace('workspace:manage')
   const name = nameSchema.parse(rawName)
   await db.update(workspaces).set({ name, updatedAt: new Date() }).where(eq(workspaces.id, ctx.workspaceId))
@@ -90,10 +91,10 @@ export async function renameWorkspace(rawName: string) {
 
 // ── Members ──────────────────────────────────────────────────────────────────
 
-export async function listMembers() {
+async function listMembersImpl() {
   const ctx = await requireWorkspace()
   const members = await db
-    .select({ userId: workspaceMembers.userId, role: workspaceMembers.role, joinedAt: workspaceMembers.createdAt, email: user.email, name: user.name })
+    .select({ userId: workspaceMembers.userId, role: workspaceMembers.role, joinedAt: workspaceMembers.createdAt, email: user.email, name: user.name, twoFactorEnabled: user.twoFactorEnabled })
     .from(workspaceMembers)
     .innerJoin(user, eq(user.id, workspaceMembers.userId))
     .where(eq(workspaceMembers.workspaceId, ctx.workspaceId))
@@ -101,7 +102,7 @@ export async function listMembers() {
   return members.map((m) => ({ ...m, role: m.role as Role, isYou: m.userId === ctx.userId }))
 }
 
-export async function changeMemberRole(rawUserId: string, rawRole: string) {
+async function changeMemberRoleImpl(rawUserId: string, rawRole: string) {
   const ctx = await requireWorkspace('workspace:manage')
   const userId = idSchema.parse(rawUserId)
   const role = roleSchema.parse(rawRole)
@@ -118,8 +119,42 @@ export async function changeMemberRole(rawUserId: string, rawRole: string) {
   revalidatePath('/dashboard')
 }
 
+/**
+ * Admin recovery for a member who lost their authenticator and backup codes
+ * (TD-19): turns their 2FA off, signs them out everywhere and forgets trusted
+ * devices. At their next sign-in (password) they must enroll 2FA again.
+ */
+async function resetMemberTwoFactorImpl(rawUserId: string) {
+  const ctx = await requireWorkspace('workspace:manage')
+  const userId = idSchema.parse(rawUserId)
+  if (userId === ctx.userId) throw new Error('Use "Set up on a new device" under Your account security to change your own 2FA.')
+  if (!(await getMembership(userId, ctx.workspaceId))) throw new Error('That user is not a member of this workspace.')
+  const [target] = await db.select({ email: user.email }).from(user).where(eq(user.id, userId)).limit(1)
+  await db.transaction(async (tx) => {
+    await tx.update(user).set({ twoFactorEnabled: false, updatedAt: new Date() }).where(eq(user.id, userId))
+    await tx.delete(twoFactor).where(eq(twoFactor.userId, userId))
+    await tx.delete(session).where(eq(session.userId, userId))
+    // "Trust this device" records would otherwise skip the code after re-enrollment.
+    await tx.delete(verification).where(and(eq(verification.value, userId), like(verification.identifier, 'trust-device-%')))
+  })
+  await audit(ctx, 'RESET_2FA', userId, { email: target?.email })
+  if (target?.email && smtpConfigured()) {
+    await sendEmail({
+      to: target.email,
+      subject: 'Your KMPlus Nexus two-factor authentication was reset',
+      lines: [
+        `${ctx.name || ctx.email}, an admin of "${ctx.workspaceName}", reset two-factor authentication on your account and signed you out.`,
+        'Sign in with your password and set up an authenticator app again.',
+        "If you didn't ask for this, contact your admin right away.",
+      ],
+      action: { label: 'Sign in', url: `${appUrl()}/sign-in` },
+    }).catch((err) => console.error('[2fa-reset] email failed:', err instanceof Error ? err.message : err))
+  }
+  revalidatePath('/dashboard')
+}
+
 /** Removes a member (admins), or leaves the workspace (anyone, for themselves). */
-export async function removeMember(rawUserId: string) {
+async function removeMemberImpl(rawUserId: string) {
   const ctx = await requireWorkspace()
   const userId = idSchema.parse(rawUserId)
   const self = userId === ctx.userId
@@ -141,7 +176,7 @@ export async function removeMember(rawUserId: string) {
  * Creates an invite, emails the link when SMTP is configured, and returns the
  * link path so the admin can also copy it. Only the token hash is stored.
  */
-export async function createInvite(rawEmail: string, rawRole: string) {
+async function createInviteImpl(rawEmail: string, rawRole: string) {
   const ctx = await requireWorkspace('workspace:manage')
   const email = z.string().trim().toLowerCase().email('Enter a valid email').parse(rawEmail)
   const role = roleSchema.parse(rawRole)
@@ -187,7 +222,7 @@ export async function createInvite(rawEmail: string, rawRole: string) {
   return { path, email, role, emailed }
 }
 
-export async function listInvites() {
+async function listInvitesImpl() {
   const ctx = await requireWorkspace('workspace:manage')
   return db
     .select({ id: workspaceInvites.id, email: workspaceInvites.email, role: workspaceInvites.role, expiresAt: workspaceInvites.expiresAt, createdAt: workspaceInvites.createdAt })
@@ -203,7 +238,7 @@ export async function listInvites() {
     .orderBy(desc(workspaceInvites.createdAt))
 }
 
-export async function revokeInvite(rawId: string) {
+async function revokeInviteImpl(rawId: string) {
   const ctx = await requireWorkspace('workspace:manage')
   const id = idSchema.parse(rawId)
   await db
@@ -232,7 +267,7 @@ async function findValidInvite(token: string) {
 }
 
 /** For the invite page: what the link is for (no secrets). */
-export async function describeInvite(rawToken: string) {
+async function describeInviteImpl(rawToken: string) {
   const token = z.string().min(10).max(200).parse(rawToken)
   const invite = await findValidInvite(token)
   if (!invite) return null
@@ -240,7 +275,7 @@ export async function describeInvite(rawToken: string) {
 }
 
 /** Accepts an invite. The signed-in account's email must match the invited email. */
-export async function acceptInvite(rawToken: string) {
+async function acceptInviteImpl(rawToken: string) {
   const userId = await requireUserId()
   const token = z.string().min(10).max(200).parse(rawToken)
   const invite = await findValidInvite(token)
@@ -258,4 +293,59 @@ export async function acceptInvite(rawToken: string) {
   await setActiveWorkspace(invite.workspaceId)
   revalidatePath('/dashboard')
   return { workspaceName: invite.workspaceName }
+}
+
+// ── Server actions: thin wrappers that return errors as values so their messages
+// reach the user in production. Call them through lib/actions/workspaces.ts. ──
+
+export async function getWorkspaceContext(...args: Parameters<typeof getWorkspaceContextImpl>) {
+  return guard(() => getWorkspaceContextImpl(...args))
+}
+
+export async function switchWorkspace(...args: Parameters<typeof switchWorkspaceImpl>) {
+  return guard(() => switchWorkspaceImpl(...args))
+}
+
+export async function createWorkspace(...args: Parameters<typeof createWorkspaceImpl>) {
+  return guard(() => createWorkspaceImpl(...args))
+}
+
+export async function renameWorkspace(...args: Parameters<typeof renameWorkspaceImpl>) {
+  return guard(() => renameWorkspaceImpl(...args))
+}
+
+export async function listMembers(...args: Parameters<typeof listMembersImpl>) {
+  return guard(() => listMembersImpl(...args))
+}
+
+export async function changeMemberRole(...args: Parameters<typeof changeMemberRoleImpl>) {
+  return guard(() => changeMemberRoleImpl(...args))
+}
+
+export async function resetMemberTwoFactor(...args: Parameters<typeof resetMemberTwoFactorImpl>) {
+  return guard(() => resetMemberTwoFactorImpl(...args))
+}
+
+export async function removeMember(...args: Parameters<typeof removeMemberImpl>) {
+  return guard(() => removeMemberImpl(...args))
+}
+
+export async function createInvite(...args: Parameters<typeof createInviteImpl>) {
+  return guard(() => createInviteImpl(...args))
+}
+
+export async function listInvites(...args: Parameters<typeof listInvitesImpl>) {
+  return guard(() => listInvitesImpl(...args))
+}
+
+export async function revokeInvite(...args: Parameters<typeof revokeInviteImpl>) {
+  return guard(() => revokeInviteImpl(...args))
+}
+
+export async function describeInvite(...args: Parameters<typeof describeInviteImpl>) {
+  return guard(() => describeInviteImpl(...args))
+}
+
+export async function acceptInvite(...args: Parameters<typeof acceptInviteImpl>) {
+  return guard(() => acceptInviteImpl(...args))
 }

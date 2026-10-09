@@ -65,3 +65,8 @@ export const auth = {
 export function redirect(url: string): never {
   throw new Error(`redirect: ${url}`)
 }
+
+/** Rethrows the stub redirect so guard() lets it through, like Next does. */
+export function unstable_rethrow(err: unknown) {
+  if (err instanceof Error && err.message.startsWith('redirect: ')) throw err
+}

@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { AlertTriangle, ArrowRight, CheckCircle2, Circle, Loader2, XCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { getOverview } from '@/app/actions/monitoring'
+import { getOverview } from '@/lib/actions/monitoring'
 import { useWorkspace } from '@/components/workspace/workspace-context'
 import { ROLE_INFO } from '@/lib/auth/permissions'
 import { formatWhen } from '@/components/pipelines/run-history'

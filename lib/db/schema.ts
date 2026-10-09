@@ -257,6 +257,34 @@ export const nexusDatasets = pgTable('nexus_datasets', {
   updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [uniqueIndex('nexus_datasets_workspace_name_idx').on(t.workspaceId, t.name)])
 
+// Governance (PRD Layer 13): per-dataset column classification, masking and retention.
+export const datasetPolicies = pgTable('dataset_policies', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  datasetName: text('datasetName').notNull(),
+  /** { [column]: { classification: 'public' | 'internal' | 'personal' | 'sensitive', mask: 'none' | 'full' | 'partial' | 'hash' } } */
+  columns: jsonb('columns').notNull().default({}),
+  /** Keep rows loaded in the last N days; null keeps everything. */
+  retentionDays: integer('retentionDays'),
+  retentionAppliedAt: timestamp('retentionAppliedAt', { withTimezone: true }),
+  updatedBy: text('updatedBy').notNull(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex('dataset_policies_workspace_dataset_idx').on(t.workspaceId, t.datasetName)])
+
+// Analytics (PRD Layer 10): dashboards of widgets bound to workspace datasets.
+export const dashboards = pgTable('dashboards', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  name: text('name').notNull(),
+  description: text('description'),
+  /** Widget specs, validated by lib/analytics/definition.ts. */
+  widgets: jsonb('widgets').notNull().default([]),
+  createdBy: text('createdBy').notNull(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('dashboards_workspace_idx').on(t.workspaceId)])
+
 // Layer 11: Version Control
 export const pipelineVersions = pgTable('pipeline_versions', {
   id: text('id').primaryKey(),

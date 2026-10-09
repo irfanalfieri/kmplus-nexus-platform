@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Bell, Info, Mail, XCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { listNotifications, markNotificationsRead } from '@/app/actions/monitoring'
+import { listNotifications, markNotificationsRead } from '@/lib/actions/monitoring'
 
 type Data = Awaited<ReturnType<typeof listNotifications>>
 

@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import {
   getDataSourceTableSample,
   scanDataSourceSchema,
-} from '@/app/actions/connector-source'
+} from '@/lib/actions/connector-source'
 import type { SchemaScanResult, SchemaTable } from '@/lib/connectors/types'
 
 interface SchemaExplorerModalProps {
@@ -100,7 +100,7 @@ export default function SchemaExplorerModal({
   if (!isOpen) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="Schema explorer">
       <div className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-border bg-card">
         <div className="flex items-center justify-between border-b border-border p-6">
           <div>

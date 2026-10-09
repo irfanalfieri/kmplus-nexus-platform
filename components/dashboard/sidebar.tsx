@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { BarChart3, Database, Zap, Settings, LogOut, Workflow } from 'lucide-react'
+import { Activity, BarChart3, Database, LayoutDashboard, LogOut, Settings, Shield, Workflow, Zap } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { authClient } from '@/lib/auth-client'
 import WorkspaceSwitcher from '@/components/workspace/workspace-switcher'
@@ -27,7 +27,7 @@ export default function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
 
       <nav className="flex-1 p-4 space-y-2 overflow-auto">
         <NavItem
-          icon={<BarChart3 className="w-5 h-5" />}
+          icon={<LayoutDashboard className="w-5 h-5" />}
           label="Dashboard"
           onClick={() => setActiveTab('overview')}
           active={activeTab === 'overview'}
@@ -51,7 +51,7 @@ export default function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
           active={activeTab === 'pipelines'}
         />
         <NavItem
-          icon={<BarChart3 className="w-5 h-5" />}
+          icon={<Activity className="w-5 h-5" />}
           label="Monitoring"
           onClick={() => setActiveTab('monitoring')}
           active={activeTab === 'monitoring'}
@@ -63,7 +63,7 @@ export default function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
           active={activeTab === 'analytics'}
         />
         <NavItem
-          icon={<Settings className="w-5 h-5" />}
+          icon={<Shield className="w-5 h-5" />}
           label="Governance"
           onClick={() => setActiveTab('governance')}
           active={activeTab === 'governance'}

@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import { FlaskConical } from 'lucide-react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import Sidebar from './sidebar'
 import TopBar from './top-bar'
@@ -14,19 +13,6 @@ import AnalyticsDashboardLayer from './layers/analytics-dashboard-layer'
 import GovernanceLayer from './layers/governance-layer'
 import WorkspaceSettingsLayer from './layers/workspace-settings-layer'
 import { WorkspaceProvider, type WorkspaceInfo } from '@/components/workspace/workspace-context'
-
-/** Marks screens that still show sample data (PRD §10), so nobody mistakes it for theirs. */
-function PreviewBanner({ what }: { what: string }) {
-  return (
-    <div className="flex items-start gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm" role="note">
-      <FlaskConical className="mt-0.5 h-4 w-4 shrink-0 text-amber-700 dark:text-amber-300" aria-hidden />
-      <div>
-        <div className="font-medium">Preview: sample data</div>
-        <div className="text-muted-foreground">{what} is not connected to your workspace yet. Everything below is illustrative and nothing you change here is saved.</div>
-      </div>
-    </div>
-  )
-}
 
 export default function DashboardLayout({ workspace }: { workspace: WorkspaceInfo }) {
   const [activeTab, setActiveTab] = useState('overview')
@@ -74,13 +60,11 @@ export default function DashboardLayout({ workspace }: { workspace: WorkspaceInf
                 </TabsContent>
 
                 <TabsContent value="analytics" className="space-y-6">
-                  <PreviewBanner what="Analytics & dashboards (PRD Layer 10, Phase 3)" />
-                  <AnalyticsDashboardLayer />
+                  <AnalyticsDashboardLayer onNavigate={setActiveTab} />
                 </TabsContent>
 
                 <TabsContent value="governance" className="space-y-6">
-                  <PreviewBanner what="Governance policies (PRD Layer 13). Members and roles are real and live in Settings" />
-                  <GovernanceLayer />
+                  <GovernanceLayer onNavigate={setActiveTab} />
                 </TabsContent>
 
                 <TabsContent value="settings" className="space-y-6">

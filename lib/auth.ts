@@ -17,11 +17,17 @@ export const APP_NAME = 'KMPlus Nexus'
  */
 
 const LOGIN_PATHS = new Set(['/sign-in/email', '/two-factor/verify-totp', '/two-factor/verify-backup-code', '/verify-email'])
+/** Self-service security changes (Settings → Your account security). */
+const SECURITY_PATHS: Record<string, string> = {
+  '/two-factor/generate-backup-codes': 'REGENERATE_BACKUP_CODES',
+  '/two-factor/disable': 'DISABLE_2FA',
+}
 
 /**
- * Records LOGIN (and ENABLE_2FA) in audit_logs. Registered after twoFactor, so
- * a password step that still needs a code has no session here and isn't logged.
- * Writes with the pool directly: lib/audit imports lib/auth, which would be a cycle.
+ * Records LOGIN, ENABLE_2FA and self-service 2FA changes in audit_logs.
+ * Registered after twoFactor, so a password step that still needs a code has
+ * no session here and isn't logged. Writes with the pool directly: lib/audit
+ * imports lib/auth, which would be a cycle.
  */
 const auditLogins = () =>
   ({
@@ -29,26 +35,26 @@ const auditLogins = () =>
     hooks: {
       after: [
         {
-          matcher: (ctx) => LOGIN_PATHS.has(ctx.path ?? ''),
+          matcher: (ctx) => LOGIN_PATHS.has(ctx.path ?? '') || (ctx.path ?? '') in SECURITY_PATHS,
           handler: createAuthMiddleware(async (ctx) => {
-            const created = ctx.context.newSession
             const path = ctx.path ?? ''
-            if (!created) return
-            const challenge = ctx.headers?.get('cookie')?.includes('.two_factor=') ?? false
-            const enabling = path === '/two-factor/verify-totp' && !challenge
-            const method = path === '/sign-in/email' ? 'password' : path === '/verify-email' ? 'email_link' : path.endsWith('backup-code') ? 'backup_code' : 'totp'
+            const created = ctx.context.newSession
+            let entry: { userId: string; action: string; changes: object; ip?: string | null; ua?: string | null } | null = null
+            if (path in SECURITY_PATHS) {
+              // Only after success: a wrong password throws before this hook.
+              const actor = created ?? ctx.context.session
+              if (actor) entry = { userId: actor.user.id, action: SECURITY_PATHS[path], changes: {}, ip: actor.session.ipAddress, ua: actor.session.userAgent }
+            } else if (created) {
+              const challenge = ctx.headers?.get('cookie')?.includes('.two_factor=') ?? false
+              const enabling = path === '/two-factor/verify-totp' && !challenge
+              const method = path === '/sign-in/email' ? 'password' : path === '/verify-email' ? 'email_link' : path.endsWith('backup-code') ? 'backup_code' : 'totp'
+              entry = { userId: created.user.id, action: enabling ? 'ENABLE_2FA' : 'LOGIN', changes: enabling ? {} : { method }, ip: created.session.ipAddress, ua: created.session.userAgent }
+            }
+            if (!entry) return
             try {
               await pool.query(
                 'insert into audit_logs ("id", "userId", "workspaceId", "action", "resource", "resourceId", "changes", "ipAddress", "userAgent") values ($1, $2, null, $3, $4, $2, $5, $6, $7)',
-                [
-                  `audit_${randomUUID()}`,
-                  created.user.id,
-                  enabling ? 'ENABLE_2FA' : 'LOGIN',
-                  'account',
-                  JSON.stringify(enabling ? {} : { method }),
-                  created.session.ipAddress ?? null,
-                  created.session.userAgent?.slice(0, 300) ?? null,
-                ]
+                [`audit_${randomUUID()}`, entry.userId, entry.action, 'account', JSON.stringify(entry.changes), entry.ip ?? null, entry.ua?.slice(0, 300) ?? null]
               )
             } catch (err) {
               console.error('[auth] audit insert failed:', err instanceof Error ? err.message : err)

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { History, Loader2, RotateCcw, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { getRunRejects, listRuns, listVersions, restoreVersion } from '@/app/actions/pipelines'
+import { getRunRejects, listRuns, listVersions, restoreVersion } from '@/lib/actions/pipelines'
 import type { StepStat } from '@/lib/pipelines/engine'
 import { useCan } from '@/components/workspace/workspace-context'
 
@@ -23,6 +23,8 @@ export function statusBadge(status: string | null | undefined) {
       return <Badge variant="secondary">Running…</Badge>
     case 'queued':
       return <Badge variant="outline">Queued…</Badge>
+    case 'cancelled':
+      return <Badge variant="outline">Cancelled</Badge>
     default:
       return <Badge variant="outline">Never run</Badge>
   }

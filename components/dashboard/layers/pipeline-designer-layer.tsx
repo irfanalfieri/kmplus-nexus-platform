@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Database, Edit, History, Loader2, Play, Plus, RotateCcw, Trash2, Workflow } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { deletePipeline, getBuilderOptions, getDatasetPreview, getRunStatus, listPipelines, resetSyncPosition, runPipelineNow, setPipelineEnabled } from '@/app/actions/pipelines'
+import { deletePipeline, getBuilderOptions, getDatasetPreview, getRunStatus, listPipelines, resetSyncPosition, runPipelineNow, setPipelineEnabled } from '@/lib/actions/pipelines'
 import { DEFAULT_SCHEDULE, DEFAULT_SETTINGS, definitionSchema, scheduleSchema, type PipelineStep } from '@/lib/pipelines/definition'
 import { describeSchedule } from '@/lib/pipelines/schedule'
 import { stepLabel } from '@/lib/pipelines/engine'
@@ -97,7 +97,7 @@ export default function PipelineDesignerLayer() {
         setNotice({
           id: p.id,
           kind: s.status === 'success' ? 'ok' : s.status === 'failed' ? 'err' : 'warn',
-          text: s.status === 'failed' ? `Run failed: ${s.errorMessage ?? 'unknown error'}` : `Run finished: ${summary}`,
+          text: s.status === 'failed' ? `Run failed: ${s.errorMessage ?? 'unknown error'}` : s.status === 'cancelled' ? `Run cancelled: ${summary}` : `Run finished: ${summary}`,
         })
         break
       }

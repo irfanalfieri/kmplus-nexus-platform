@@ -9,10 +9,10 @@ export type Role = (typeof ROLES)[number]
 
 export const ROLE_INFO: Record<Role, { label: string; description: string }> = {
   admin: { label: 'Admin', description: 'Everything: data sources, connectors, pipelines, members and roles.' },
-  steward: { label: 'Data steward', description: 'Builds and runs pipelines, previews data, reads the audit log.' },
-  operator: { label: 'Operator', description: 'Runs and schedules pipelines and watches monitoring; cannot edit them.' },
-  analyst: { label: 'Analyst', description: 'Browses pipelines, monitoring and dataset contents.' },
-  auditor: { label: 'Auditor', description: 'Read-only, including dataset contents and the audit log.' },
+  steward: { label: 'Data steward', description: 'Builds and runs pipelines, sets dataset policies (masking, retention), sees unmasked data, reads the audit log.' },
+  operator: { label: 'Operator', description: 'Runs and schedules pipelines and watches monitoring; cannot edit them. Sees masked data.' },
+  analyst: { label: 'Analyst', description: 'Builds Analytics dashboards; browses pipelines, monitoring and dataset contents (masked).' },
+  auditor: { label: 'Auditor', description: 'Read-only, including dataset contents (masked) and the audit log.' },
   viewer: { label: 'Viewer', description: 'Read-only overview of pipelines and monitoring; no data contents.' },
 }
 
@@ -31,6 +31,14 @@ const MATRIX = {
   'data:preview': ['admin', 'steward', 'operator', 'analyst', 'auditor'],
   /** Read the audit log. */
   'audit:view': ['admin', 'steward', 'auditor'],
+  /** See columns a dataset policy masks, unmasked (everyone else sees masked values). */
+  'data:unmasked': ['admin', 'steward'],
+  /** Edit dataset policies: column classification, masking, retention. */
+  'governance:manage': ['admin', 'steward'],
+  /** Erase a person's records across datasets (right to erasure, UU PDP). */
+  'data:erase': ['admin'],
+  /** Create, edit and delete Analytics dashboards. */
+  'dashboards:edit': ['admin', 'steward', 'analyst'],
 } as const satisfies Record<string, readonly Role[]>
 
 export type Permission = keyof typeof MATRIX

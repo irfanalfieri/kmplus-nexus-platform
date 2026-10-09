@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Download, Check, Lock, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { getConnectorMarketplace, installConnector, uninstallConnector } from '@/app/actions/connectors'
+import { getConnectorMarketplace, installConnector, uninstallConnector } from '@/lib/actions/connectors'
 import { useCan } from '@/components/workspace/workspace-context'
 
 type MarketplaceConnector = Awaited<ReturnType<typeof getConnectorMarketplace>>[number]

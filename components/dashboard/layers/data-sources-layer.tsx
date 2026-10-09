@@ -28,9 +28,9 @@ import {
   renameDataSource,
   setDataSourceRole,
   testConnection,
-} from '@/app/actions/data-sources'
-import { getInstalledConnectorSlugs } from '@/app/actions/connectors'
-import { previewRestConnection, testAndScanDataSource } from '@/app/actions/connector-source'
+} from '@/lib/actions/data-sources'
+import { getInstalledConnectorSlugs } from '@/lib/actions/connectors'
+import { previewRestConnection, testAndScanDataSource } from '@/lib/actions/connector-source'
 import type { RestRequestPreview } from '@/lib/connectors/rest-client'
 
 type DataSourceRow = {
@@ -324,7 +324,7 @@ export default function DataSourcesLayer() {
         </div>
 
         {showAddForm && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="Add data source">
             <div
               className={`max-h-[90vh] w-full space-y-4 overflow-y-auto rounded-lg border border-border bg-card p-6 ${
                 newSourceType === 'rest' ? 'max-w-4xl' : newSourceType === 'salesforce' ? 'max-w-xl' : 'max-w-lg'

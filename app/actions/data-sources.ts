@@ -5,12 +5,13 @@ import { and, desc, eq } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/lib/db'
 import { dataSources, pipelines } from '@/lib/db/schema'
-import { assertConnectorInstalled } from '@/app/actions/connectors'
+import { assertConnectorInstalled } from '@/lib/connectors/install-check'
 import { getConnectorDefinition, isConnectorSlug } from '@/lib/connectors/catalog'
 import { decryptCredentials, encryptCredentials } from '@/lib/security/credentials'
 import { newId, requireWorkspace, type WorkspaceContext } from '@/lib/auth/session'
 import { recordAudit, type AuditAction } from '@/lib/audit'
 import { hasCustomCredentialForm, maskCredentials, restoreSecrets } from '@/lib/connectors/secret-mask'
+import { guard } from '@/lib/server-action'
 
 const idSchema = z.string().trim().min(1).max(100)
 const roleSchema = z.enum(['source', 'destination'])
@@ -30,7 +31,7 @@ async function getOwned(ctx: WorkspaceContext, id: string) {
   return source
 }
 
-export async function getDataSources() {
+async function getDataSourcesImpl() {
   const ctx = await requireWorkspace()
   // Never send credentials to the client.
   return db
@@ -62,7 +63,7 @@ const createInput = z.object({
   credentials: credentialValues.default({}),
 })
 
-export async function createDataSource(input: z.input<typeof createInput>) {
+async function createDataSourceImpl(input: z.input<typeof createInput>) {
   const ctx = await requireWorkspace('sources:manage')
   const data = createInput.parse(input)
   if (!isConnectorSlug(data.sourceType)) throw new Error(`Unknown connector "${data.sourceType}".`)
@@ -92,7 +93,7 @@ function asStrings(values: Record<string, unknown>) {
 }
 
 /** Tests the stored credentials and refreshes the schema scan. */
-export async function testConnection(rawId: string) {
+async function testConnectionImpl(rawId: string) {
   const ctx = await requireWorkspace('sources:manage')
   const source = await getOwned(ctx, idSchema.parse(rawId))
   if (!isConnectorSlug(source.sourceType)) throw new Error(`Unknown connector "${source.sourceType}".`)
@@ -116,7 +117,7 @@ export async function testConnection(rawId: string) {
  * Non-secret credential values for the edit form. Secret fields (type
  * "password" in the catalog) are never returned; the form leaves them blank.
  */
-export async function getEditableCredentials(rawId: string) {
+async function getEditableCredentialsImpl(rawId: string) {
   const ctx = await requireWorkspace('sources:manage')
   const source = await getOwned(ctx, idSchema.parse(rawId))
   const stored = asStrings(decryptCredentials(source.id, source.credentials))
@@ -145,7 +146,7 @@ export async function getEditableCredentials(rawId: string) {
  * fields keep their stored value. The merged credentials must pass a
  * connection test before they are saved (and the schema is re-scanned).
  */
-export async function updateDataSourceCredentials(rawId: string, rawValues: Record<string, unknown>) {
+async function updateDataSourceCredentialsImpl(rawId: string, rawValues: Record<string, unknown>) {
   const ctx = await requireWorkspace('sources:manage')
   const source = await getOwned(ctx, idSchema.parse(rawId))
   const values = asStrings(credentialValues.parse(rawValues))
@@ -206,7 +207,7 @@ async function testAndSave(ctx: WorkspaceContext, source: typeof dataSources.$in
   return { ok: true as const, message: `${test.message} Found ${scan.tables.length} objects.` }
 }
 
-export async function renameDataSource(rawId: string, rawName: string) {
+async function renameDataSourceImpl(rawId: string, rawName: string) {
   const ctx = await requireWorkspace('sources:manage')
   const id = idSchema.parse(rawId)
   const name = z.string().trim().min(1, 'Name is required').max(120).parse(rawName)
@@ -219,7 +220,7 @@ export async function renameDataSource(rawId: string, rawName: string) {
 }
 
 /** Switches a data source between source and destination (pipelines only write to destinations). */
-export async function setDataSourceRole(rawId: string, rawRole: string) {
+async function setDataSourceRoleImpl(rawId: string, rawRole: string) {
   const ctx = await requireWorkspace('sources:manage')
   const source = await getOwned(ctx, idSchema.parse(rawId))
   const role = roleSchema.parse(rawRole)
@@ -231,7 +232,7 @@ export async function setDataSourceRole(rawId: string, rawRole: string) {
   revalidatePath('/dashboard')
 }
 
-export async function deleteDataSource(rawId: string) {
+async function deleteDataSourceImpl(rawId: string) {
   const ctx = await requireWorkspace('sources:manage')
   const id = idSchema.parse(rawId)
   const used = await db
@@ -245,4 +246,39 @@ export async function deleteDataSource(rawId: string) {
   await db.delete(dataSources).where(and(eq(dataSources.id, id), eq(dataSources.workspaceId, ctx.workspaceId)))
   await audit(ctx, 'DELETE', id)
   revalidatePath('/dashboard')
+}
+
+// ── Server actions: thin wrappers that return errors as values so their messages
+// reach the user in production. Call them through lib/actions/data-sources.ts. ──
+
+export async function getDataSources(...args: Parameters<typeof getDataSourcesImpl>) {
+  return guard(() => getDataSourcesImpl(...args))
+}
+
+export async function createDataSource(...args: Parameters<typeof createDataSourceImpl>) {
+  return guard(() => createDataSourceImpl(...args))
+}
+
+export async function testConnection(...args: Parameters<typeof testConnectionImpl>) {
+  return guard(() => testConnectionImpl(...args))
+}
+
+export async function getEditableCredentials(...args: Parameters<typeof getEditableCredentialsImpl>) {
+  return guard(() => getEditableCredentialsImpl(...args))
+}
+
+export async function updateDataSourceCredentials(...args: Parameters<typeof updateDataSourceCredentialsImpl>) {
+  return guard(() => updateDataSourceCredentialsImpl(...args))
+}
+
+export async function renameDataSource(...args: Parameters<typeof renameDataSourceImpl>) {
+  return guard(() => renameDataSourceImpl(...args))
+}
+
+export async function setDataSourceRole(...args: Parameters<typeof setDataSourceRoleImpl>) {
+  return guard(() => setDataSourceRoleImpl(...args))
+}
+
+export async function deleteDataSource(...args: Parameters<typeof deleteDataSourceImpl>) {
+  return guard(() => deleteDataSourceImpl(...args))
 }

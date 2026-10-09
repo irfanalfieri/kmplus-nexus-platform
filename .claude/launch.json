@@ -4,8 +4,24 @@
     {
       "name": "nexus-dev",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["-y", "pnpm@10", "dev"],
+      "runtimeArgs": [
+        "-y",
+        "pnpm@10",
+        "dev"
+      ],
       "port": 3000
+    },
+    {
+      "name": "nexus-prod-local",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "-y",
+        "pnpm@10",
+        "start",
+        "-p",
+        "3100"
+      ],
+      "port": 3100
     }
   ]
 }

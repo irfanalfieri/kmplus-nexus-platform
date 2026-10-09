@@ -8,6 +8,7 @@ import { connectorInstalls, dataSources } from '@/lib/db/schema'
 import { CONNECTOR_CATALOG, getConnectorDefinition } from '@/lib/connectors/catalog'
 import { recordAudit, type AuditAction } from '@/lib/audit'
 import { newId, requireWorkspace, type WorkspaceContext } from '@/lib/auth/session'
+import { guard } from '@/lib/server-action'
 
 /**
  * While billing is off (development), every connector — premium included —
@@ -27,7 +28,7 @@ async function audit(ctx: WorkspaceContext, action: AuditAction, slug: string) {
   await recordAudit(ctx, { action, resource: 'connector', resourceId: slug })
 }
 
-export async function getConnectorMarketplace() {
+async function getConnectorMarketplaceImpl() {
   const ctx = await requireWorkspace()
   const installs = await getWorkspaceInstalls(ctx.workspaceId)
   const installMap = new Map(installs.map((i) => [i.connectorSlug, i]))
@@ -47,13 +48,13 @@ export async function getConnectorMarketplace() {
   })
 }
 
-export async function getInstalledConnectorSlugs() {
-  const marketplace = await getConnectorMarketplace()
+async function getInstalledConnectorSlugsImpl() {
+  const marketplace = await getConnectorMarketplaceImpl()
   return marketplace.filter((c) => c.installed).map((c) => c.slug)
 }
 
 /** Installs a connector (and records the purchase when billing is on). */
-export async function installConnector(rawSlug: string) {
+async function installConnectorImpl(rawSlug: string) {
   const ctx = await requireWorkspace('connectors:manage')
   const slug = slugSchema.parse(rawSlug)
   const definition = getConnectorDefinition(slug)
@@ -76,11 +77,11 @@ export async function installConnector(rawSlug: string) {
 }
 
 /** @deprecated kept for older callers; use installConnector. */
-export async function purchaseConnector(slug: string) {
-  return installConnector(slug)
+async function purchaseConnectorImpl(slug: string) {
+  return installConnectorImpl(slug)
 }
 
-export async function uninstallConnector(rawSlug: string) {
+async function uninstallConnectorImpl(rawSlug: string) {
   const ctx = await requireWorkspace('connectors:manage')
   const slug = slugSchema.parse(rawSlug)
   const inUse = await db
@@ -98,15 +99,25 @@ export async function uninstallConnector(rawSlug: string) {
   revalidatePath('/dashboard')
 }
 
-export async function assertConnectorInstalled(rawSlug: string) {
-  const ctx = await requireWorkspace()
-  const slug = slugSchema.parse(rawSlug)
-  const [install] = await db
-    .select()
-    .from(connectorInstalls)
-    .where(and(eq(connectorInstalls.workspaceId, ctx.workspaceId), eq(connectorInstalls.connectorSlug, slug)))
-    .limit(1)
-  if (!install?.purchased || !install.installedAt) {
-    throw new Error(`Connector "${slug}" is not installed. A workspace admin can install it from the Connector Marketplace.`)
-  }
+// ── Server actions: thin wrappers that return errors as values so their messages
+// reach the user in production. Call them through lib/actions/connectors.ts. ──
+
+export async function getConnectorMarketplace(...args: Parameters<typeof getConnectorMarketplaceImpl>) {
+  return guard(() => getConnectorMarketplaceImpl(...args))
+}
+
+export async function getInstalledConnectorSlugs(...args: Parameters<typeof getInstalledConnectorSlugsImpl>) {
+  return guard(() => getInstalledConnectorSlugsImpl(...args))
+}
+
+export async function installConnector(...args: Parameters<typeof installConnectorImpl>) {
+  return guard(() => installConnectorImpl(...args))
+}
+
+export async function purchaseConnector(...args: Parameters<typeof purchaseConnectorImpl>) {
+  return guard(() => purchaseConnectorImpl(...args))
+}
+
+export async function uninstallConnector(...args: Parameters<typeof uninstallConnectorImpl>) {
+  return guard(() => uninstallConnectorImpl(...args))
 }

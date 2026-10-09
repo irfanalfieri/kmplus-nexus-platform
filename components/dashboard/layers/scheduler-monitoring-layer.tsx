@@ -1,11 +1,11 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Activity, AlertTriangle, CheckCircle2, Circle, Clock, Database, History, Loader2, PauseCircle, RefreshCw, XCircle } from 'lucide-react'
+import { Activity, AlertTriangle, CheckCircle2, Circle, Clock, Database, History, Loader2, PauseCircle, RefreshCw, RotateCcw, Square, XCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { getMonitoringOverview, type PipelineHealth } from '@/app/actions/monitoring'
-import { getDatasetPreview } from '@/app/actions/pipelines'
+import { getMonitoringOverview, type PipelineHealth } from '@/lib/actions/monitoring'
+import { cancelPipelineRun, getDatasetPreview, retryPipelineRun } from '@/lib/actions/pipelines'
 import RunHistory, { formatWhen, statusBadge } from '@/components/pipelines/run-history'
 import { SampleTable } from '@/components/pipelines/pipeline-editor'
 import { useCan } from '@/components/workspace/workspace-context'
@@ -37,6 +37,23 @@ export default function SchedulerMonitoringLayer() {
   const [historyFor, setHistoryFor] = useState<{ id: string; name: string; version: number } | null>(null)
   const [preview, setPreview] = useState<{ name: string; rows: Record<string, unknown>[] } | null>(null)
   const canPreview = useCan('data:preview')
+  const canRun = useCan('pipelines:run')
+  const [acting, setActing] = useState<string | null>(null)
+  const [notice, setNotice] = useState('')
+
+  const runAction = async (key: string, fn: () => Promise<{ message: string }>) => {
+    setActing(key)
+    setError('')
+    setNotice('')
+    try {
+      setNotice((await fn()).message)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Action failed')
+    } finally {
+      setActing(null)
+    }
+  }
 
   const load = useCallback(async () => {
     setRefreshing(true)
@@ -103,6 +120,7 @@ export default function SchedulerMonitoringLayer() {
       </div>
 
       {error && <p className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
+      {notice && <p className="rounded-lg border border-green-600/30 bg-green-600/10 p-3 text-sm text-green-700 dark:text-green-400" role="status">{notice}</p>}
 
       {!data ? (
         <div className="flex items-center justify-center rounded-xl border border-border bg-card p-10 text-muted-foreground">
@@ -164,11 +182,12 @@ export default function SchedulerMonitoringLayer() {
               <ul className="divide-y divide-border">
                 {data.jobs.map((j) => {
                   const retrying = j.status === 'queued' && j.attempts > 0
+                  const cancelling = j.status === 'cancelling'
                   return (
                     <li key={j.id} className="flex flex-wrap items-center gap-3 py-2.5 text-sm">
                       <span className="flex w-28 items-center gap-1.5 font-medium">
                         {j.status === 'running' ? <Loader2 className="h-4 w-4 animate-spin text-primary" aria-hidden /> : <Clock className="h-4 w-4 text-muted-foreground" aria-hidden />}
-                        {j.status === 'running' ? 'Running' : retrying ? 'Retrying' : 'Queued'}
+                        {cancelling ? 'Cancelling' : j.status === 'running' ? 'Running' : retrying ? 'Retrying' : 'Queued'}
                       </span>
                       <span className="min-w-0 flex-1 truncate font-medium">{j.pipelineName}</span>
                       <span className="text-muted-foreground">
@@ -177,6 +196,12 @@ export default function SchedulerMonitoringLayer() {
                       <span className="w-48 text-right text-xs text-muted-foreground">
                         {retrying ? `attempt ${j.attempts + 1} at ${formatWhen(j.availableAt)}` : `${j.trigger} · queued ${formatWhen(j.createdAt)}`}
                       </span>
+                      {canRun && !cancelling && (
+                        <Button size="sm" variant="outline" disabled={acting !== null} onClick={() => void runAction(`cancel:${j.id}`, () => cancelPipelineRun(j.id))}>
+                          {acting === `cancel:${j.id}` ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Square className="mr-1 h-3.5 w-3.5" />}
+                          Cancel
+                        </Button>
+                      )}
                     </li>
                   )
                 })}
@@ -201,6 +226,7 @@ export default function SchedulerMonitoringLayer() {
                       <th className="px-2 py-2 text-right">Written</th>
                       <th className="px-2 py-2 text-right">Rejected</th>
                       <th className="px-2 py-2 text-right">Duration</th>
+                      {canRun && <th className="px-2 py-2"><span className="sr-only">Actions</span></th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -219,6 +245,16 @@ export default function SchedulerMonitoringLayer() {
                         <td className="px-2 py-2 text-right tabular-nums">{(r.recordsSuccess ?? 0).toLocaleString()}</td>
                         <td className="px-2 py-2 text-right tabular-nums">{(r.recordsError ?? 0).toLocaleString()}</td>
                         <td className="px-2 py-2 text-right tabular-nums">{r.duration != null ? `${r.duration}s` : '—'}</td>
+                        {canRun && (
+                          <td className="px-2 py-2 text-right" onClick={(e) => e.stopPropagation()}>
+                            {(r.status === 'failed' || r.status === 'cancelled' || r.status === 'partial') && (
+                              <Button size="sm" variant="ghost" disabled={acting !== null} onClick={() => void runAction(`retry:${r.id}`, () => retryPipelineRun(r.id))} aria-label={`Run ${r.pipelineName} again`}>
+                                {acting === `retry:${r.id}` ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-1 h-4 w-4" />}
+                                Retry
+                              </Button>
+                            )}
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>

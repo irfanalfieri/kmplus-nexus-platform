@@ -17,7 +17,9 @@ export type AuditAction =
   | 'UPDATE_CREDENTIALS'
   | 'CHANGE_ROLE' | 'REMOVE_MEMBER' | 'LEAVE' | 'INVITE' | 'REVOKE_INVITE' | 'ACCEPT_INVITE'
   | 'VIEW_DATA' | 'TEST_RUN'
-  | 'LOGIN' | 'ENABLE_2FA'
+  | 'LOGIN' | 'ENABLE_2FA' | 'DISABLE_2FA' | 'REGENERATE_BACKUP_CODES' | 'RESET_2FA'
+  | 'CANCEL' | 'RETRY'
+  | 'UPDATE_POLICY'
 
 export interface AuditEntry {
   action: AuditAction

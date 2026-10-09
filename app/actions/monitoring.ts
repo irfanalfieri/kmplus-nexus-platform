@@ -9,6 +9,7 @@ import { requireWorkspace } from '@/lib/auth/session'
 import { scheduleSchema } from '@/lib/pipelines/definition'
 import { activeJobs } from '@/lib/pipelines/jobs'
 import { nudgeWorker } from '@/lib/pipelines/worker'
+import { guard } from '@/lib/server-action'
 
 const TZ = 'Asia/Jakarta'
 const DELAY_GRACE_MS = 5 * 60 * 1000
@@ -22,7 +23,7 @@ function jakartaDay(d: Date) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d)
 }
 
-export async function getMonitoringOverview() {
+async function getMonitoringOverviewImpl() {
   const ctx = await requireWorkspace()
   const now = Date.now()
   const since = new Date(now - 8 * 24 * 60 * 60 * 1000)
@@ -152,7 +153,7 @@ export async function getMonitoringOverview() {
 
 // ── Notifications (bell) ─────────────────────────────────────────────────────
 
-export async function listNotifications(limit = 20) {
+async function listNotificationsImpl(limit = 20) {
   const ctx = await requireWorkspace()
   const take = z.number().int().min(1).max(100).parse(limit)
   const [rows, [{ unread }]] = await Promise.all([
@@ -170,7 +171,7 @@ export async function listNotifications(limit = 20) {
   return { unread, items: rows }
 }
 
-export async function markNotificationsRead(ids?: string[]) {
+async function markNotificationsReadImpl(ids?: string[]) {
   const ctx = await requireWorkspace()
   const parsed = z.array(z.string().min(1).max(100)).max(200).optional().parse(ids)
   const scope = parsed?.length
@@ -182,7 +183,7 @@ export async function markNotificationsRead(ids?: string[]) {
 
 // ── Overview (dashboard home) ────────────────────────────────────────────────
 
-export async function getOverview() {
+async function getOverviewImpl() {
   const ctx = await requireWorkspace()
   const since24h = new Date(Date.now() - 86_400_000)
   const [[sources], [installs], [pipes], [runs24], [datasets], attention] = await Promise.all([
@@ -237,4 +238,23 @@ export async function getOverview() {
       { key: 'schedule', label: 'Put it on a schedule', done: pipes.scheduled > 0, tab: 'pipelines' },
     ],
   }
+}
+
+// ── Server actions: thin wrappers that return errors as values so their messages
+// reach the user in production. Call them through lib/actions/monitoring.ts. ──
+
+export async function getMonitoringOverview(...args: Parameters<typeof getMonitoringOverviewImpl>) {
+  return guard(() => getMonitoringOverviewImpl(...args))
+}
+
+export async function listNotifications(...args: Parameters<typeof listNotificationsImpl>) {
+  return guard(() => listNotificationsImpl(...args))
+}
+
+export async function markNotificationsRead(...args: Parameters<typeof markNotificationsReadImpl>) {
+  return guard(() => markNotificationsReadImpl(...args))
+}
+
+export async function getOverview(...args: Parameters<typeof getOverviewImpl>) {
+  return guard(() => getOverviewImpl(...args))
 }

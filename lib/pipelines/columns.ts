@@ -47,7 +47,15 @@ export interface OutputColumn {
 }
 
 /** Infers column types from data when no Map step declares them. */
-export function inferColumns(rows: Row[]): OutputColumn[] {
+/** Column types reported by the source database (e.g. numeric, date), keyed by column name. */
+export type TypeHints = Record<string, ColumnType>
+
+/**
+ * Output columns inferred from values. Drivers return numbers and dates as
+ * strings (Postgres numeric/bigint/date), so a type reported by the source
+ * database (hints) wins over the value-based guess.
+ */
+export function inferColumns(rows: Row[], hints: TypeHints = {}): OutputColumn[] {
   // null = only empty values seen so far; mixed types fall back to text.
   const types = new Map<string, ColumnType | null>()
   for (const row of rows.slice(0, 500)) {
@@ -62,5 +70,6 @@ export function inferColumns(rows: Row[]): OutputColumn[] {
       types.set(k, prev == null || prev === t ? t : 'text')
     }
   }
-  return [...types].map(([name, type]) => ({ name, type: type ?? 'text' }))
+  for (const name of Object.keys(hints)) if (!types.has(name) && rows.length) types.set(name, null)
+  return [...types].map(([name, type]) => ({ name, type: hints[name] ?? type ?? 'text' }))
 }

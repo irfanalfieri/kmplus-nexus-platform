@@ -1,6 +1,6 @@
 import { requirePageUser } from '@/lib/auth/session'
 import DashboardLayout from '@/components/dashboard/dashboard-layout'
-import { getWorkspaceContext } from '@/app/actions/workspaces'
+import { getWorkspaceContext } from '@/lib/actions/workspaces'
 
 // Server actions on this page include manual pipeline runs.
 export const maxDuration = 300

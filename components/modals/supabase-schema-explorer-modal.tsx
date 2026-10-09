@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import {
   getSupabaseTableSampleAction,
   scanSupabaseSourceSchema,
-} from '@/app/actions/supabase-source'
+} from '@/lib/actions/supabase-source'
 import type { SupabaseSchemaScan, SupabaseTable } from '@/lib/supabase/types'
 
 interface SupabaseSchemaExplorerModalProps {
@@ -100,7 +100,7 @@ export default function SupabaseSchemaExplorerModal({
   if (!isOpen) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="Schema explorer">
       <div className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-border bg-card">
         <div className="flex items-center justify-between border-b border-border p-6">
           <div>

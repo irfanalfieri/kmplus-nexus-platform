@@ -16,7 +16,7 @@ import {
   type TransformName,
   type ValidateStep,
 } from '@/lib/pipelines/definition'
-import type { getBuilderOptions } from '@/app/actions/pipelines'
+import type { getBuilderOptions } from '@/lib/actions/pipelines'
 
 export type BuilderOptions = Awaited<ReturnType<typeof getBuilderOptions>>
 export type Column = { name: string; type: string }

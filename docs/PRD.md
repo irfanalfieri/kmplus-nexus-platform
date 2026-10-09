@@ -347,9 +347,9 @@ The visual workflow engine (inspired by NiFi, Power Automate, n8n, and Node-RED)
 |---|---|:-:|:-:|
 | MN-1 | Today's jobs summary: successful / running / failed / queued, plus a trend over 7/30 days | P0 | ✅ (today + 7-day trend, rows written/rejected 24h) |
 | MN-2 | Pipeline health list: 🟢 Healthy · 🟡 Delayed (missed SLA / running long) · 🔴 Failed · ⚪ Paused | P0 | ✅ (+ rejected rows, never run; 7-day success rate) |
-| MN-3 | Run detail: timeline per node, rows in/out/error per node, duration, logs, error message, stack trace (admin only) | P0 | 🟡 (Pipelines → History: per-step counts, timings, error, rejected rows) |
-| MN-4 | Actions: Retry run, Retry from failed node, Replay quarantined rows, Cancel running, Download logs | P0 retry/cancel; P1 others | 🟡 (automatic retries; manual re-run; no cancel/replay yet) |
-| MN-5 | Alerts: on failure, on delay (SLA breach), on error rate > threshold; channels email/Teams/Slack/webhook; per-pipeline subscribers | P0 email; P1 others | 🟡 (in-app bell on failure or rejects; email deferred, see tech debt #8; no SLA/delay alerts or Teams/Slack yet) |
+| MN-3 | Run detail: timeline per node, rows in/out/error per node, duration, logs, error message, stack trace (admin only) | P0 | 🟡 (Pipelines → History: per-step counts and timings incl. source reads, error, attempts, chunks, rejected rows) |
+| MN-4 | Actions: Retry run, Retry from failed node, Replay quarantined rows, Cancel running, Download logs | P0 retry/cancel; P1 others | ✅ P0 (Monitoring: Cancel queued/running runs, Retry finished runs; automatic retries resume from the last checkpoint) · ⬜ replay, download logs |
+| MN-5 | Alerts: on failure, on delay (SLA breach), on error rate > threshold; channels email/Teams/Slack/webhook; per-pipeline subscribers | P0 email; P1 others | 🟡 (bell + email on failure or rejects; no SLA/delay alerts or Teams/Slack yet) |
 | MN-6 | Root-cause hints: classify errors (auth, network, schema drift, validation, timeout, rate limit) with suggested fixes; AI-assisted in Phase 4 | P1 | ⬜ |
 | MN-7 | Log retention: 30 days of detailed logs, 1 year of run summaries (configurable per plan) | P1 | ⬜ |
 
@@ -383,16 +383,16 @@ The visual workflow engine (inspired by NiFi, Power Automate, n8n, and Node-RED)
 | DV-3 | Live query guardrails: row limit, timeout, read-only, query pushdown where supported | P0 |
 | DV-4 | Show freshness ("cached 12 min ago") everywhere the data is used | P0 |
 
-### Layer 10 — Dashboard Builder (Phase 3) · 🎭
+### Layer 10 — Dashboard Builder (Phase 3) · 🟡 (DB-1, DB-2, DB-6 real since 2026-10-09)
 
-| ID | Requirement | Pri |
-|---|---|:-:|
-| DB-1 | Create a dashboard; add widgets (KPI, line, bar, pie, table, pivot) bound to catalog datasets | P0 |
-| DB-2 | Widget query builder: dimension, measure, aggregation, filters, time grain; no SQL | P0 |
-| DB-3 | Combine datasets from different systems in one dashboard; cross-dataset joins via domain keys (e.g., `employee_code`) | P1 |
-| DB-4 | Dashboard filters (date range, org unit) applied to all widgets | P1 |
-| DB-5 | Share with roles/users; embed in KMPlus apps; export PDF/PNG | P1 |
-| DB-6 | Row-level security follows Governance policies | P0 |
+| ID | Requirement | Pri | Status |
+|---|---|:-:|:-:|
+| DB-1 | Create a dashboard; add widgets (KPI, line, bar, pie, table, pivot) bound to catalog datasets | P0 | ✅ KPI, bar, line, table (no pie by design: bars compare better; no pivot yet) |
+| DB-2 | Widget query builder: dimension, measure, aggregation, filters, time grain; no SQL | P0 | ✅ (live preview; SQL built from checked column names, values bound) |
+| DB-3 | Combine datasets from different systems in one dashboard; cross-dataset joins via domain keys (e.g., `employee_code`) | P1 | 🟡 (widgets from different datasets on one dashboard; no joins) |
+| DB-4 | Dashboard filters (date range, org unit) applied to all widgets | P1 | ⬜ (per-widget filters only) |
+| DB-5 | Share with roles/users; embed in KMPlus apps; export PDF/PNG | P1 | 🟡 (shared with the workspace; analysts+ edit; no embed/export) |
+| DB-6 | Row-level security follows Governance policies | P0 | 🟡 (masked columns unusable for roles without unmasked access; row-level policies are GV-9) |
 
 ### Layer 11 — Business Rules Engine (Phase 2) · 🎭
 
@@ -422,20 +422,20 @@ Example rules: `IF employment_status = 'Active' → Import`; `IF department = 'F
 - Per-workspace AI usage limits and logging.
 - Model: latest Claude models via the Anthropic API (or Vercel AI Gateway).
 
-### Layer 13 — Governance & Security (Phase 1 basics, Phase 2 full) · 🎭
+### Layer 13 — Governance & Security (Phase 1 basics, Phase 2 full) · 🟡
 
 | ID | Requirement | Pri | Status |
 |---|---|:-:|:-:|
 | GV-1 | **Workspaces (multi-tenancy)** with members and roles (§4 matrix) | P0 | ✅ (workspaces, switcher, members, link invites; roles admin/steward/operator/analyst/auditor/viewer) |
 | GV-2 | RBAC enforced **server-side** in every server action / API route | P0 | ✅ (`requireWorkspace(permission)` in every action; matrix in `lib/auth/permissions.ts`; UI uses the same table) |
-| GV-3 | Audit log for every create/update/delete/run/export/login/secret access, with actor, IP, user agent, and before/after diff | P0 | 🟡 (all mutations, runs, credential edits (field names only), membership changes; no IP/user agent or read/export logging yet) |
-| GV-4 | Secrets management: envelope encryption (AES-256-GCM, per-workspace data key, master key from KMS/env), rotation, no secrets in logs | P0 | ⬜ |
-| GV-5 | Data masking policies per column classification (full mask, partial `****1234`, hash), applied in preview, catalog, API, and dashboards by role | P1 | 🎭 |
+| GV-3 | Audit log for every create/update/delete/run/export/login/secret access, with actor, IP, user agent, and before/after diff | P0 | ✅ (changes, data views, runs, logins, 2FA events, policy changes, erasures; IP + user agent; viewer in Settings; field names only for secrets; no before/after diff) |
+| GV-4 | Secrets management: envelope encryption (AES-256-GCM, per-workspace data key, master key from KMS/env), rotation, no secrets in logs | P0 | 🟡 (AES-256-GCM with key ids and rotation; one env master key, no per-workspace keys or KMS) |
+| GV-5 | Data masking policies per column classification (full mask, partial `****1234`, hash), applied in preview, catalog, API, and dashboards by role | P1 | ✅ (Governance → Dataset policies; applied to dataset previews and Analytics; source samples and rejected rows show raw data to `data:preview` roles) |
 | GV-6 | Approval workflow for promoting pipelines to `prod` and for destructive write modes | P1 | ⬜ |
 | GV-7 | Environment promotion dev → staging → prod, with per-environment source credentials | P1 | ⬜ |
-| GV-8 | SSO: SAML 2.0 / OIDC (Azure AD, Google, Okta) + SCIM user provisioning; MFA for password logins | P1 | ⬜ (email/password only) |
+| GV-8 | SSO: SAML 2.0 / OIDC (Azure AD, Google, Okta) + SCIM user provisioning; MFA for password logins | P1 | 🟡 (mandatory TOTP 2FA + email verification; no SSO/SCIM) |
 | GV-9 | Row-level access policies (e.g., subsidiary A sees only its employees) | P2 | 🎭 |
-| GV-10 | Data retention policies per dataset; right-to-erasure support (UU PDP) | P2 | 🎭 |
+| GV-10 | Data retention policies per dataset; right-to-erasure support (UU PDP) | P2 | ✅ (retention enforced hourly; erasure across datasets, audited with a hash of the value) |
 
 ### Layer 14 — Version Control (Phase 1 basics) · 🎭
 
@@ -522,23 +522,22 @@ Nexus doesn't expose raw source systems. It publishes **standardized business do
 
 | Layer / area | Status | What's real | What's mock / missing |
 |---|:-:|---|---|
-| Auth & workspaces | ✅ | Better Auth email/password with email verification (SMTP) and **mandatory TOTP 2FA** (any authenticator app, 10 backup codes, "trust this device" 30 days); workspaces with roles, switcher, invite links (hashed, 7-day, email-bound, emailed when SMTP is set); personal workspace auto-created; Settings tab for members | SSO (SAML/OIDC); 2FA reset / backup-code regeneration (TD-19) |
+| Auth & workspaces | ✅ | Better Auth email/password with email verification (SMTP) and **mandatory TOTP 2FA** (any authenticator app, 10 backup codes, "trust this device" 30 days); self-service new backup codes and re-enrollment; admin 2FA reset (plus `scripts/reset-2fa.mjs` break-glass); workspaces with roles, switcher, emailed invite links; personal workspace auto-created; Settings tab for members | SSO (SAML/OIDC) |
 | Overview | ✅ | Real counts, getting-started checklist, pipelines needing attention | — |
-| Analytics, Governance pages | 🎭 | Labelled "Preview: sample data" | Not connected to workspace data |
 | Data Sources | ✅ | CRUD, rename, source/destination switch, re-test, delete guarded by pipeline use; credentials encrypted with key ids and rotation; edit credentials for every connector (REST/Salesforce secrets masked); zod-validated actions, UUID ids | No scheduled health checks |
 | Connector Marketplace | ✅ | 10 connectors; install/uninstall (uninstall blocked while used); dev mode installs everything free | No billing (`CONNECTOR_BILLING_ENABLED`) |
 | Connector drivers | ✅/🟡 | SAP (OData), Oracle, MySQL, Postgres (TLS verify/require/disable + CA), REST, Salesforce (OAuth), Snowflake, Supabase, Talenta, AD/LDAP: test / scan / sample / pipeline read; write-back for Postgres, MySQL, Supabase. `scripts/connector-harness.ts` verifies REST, SAP, MySQL, Postgres, LDAP, Talenta (6/6 pass) | Oracle, Snowflake, Salesforce, Supabase and live Talenta not yet tested against real accounts |
 | Pipeline Designer | ✅ | Step-list builder (`components/pipelines/*`), real engine (`lib/pipelines/*`), test on sample, run now, run history with rejected rows, versions + restore, incremental sync, retries, alerts; write to Nexus datasets (`nexus_data` schema) or back into Postgres/MySQL/Supabase (destination role only) | No DAG/branching or joins; up to 1M source rows per run |
 | Background worker | ✅ | Postgres job queue (`pipeline_jobs`, `FOR UPDATE SKIP LOCKED` leases); runs read the source in 5,000-row chunks and checkpoint after each, so runs continue across 300 s invocations; retries resume from the last checkpoint; dataset `replace` loads into a staging table swapped in at the end | Delivery is at-least-once (TD-17) |
 | Scheduler | ✅ | Supabase pg_cron job `nexus-pipeline-tick` (every minute, only calls Vercel when a pipeline is due or a job is waiting) → `/api/cron/pipelines` (Bearer `CRON_SECRET`, secret in Supabase Vault) queues due runs and works the queue | No webhook/API/event triggers |
-| Monitoring | ✅ | Today's outcomes, 7-day chart, pipeline health (stalled jobs flagged), background runs with live progress, recent runs, produced datasets; notification bell | No SLA config, no cancel/replay |
+| Monitoring | ✅ | Today's outcomes, 7-day chart, pipeline health (stalled jobs flagged), background runs with live progress and Cancel, recent runs with Retry, produced datasets; notification bell | No SLA config, no replay |
 | Data Mapping | 🟡 | Map & transform step inside pipelines (14 transforms, auto-map, type conversion) | No standalone studio, lookups, templates |
 | Data Quality | 🟡 | Validate step inside pipelines (required, email, unique, regex, ranges, one-of) with rejected-row capture | No rule library, scoring or quarantine workflow |
 | Data Catalog | ⬜ | Datasets list in Monitoring | No catalog, lineage or search |
 | Business Rules | ⬜ | — | Not started (mock screen and table removed, TD-12) |
-| Analytics / Dashboards | 🎭 | Preview page | No dashboards |
+| Analytics / Dashboards | ✅ | Dashboards of KPI, bar, line and table widgets over workspace datasets; no-SQL builder (measure, group by, time grain, filters, sort, limit) with live preview; masked columns blocked for restricted roles | Dashboard-wide filters, joins, sharing outside the workspace, export |
 | Version Control | ✅ | `pipeline_versions` written on every save; history and restore in the run-history dialog | No diff view |
-| Governance | 🟡 | Workspaces, roles and server-side permissions; audit log of every change, data view (previews, samples, rejected rows, test runs), run and login, with IP and user agent; audit viewer in Settings (`audit:view`) | Policies (masking, retention, row-level) are still a preview page |
+| Governance | ✅ | Controls overview; dataset policies (classification, masking: hide / keep last 4 / pseudonymize; suggestions from column names); retention (hourly); right to erasure; roles, permissions and audit log (Settings) | Row-level policies (GV-9), approvals (GV-6), environments (GV-7) |
 | Email | ✅ | SMTP mailer (`lib/email.ts`, company mail server `mail.kmplus.co.id` as `noreply@kmplus.co.id`) for verification, invites and alerts; set in every Vercel environment (2026-10-09) | Bounce/delivery tracking |
 | AI Assistant | 🎭 | — | Mock UI |
 | Data API | ⬜ | — | — |
@@ -552,12 +551,11 @@ Nexus doesn't expose raw source systems. It publishes **standardized business do
 | TD-7 | Platform | **Vercel Hobby plan limits:** 300 s functions, daily-only Vercel cron (worked around with Supabase pg_cron). Hobby is for non-commercial use. | Customer use needs a paid plan | P1 before customers | Upgrade to Vercel Pro (and Supabase Pro for backups/PITR) |
 | TD-10 | Connectors | **Not yet proven on real accounts:** Oracle, Snowflake, Salesforce, Supabase (REST path) and live Talenta (response format not public). | First customer finds the bug | P1 for the connectors a pilot uses | Run the harness with real credentials (env vars already supported) |
 | TD-17 | Platform | **Worker delivery is at-least-once.** If a function dies between writing a chunk and checkpointing it, the chunk is written again on resume. Upsert destinations are unaffected. | Duplicate rows in *append* destinations after a crash | P2 | Idempotency key column for append writes, or write + checkpoint in one transaction for Nexus datasets |
-| TD-19 | Security | **No 2FA recovery flow.** A user who loses both their authenticator and backup codes is locked out; admins can't reset 2FA and users can't regenerate backup codes in the app. | Support load; locked-out admins | P1 | Settings → Security: regenerate backup codes, re-enroll; admin "reset 2FA" with audit entry |
-| TD-20 | Code | **Analytics and Governance preview pages** still show sample data. | Confusion about what is real | P3 | Rebuild when those layers are implemented |
+| TD-21 | Governance | **Masking covers datasets only.** Source samples (Data Sources → Schema & Data) and rejected rows show raw values to every role with `data:preview`, because policies are set per dataset, not per source table. | Analysts/operators can see unmasked personal data at the source | P2 | Column policies on source tables too, or restrict source samples and rejects to `data:unmasked` roles |
 
 **Accepted risks** (owner's decision): the production database password was shared in a chat transcript (2026-10-08/09); rotate it before customer data arrives.
 
-**Resolved:** credentials encrypted at rest · UUID ids · zod validation on all actions · shared `requireWorkspace` · single pnpm lockfile · committed migrations + tracked runner · workspaces & server-side RBAC · CI (type-check, engine tests, build) · dev database separated from production data · 2026-10-09: TD-1 DB certificates verified (bundled Supabase root CA; Postgres sources get verify/require/disable + CA) · TD-2 email verification + mandatory TOTP 2FA · TD-3 key ids + `NEXUS_ENCRYPTION_KEY_PREVIOUS` + `scripts/reencrypt-credentials.mjs` · TD-4 / TD-18 SMTP via the company mail server (`noreply@kmplus.co.id`), emailed invites and alerts · TD-5 background worker with chunked, resumable runs · TD-8 type errors fail the build · TD-9 integration tests in CI (`scripts/integration-tests.ts`, Postgres service) · TD-11 REST/Salesforce credentials editable · TD-12 mock screens and nine mock tables removed · TD-13 stale scripts removed · TD-14 all timestamps `timestamptz` · TD-15 complete audit trail + viewer · TD-16 migration checksums: `db-migrate` refuses edited applied migrations.
+**Resolved:** credentials encrypted at rest · UUID ids · zod validation on all actions · shared `requireWorkspace` · single pnpm lockfile · committed migrations + tracked runner · workspaces & server-side RBAC · CI (type-check, engine tests, build) · dev database separated from production data · 2026-10-09: TD-1 DB certificates verified (bundled Supabase root CA; Postgres sources get verify/require/disable + CA) · TD-2 email verification + mandatory TOTP 2FA · TD-3 key ids + `NEXUS_ENCRYPTION_KEY_PREVIOUS` + `scripts/reencrypt-credentials.mjs` · TD-4 / TD-18 SMTP via the company mail server (`noreply@kmplus.co.id`), emailed invites and alerts · TD-5 background worker with chunked, resumable runs · TD-8 type errors fail the build · TD-9 integration tests in CI (`scripts/integration-tests.ts`, Postgres service) · TD-11 REST/Salesforce credentials editable · TD-12 mock screens and nine mock tables removed · TD-13 stale scripts removed · TD-14 all timestamps `timestamptz` · TD-15 complete audit trail + viewer · TD-16 migration checksums: `db-migrate` refuses edited applied migrations · TD-19 2FA recovery (new backup codes, re-enroll, admin reset, break-glass script) · TD-20 Analytics and Governance are real · server-action errors reach users in production (returned as values, `lib/action-result.ts`) · source column types (numeric, date) carried into datasets.
 
 ---
 
