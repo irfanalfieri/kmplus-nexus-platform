@@ -15,9 +15,23 @@ const ACTIONS = [
 const stamp = (d: Date | string) =>
   new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jakarta', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(d))
 
+const show = (v: unknown) => (v === null || v === undefined || v === '' ? '∅' : typeof v === 'object' ? JSON.stringify(v) : String(v))
+
+/** Before/after values recorded with the event (changes.diff). */
+function diffLines(changes: unknown): string[] {
+  const diff = (changes as { diff?: Record<string, unknown> } | null)?.diff
+  if (!diff) return []
+  return Object.entries(diff).map(([field, d]) => {
+    if (Array.isArray(d)) return `${field}: ${d.join(', ')}`
+    const x = d as { from?: unknown; to?: unknown; changed?: boolean }
+    return x.changed ? `${field}: changed (secret)` : `${field}: ${show(x.from)} → ${show(x.to)}`
+  })
+}
+
 function summary(changes: unknown) {
   if (!changes || typeof changes !== 'object') return ''
   return Object.entries(changes as Record<string, unknown>)
+    .filter(([k]) => k !== 'diff')
     .map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`)
     .join(' · ')
 }
@@ -99,6 +113,16 @@ export function AuditLog() {
                 </td>
                 <td className="max-w-[320px] px-2 py-2 text-xs text-muted-foreground">
                   <span className="line-clamp-2" title={summary(r.changes)}>{summary(r.changes)}</span>
+                  {diffLines(r.changes).length > 0 && (
+                    <details className="mt-1">
+                      <summary className="cursor-pointer text-primary">{diffLines(r.changes).length} field change{diffLines(r.changes).length === 1 ? '' : 's'}</summary>
+                      <ul className="mt-1 space-y-0.5 font-mono text-[11px]">
+                        {diffLines(r.changes).map((l, i) => (
+                          <li key={i} className="break-all">{l}</li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
                 </td>
                 <td className="whitespace-nowrap px-2 py-2 font-mono text-xs text-muted-foreground" title={r.userAgent ?? ''}>{r.ipAddress ?? '-'}</td>
               </tr>

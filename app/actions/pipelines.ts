@@ -7,6 +7,8 @@ import { and, desc, eq, inArray, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { newId, requireWorkspace, type WorkspaceContext } from '@/lib/auth/session'
 import { recordAudit, type AuditAction } from '@/lib/audit'
+import { diffObjects, diffPipelineDefinitions } from '@/lib/audit-diff'
+import { stepTitle } from '@/lib/pipelines/definition'
 import { db } from '@/lib/db'
 import { businessRules, dataSources, executionLogs, mappingTemplates, nexusDatasets, pipelineRunRejects, pipelineVersions, pipelines } from '@/lib/db/schema'
 import { definitionSchema, scheduleSchema, type MapStep, type PipelineDefinition, type PipelineSchedule } from '@/lib/pipelines/definition'
@@ -21,8 +23,17 @@ import { guard } from '@/lib/server-action'
 
 const idSchema = z.string().trim().min(1).max(100)
 
-async function audit(ctx: WorkspaceContext, action: AuditAction, resourceId: string, changes?: Record<string, unknown>, resource = 'pipeline') {
-  await recordAudit(ctx, { action, resource, resourceId, changes })
+async function audit(ctx: WorkspaceContext, action: AuditAction, resourceId: string, changes?: Record<string, unknown>, resource = 'pipeline', diff?: Record<string, unknown>) {
+  await recordAudit(ctx, { action, resource, resourceId, changes, diff })
+}
+
+/** What a save or publish changed: steps, settings, name, description and schedule. */
+function pipelineDiff(before: { name?: string | null; description?: string | null; schedule?: unknown; definition?: unknown } | null, after: { name: string; description?: string | null; schedule: unknown; definition: unknown }) {
+  const defOf = (d: unknown) => definitionSchema.safeParse(d).data ?? null
+  return {
+    ...diffObjects({ name: before?.name, description: before?.description ?? '', schedule: before?.schedule ?? null }, { name: after.name, description: after.description ?? '', schedule: after.schedule }),
+    ...diffPipelineDefinitions(before ? defOf(before.definition) : null, defOf(after.definition), (n) => stepTitle(n as never)),
+  }
 }
 
 async function getOwned(ctx: WorkspaceContext, id: string) {
@@ -238,8 +249,10 @@ async function savePipelineAs(ctx: WorkspaceContext, input: z.input<typeof saveI
   let id = data.id
   let version = 1
   let published = 0
+  let before: Parameters<typeof pipelineDiff>[0] = null
   if (id) {
     const existing = await getOwned(ctx, id)
+    before = { name: existing.name, description: existing.description, schedule: existing.schedule, definition: existing.draftConfig ?? existing.config }
     const [{ max }] = await db
       .select({ max: sql<number>`coalesce(max(${pipelineVersions.version}), 0)::int` })
       .from(pipelineVersions)
@@ -290,7 +303,7 @@ async function savePipelineAs(ctx: WorkspaceContext, input: z.input<typeof saveI
     changes: data.changeNote || (version === 1 ? 'Created' : 'Updated'),
     createdBy: ctx.userId,
   })
-  await audit(ctx, version === 1 ? 'CREATE' : 'UPDATE', id, { version, draft: true })
+  await audit(ctx, version === 1 ? 'CREATE' : 'UPDATE', id, { version, draft: true }, 'pipeline', pipelineDiff(before, { name: data.name, description: data.description, schedule: data.schedule, definition }))
   if (data.publish) await publishVersion(ctx, id, version, data.enabled)
   revalidatePath('/dashboard')
   return { id, version, published: data.publish }
@@ -324,7 +337,7 @@ async function publishVersion(ctx: WorkspaceContext, id: string, version: number
     })
     .where(and(eq(pipelines.id, id), eq(pipelines.workspaceId, ctx.workspaceId)))
   await db.update(pipelineVersions).set({ publishedAt: now, publishedBy: ctx.userId }).where(eq(pipelineVersions.id, snapshot.id))
-  await audit(ctx, 'PUBLISH', id, { version })
+  await audit(ctx, 'PUBLISH', id, { version, previousVersion: existing.version || null }, 'pipeline', pipelineDiff(existing.version ? { definition: existing.config } : null, { name: existing.name, description: existing.description, schedule: existing.schedule, definition }))
 }
 
 async function savePipelineImpl(input: z.input<typeof saveInput>) {

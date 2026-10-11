@@ -16,6 +16,8 @@ export default function TemplatePicker({ options, onClose, onPick }: { options: 
   const [sourceId, setSourceId] = useState('')
   const [table, setTable] = useState('')
   const [datasetName, setDatasetName] = useState('')
+  const [kmplusId, setKmplusId] = useState('')
+  const kmplusTargets = options.dataSources.filter((d) => d.sourceType === 'kmplus' && d.role === 'destination')
 
   const template = PIPELINE_TEMPLATES.find((t) => t.id === templateId)
   const sources = useMemo(
@@ -37,7 +39,7 @@ export default function TemplatePicker({ options, onClose, onPick }: { options: 
   const build = () => {
     if (!template || !source || !table) return
     const cols = tables.find((t) => t.name === table)?.columns ?? []
-    const built = buildPipelineTemplate(template.id, { dataSourceId: source.id, sourceType: source.sourceType, table, columns: cols, datasetName: datasetName || undefined, datasets: options.datasets })
+    const built = buildPipelineTemplate(template.id, { dataSourceId: source.id, sourceType: source.sourceType, table, columns: cols, datasetName: datasetName || undefined, datasets: options.datasets, kmplusDestinationId: template.id === 'hris-employee' ? kmplusId || undefined : undefined })
     onPick({ ...blankPipeline(), name: built.name, description: built.description, nodes: built.nodes, edges: built.edges, notes: built.notes })
   }
 
@@ -102,6 +104,17 @@ export default function TemplatePicker({ options, onClose, onPick }: { options: 
                     <Input value={datasetName} onChange={(e) => setDatasetName(e.target.value)} placeholder={templateId === 'csv-dataset' ? 'from the table name' : template.defaultDataset} className="font-mono" />
                   </label>
                 </div>
+              )}
+              {template.id === 'hris-employee' && kmplusTargets.length > 0 && (
+                <label className="block text-sm">
+                  <span className="mb-1 block text-xs text-muted-foreground">Also send employees to a KMPlus product (optional)</span>
+                  <NativeSelect value={kmplusId} onChange={setKmplusId}>
+                    <option value="">No, only the dataset</option>
+                    {kmplusTargets.map((d) => (
+                      <option key={d.id} value={d.id}>{d.name}</option>
+                    ))}
+                  </NativeSelect>
+                </label>
               )}
               <div className="flex justify-end">
                 <Button onClick={build} disabled={!source || !table}>

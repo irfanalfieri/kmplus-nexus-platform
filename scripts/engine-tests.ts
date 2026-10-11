@@ -20,6 +20,7 @@ import { freshness, matchesSearch, parseKey } from '@/lib/catalog/definition'
 import { applyRules, describeRule } from '@/lib/rules/evaluate'
 import { refreshSchedule } from '@/lib/catalog/refresh'
 import { createHmac, randomBytes } from 'node:crypto'
+import { diffObjects, diffPipelineDefinitions } from '@/lib/audit-diff'
 import { DOMAIN_ENTITIES, suggestCanonicalField } from '@/lib/domain/model'
 import { BUILTIN_MAPPING_TEMPLATES, PIPELINE_TEMPLATES, applyMappingTemplate, buildPipelineTemplate, mapToEntity } from '@/lib/pipelines/templates'
 import { buildLineage } from '@/lib/catalog/lineage'
@@ -500,6 +501,16 @@ async function main() {
     assert.throws(() => decryptCredentials('src_1', sealed, 'ws_b'), /another workspace/)
     assert.equal(needsReencryption(sealed), false)
     assert.equal(needsReencryption({ password: 'plain' }), true)
+  })
+
+  await test('audit diffs: changed fields only, secrets never recorded, pipeline steps summarized', () => {
+    const d = diffObjects({ name: 'A', settings: { retries: 1, batchSize: 5000 }, password: 'old', same: 1 }, { name: 'B', settings: { retries: 2, batchSize: 5000 }, password: 'new', same: 1 })
+    assert.deepEqual(d, { name: { from: 'A', to: 'B' }, 'settings.retries': { from: 1, to: 2 }, password: { changed: true } })
+    assert.ok(!JSON.stringify(d).includes('new'), 'secret values never appear')
+    const before = { nodes: [{ id: 's', type: 'source', table: 'a', position: { x: 0, y: 0 } }, { id: 'f', type: 'filter' }], settings: { retries: 1 } }
+    const after = { nodes: [{ id: 's', type: 'source', table: 'b', position: { x: 9, y: 9 } }, { id: 'm', type: 'map' }], settings: { retries: 1 } }
+    assert.deepEqual(diffPipelineDefinitions(before, after, (n) => n.type), { stepsAdded: ['map'], stepsRemoved: ['filter'], stepsChanged: ['source'] })
+    assert.deepEqual(diffPipelineDefinitions(before, { ...before, nodes: before.nodes.map((n) => ({ ...n, position: { x: 5, y: 5 } })) }, (n) => n.type), {}, 'moving steps is not a change')
   })
 
   await test('domain synonyms are normalized so every one can match', () => {

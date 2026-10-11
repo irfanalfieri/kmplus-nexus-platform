@@ -200,7 +200,7 @@ const datasetSafe = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, 
 
 export function buildPipelineTemplate(
   id: PipelineTemplateId,
-  opts: { dataSourceId: string; sourceType: string; table: string; columns: Column[]; datasetName?: string; datasets: { name: string; columns: Column[] }[] }
+  opts: { dataSourceId: string; sourceType: string; table: string; columns: Column[]; datasetName?: string; datasets: { name: string; columns: Column[] }[]; /** HRIS → Employee: also send to this KMPlus product destination. */ kmplusDestinationId?: string }
 ): { name: string; description: string; nodes: PipelineNode[]; edges: PipelineEdge[]; notes: string[] } {
   const notes: string[] = []
   const at = (i: number) => ({ x: 40 + i * 300, y: 120 })
@@ -252,5 +252,14 @@ export function buildPipelineTemplate(
   const datasetName = datasetSafe(opts.datasetName || 'employees')
   const dest: PipelineNode = { id: newStepId(), type: 'destination', position: at(3), kind: 'dataset', datasetName, mode: hasCode ? 'upsert' : 'replace', keys: hasCode ? ['employee_code'] : [], softDeleteMissing: hasCode }
   const nodes = pack.rules.length ? [source, map, validate, dest] : [source, map, { ...dest, position: at(2) }]
-  return { name: 'Employee sync', description: `${opts.table} to the Employee entity (template HRIS → Employee)`, ...chain(nodes), notes }
+  const graph = chain(nodes)
+  if (opts.kmplusDestinationId) {
+    // Fan out: the same checked employees also go to the KMPlus product (upsert by employee_code).
+    const last = nodes[nodes.length - 2]
+    const kmplus: PipelineNode = { id: newStepId(), type: 'destination', position: { x: dest.position.x, y: dest.position.y + 160 }, kind: 'datasource', dataSourceId: opts.kmplusDestinationId, table: 'employee', mode: hasCode ? 'upsert' : 'append', keys: hasCode ? ['employee_code'] : [], softDeleteMissing: false, softDeleteColumn: '' }
+    graph.nodes.push(kmplus)
+    graph.edges.push({ id: newStepId(), from: last.id, to: kmplus.id, branch: '' })
+    notes.push('Also sends employees to the KMPlus product (entity "employee"). Check that the product accepts every mapped field.')
+  }
+  return { name: 'Employee sync', description: `${opts.table} to the Employee entity (template HRIS → Employee)`, ...graph, notes }
 }

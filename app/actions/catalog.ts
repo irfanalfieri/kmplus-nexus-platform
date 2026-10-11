@@ -8,6 +8,7 @@ import { catalogEntries, dashboards, dataSources, datasetQualitySnapshots, domai
 import { newId, requireWorkspace, type WorkspaceContext } from '@/lib/auth/session'
 import { can } from '@/lib/auth/permissions'
 import { recordAudit } from '@/lib/audit'
+import { diffObjects } from '@/lib/audit-diff'
 import { catalogInputSchema, datasetKey, parseKey, sourceKey } from '@/lib/catalog/definition'
 import { definitionSchema, scheduleSchema } from '@/lib/pipelines/definition'
 import { buildLineage, type LineageGraph } from '@/lib/catalog/lineage'
@@ -273,6 +274,7 @@ async function saveCatalogEntryImpl(input: z.input<typeof catalogInputSchema>) {
     resource: 'catalog_entry',
     resourceId: data.key,
     changes: { classification: data.classification, tags: values.tags, ...(ref.kind === 'source_table' ? { accessMode: data.accessMode, alias: data.alias, refresh: data.refresh } : {}) },
+    diff: existing ? diffObjects(existing as unknown as Record<string, unknown>, { ...existing, ...values } as Record<string, unknown>, { ignore: ['updatedBy', 'id', 'workspaceId', 'key', 'kind'] }) : undefined,
   })
   revalidatePath('/dashboard')
   // A newly cached table gets its first copy right away.

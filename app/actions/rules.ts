@@ -7,6 +7,7 @@ import { db } from '@/lib/db'
 import { businessRuleVersions, businessRules, nexusDatasets, pipelines } from '@/lib/db/schema'
 import { newId, requireWorkspace, type WorkspaceContext } from '@/lib/auth/session'
 import { recordAudit } from '@/lib/audit'
+import { diffObjects } from '@/lib/audit-diff'
 import { ruleBodySchema, ruleInputSchema, type BusinessRule } from '@/lib/rules/definition'
 import { applyRules } from '@/lib/rules/evaluate'
 import { evalGroup } from '@/lib/pipelines/conditions'
@@ -79,8 +80,10 @@ async function saveRuleImpl(input: z.input<typeof ruleInputSchema>) {
 
   let id = data.id
   let version = 1
+  let before: Record<string, unknown> | null = null
   if (id) {
     const existing = await getOwned(ctx, id)
+    before = { name: existing.name, description: existing.description ?? '', body: existing.body }
     version = existing.version + 1
     await db
       .update(businessRules)
@@ -100,7 +103,7 @@ async function saveRuleImpl(input: z.input<typeof ruleInputSchema>) {
     changes: data.changeNote || (version === 1 ? 'Created' : 'Updated'),
     createdBy: ctx.userId,
   })
-  await recordAudit(ctx, { action: version === 1 ? 'CREATE' : 'UPDATE', resource: 'business_rule', resourceId: id, changes: { name: data.name, version } })
+  await recordAudit(ctx, { action: version === 1 ? 'CREATE' : 'UPDATE', resource: 'business_rule', resourceId: id, changes: { name: data.name, version }, diff: before ? diffObjects(before, { name: data.name, description: data.description, body: data.body }) : undefined })
   revalidatePath('/dashboard')
   return { id, version }
 }

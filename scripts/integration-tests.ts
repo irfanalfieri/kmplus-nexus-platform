@@ -16,7 +16,9 @@ import { db, pool } from '@/lib/db'
 import { apiKeys, apiRateLimits, auditLogs, businessRuleVersions, businessRules, catalogEntries, connectorInstalls, dashboards, dataSources, datasetPolicies, datasetQualitySnapshots, domainMappings, mappingTemplates, ssoProvider, webhookDeliveries, webhooks, workspaceSso, executionLogs, nexusDatasets, pipelineJobs, pipelineRunRejects, pipelines, pipelineVersions, session, user, verification, workspaceInvites, workspaceMembers, workspaces } from '@/lib/db/schema'
 import { acceptInvite, changeMemberRole, createInvite, getWorkspaceContext, listMembers, resetMemberTwoFactor, switchWorkspace } from '@/lib/actions/workspaces'
 import { installConnector } from '@/lib/actions/connectors'
-import { createDataSource, deleteDataSource, getDataSources, setDataSourceRole, testConnection } from '@/lib/actions/data-sources'
+import { createDataSource, deleteDataSource, getDataSources, renameDataSource, setDataSourceRole, testConnection } from '@/lib/actions/data-sources'
+import { writeDataset } from '@/lib/pipelines/io'
+import { startKmplusMock } from './test/kmplus-mock'
 import { cancelPipelineRun, createWebhookTrigger, discardDraft, getBuilderOptions, getDatasetPreview, getRunStatus, listPipelines, listRuns, publishPipeline, retryPipelineRun, runPipelineNow, savePipeline } from '@/lib/actions/pipelines'
 import { createSsoProvider, deleteSsoProvider, listSsoProviders, updateSsoProvider, verifySsoDomain } from '@/lib/actions/sso'
 import { emailAllowedForProvider, enforcedProviderFor, provisionSsoUser } from '@/lib/auth/sso'
@@ -727,6 +729,75 @@ async function main() {
       assert.equal(tpl.fields[0].transforms.length, 0)
       assert.ok(opts.pipelines.some((x) => x.id === chainedId))
       await deleteMappingTemplate(tpl.id)
+    })
+
+    await test('exactly-once appends: a resumed chunk replaces its earlier copy', async () => {
+      const columns = [{ name: 'code', type: 'text' as const }]
+      const rows = [{ code: 'A' }, { code: 'B' }]
+      const first = await writeDataset({ workspaceId: adminWs, datasetName: `${RUN}_once`, mode: 'append', keys: [], columns, rows, runId: `${RUN}_run`, chunk: 0 })
+      // The same chunk written again (crash between write and checkpoint), then the next chunk.
+      await writeDataset({ workspaceId: adminWs, existingTableName: first.tableName, datasetName: `${RUN}_once`, mode: 'append', keys: [], columns, rows, runId: `${RUN}_run`, chunk: 0 })
+      const third = await writeDataset({ workspaceId: adminWs, existingTableName: first.tableName, datasetName: `${RUN}_once`, mode: 'append', keys: [], columns, rows: [{ code: 'C' }], runId: `${RUN}_run`, chunk: 1 })
+      assert.equal(third.rowCount, 3, 'chunk 0 counted once, chunk 1 added')
+      await pool.query(`DROP TABLE IF EXISTS "nexus_data"."${first.tableName}"`)
+    })
+
+    await test('KMPlus product destination: entities scanned, records upserted, refused records quarantined', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      process.env.NEXUS_ALLOW_PRIVATE_URLS = 'true'
+      const mock = await startKmplusMock()
+      try {
+        await installConnector('kmplus')
+        const destId = await createDataSource({ name: `${RUN} LMS`, type: 'kmplus', sourceType: 'kmplus', config: { role: 'destination' }, credentials: { product: 'LMS', baseUrl: mock.baseUrl, apiToken: mock.token } })
+        await testConnection(destId)
+        const scanned = (await getDataSources()).find((s) => s.id === destId)!.config as { schemaScan: { tables: { name: string }[] } }
+        assert.deepEqual(scanned.schemaScan.tables.map((t) => t.name), ['employee', 'organization'])
+        const saved = await savePipeline({
+          publish: true,
+          name: `${RUN} to LMS`,
+          definition: {
+            schemaVersion: 2,
+            nodes: [
+              { id: 's', type: 'source', position: { x: 0, y: 0 }, dataSourceId: sourceId, table: 'employees', maxRows: 20 },
+              { id: 'm', type: 'map', position: { x: 1, y: 0 }, keepUnmapped: false, fields: [
+                { from: 'code', to: 'employee_code', type: 'text', transforms: [] },
+                // Every 5th employee has no email: the product refuses those records.
+                { from: 'email', to: 'email', type: 'text', transforms: [{ fn: 'conditional', args: ['ends_with', '5@kmplus.test', '', '{value}'] }] },
+              ] },
+              { id: 'd', type: 'destination', position: { x: 2, y: 0 }, kind: 'datasource', dataSourceId: destId, table: 'employee', mode: 'upsert', keys: ['employee_code'] },
+            ],
+            edges: [{ id: 'e1', from: 's', to: 'm' }, { id: 'e2', from: 'm', to: 'd' }],
+            settings: { retries: 0 },
+          },
+          schedule: { type: 'manual' } as never,
+        })
+        const run = await runPipelineNow(saved.id)
+        takeAfterCallbacks()
+        await processJobs({})
+        const done = await getRunStatus(run.runId)
+        assert.equal(done.status, 'partial', done.errorMessage ?? '')
+        assert.equal(mock.store.get('employee')?.size, 18, '18 of 20 accepted by the product')
+        assert.equal(done.recordsError, 2, 'refused records are counted')
+        const inbox = await listQuarantine({ pipelineId: saved.id })
+        assert.equal(inbox.total, 2)
+        assert.match(inbox.rows[0].messages[0], /employee: email is required/)
+        // Fix one and replay it to the product.
+        await fixRow({ id: inbox.rows[0].id, row: { ...inbox.rows[0].row, email: 'fixed@kmplus.test' } })
+        const [replay] = await replayRows([inbox.rows[0].id])
+        takeAfterCallbacks()
+        await processJobs({})
+        assert.equal((await getRunStatus(replay.runId)).recordsSuccess, 1)
+        assert.equal(mock.store.get('employee')?.size, 19)
+        assert.ok([...mock.batches].every((b) => b.includes(':')), 'batches carry run:chunk:index ids')
+        // Audit diffs: renaming the destination records before/after.
+        await renameDataSource(destId, `${RUN} LMS renamed`)
+        const { rows: audit } = await listAuditLogs({ action: 'UPDATE' })
+        const renamed = audit.find((a) => a.resourceId === destId && (a.changes as { diff?: unknown })?.diff)
+        assert.deepEqual((renamed!.changes as { diff: Record<string, unknown> }).diff, { name: { from: `${RUN} LMS`, to: `${RUN} LMS renamed` } })
+      } finally {
+        await mock.stop()
+      }
     })
 
     await test('admins reset a member\'s 2FA (lost phone); members cannot', async () => {

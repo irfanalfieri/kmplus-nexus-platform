@@ -10,6 +10,7 @@ import { getConnectorDefinition, isConnectorSlug } from '@/lib/connectors/catalo
 import { decryptCredentials, encryptCredentials } from '@/lib/security/credentials'
 import { newId, requireWorkspace, type WorkspaceContext } from '@/lib/auth/session'
 import { recordAudit, type AuditAction } from '@/lib/audit'
+import { diffObjects } from '@/lib/audit-diff'
 import { hasCustomCredentialForm, maskCredentials, restoreSecrets } from '@/lib/connectors/secret-mask'
 import { guard } from '@/lib/server-action'
 
@@ -215,11 +216,12 @@ async function renameDataSourceImpl(rawId: string, rawName: string) {
   const ctx = await requireWorkspace('sources:manage')
   const id = idSchema.parse(rawId)
   const name = z.string().trim().min(1, 'Name is required').max(120).parse(rawName)
+  const before = await getOwned(ctx, id)
   await db
     .update(dataSources)
     .set({ name, updatedAt: new Date() })
     .where(and(eq(dataSources.id, id), eq(dataSources.workspaceId, ctx.workspaceId)))
-  await audit(ctx, 'UPDATE', id, { name })
+  await recordAudit(ctx, { action: 'UPDATE', resource: 'data_source', resourceId: id, changes: { name }, diff: diffObjects({ name: before.name }, { name }) })
   revalidatePath('/dashboard')
 }
 
@@ -232,7 +234,7 @@ async function setDataSourceRoleImpl(rawId: string, rawRole: string) {
     .update(dataSources)
     .set({ config: { ...(source.config as Record<string, unknown>), role }, updatedAt: new Date() })
     .where(and(eq(dataSources.id, source.id), eq(dataSources.workspaceId, ctx.workspaceId)))
-  await audit(ctx, 'UPDATE', source.id, { role })
+  await recordAudit(ctx, { action: 'UPDATE', resource: 'data_source', resourceId: source.id, changes: { role }, diff: diffObjects({ role: (source.config as { role?: string })?.role ?? 'source' }, { role }) })
   revalidatePath('/dashboard')
 }
 

@@ -85,7 +85,7 @@ async function renameWorkspaceImpl(rawName: string) {
   const ctx = await requireWorkspace('workspace:manage')
   const name = nameSchema.parse(rawName)
   await db.update(workspaces).set({ name, updatedAt: new Date() }).where(eq(workspaces.id, ctx.workspaceId))
-  await audit(ctx, 'RENAME', ctx.workspaceId, { name })
+  await audit(ctx, 'RENAME', ctx.workspaceId, { from: ctx.workspaceName, to: name })
   revalidatePath('/dashboard')
 }
 

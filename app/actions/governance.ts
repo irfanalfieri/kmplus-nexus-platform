@@ -9,6 +9,7 @@ import { auditLogs, dataSources, datasetPolicies, nexusDatasets, user, workspace
 import { newId, requireWorkspace } from '@/lib/auth/session'
 import { can } from '@/lib/auth/permissions'
 import { recordAudit } from '@/lib/audit'
+import { diffObjects } from '@/lib/audit-diff'
 import { currentKeyId } from '@/lib/security/credentials'
 import { policyInputSchema, suggestColumnPolicy, type ColumnPolicy } from '@/lib/governance/definition'
 import { accessFor, applyMasks } from '@/lib/governance/masking'
@@ -120,6 +121,7 @@ async function saveDatasetPolicyImpl(input: z.input<typeof policyInputSchema>) {
   if (unknown) throw new Error(`Row filter column "${unknown.column}" is not in dataset ${data.datasetName}.`)
   const rowFilters = data.rowFilters
   const now = new Date()
+  const [previous] = await db.select().from(datasetPolicies).where(and(eq(datasetPolicies.workspaceId, ctx.workspaceId), eq(datasetPolicies.datasetName, data.datasetName))).limit(1)
   await db
     .insert(datasetPolicies)
     .values({ id: newId('pol'), workspaceId: ctx.workspaceId, datasetName: data.datasetName, columns, retentionDays: data.retentionDays, rowFilters, updatedBy: ctx.userId })
@@ -130,7 +132,16 @@ async function saveDatasetPolicyImpl(input: z.input<typeof policyInputSchema>) {
   const masked = Object.entries(columns).filter(([, p]) => p.mask !== 'none').map(([n, p]) => `${n}:${p.mask}`)
   let deleted = 0
   if (data.retentionDays != null) deleted = await applyRetentionFor(ctx.workspaceId, data.datasetName, data.retentionDays)
-  await recordAudit(ctx, { action: 'UPDATE_POLICY', resource: 'dataset', resourceId: data.datasetName, changes: { masked, retentionDays: data.retentionDays, retentionDeleted: deleted, rowFilters: rowFilters.map((f) => `${f.roles.join('/')}: ${f.column} ${f.operator}`) } })
+  await recordAudit(ctx, {
+    action: 'UPDATE_POLICY',
+    resource: 'dataset',
+    resourceId: data.datasetName,
+    changes: { masked, retentionDays: data.retentionDays, retentionDeleted: deleted, rowFilters: rowFilters.map((f) => `${f.roles.join('/')}: ${f.column} ${f.operator}`) },
+    diff: diffObjects(
+      { columns: previous?.columns ?? {}, retentionDays: previous?.retentionDays ?? null, rowFilters: previous?.rowFilters ?? [] },
+      { columns, retentionDays: data.retentionDays, rowFilters }
+    ),
+  })
   revalidatePath('/dashboard')
   return { masked: masked.length, retentionDeleted: deleted }
 }

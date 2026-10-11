@@ -313,6 +313,7 @@ async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promi
     const watermark = source.mode === 'incremental' ? { column: source.watermarkColumn, after: progress.watermarkAfter } : undefined
     const timeoutAt = new Date(progress.startedAt!).getTime() + def.settings.timeoutMinutes * 60_000
 
+    let destRejects: Reject[] = []
     const writeOutputs = async (out: ReturnType<typeof transformChunk>) => {
       for (const [destId, target] of targets) {
         const rows = out.byDestination.get(destId) ?? []
@@ -332,11 +333,20 @@ async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promi
             columns,
             rows,
             runId: job.id,
+            // The chunk being written: progress.chunks counts completed (checkpointed) chunks.
+            chunk: progress.chunks,
           })
           written = res.written
         } else {
-          const res = await writeToDataSource({ source: target.ds!, table: dest.table, mode: dest.mode, keys: dest.keys, columns, rows })
+          const res = await writeToDataSource({ source: target.ds!, table: dest.table, mode: dest.mode, keys: dest.keys, columns, rows, runId: job.id, chunk: progress.chunks })
           written = res.written
+          // Rows the destination refused (e.g. a KMPlus product's validation) go to the quarantine, replayable from this step.
+          for (const r of res.rejected ?? []) {
+            destRejects.push({ stepId: destId, row: r.row, errors: [`${dest.table}: ${r.error}`], severity: 'error', kind: 'invalid' })
+            totals.rejectedCount++
+            const st = totals.steps.find((x) => x.id === destId)
+            if (st) st.rejected++
+          }
           if (dest.softDeleteMissing && !progress.replay) {
             const set = seen.get(destKeyField(destId))!
             for (const r of rows) set.add(keyOf(r, dest.keys))
@@ -385,7 +395,8 @@ async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promi
       progress.exhausted = true
       progress.chunks++
       log(progress, 'info', `Replayed ${held.length.toLocaleString()} quarantined row(s); ${quarantine.filter((r) => r.kind !== 'flag').length} quarantined again`)
-      await checkpoint(job, progress, scope, quarantine, sets, pairs, Date.now() - started)
+      await checkpoint(job, progress, scope, [...quarantine, ...destRejects], sets, pairs, Date.now() - started)
+      destRejects = []
     }
 
     let sliceChunks = 0
@@ -417,7 +428,8 @@ async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promi
       progress.chunks++
       sliceChunks++
       log(progress, 'info', `Chunk ${progress.chunks}: read ${read.rows.length.toLocaleString()} rows in ${readMs} ms; ${out.rejects.length} quarantined, ${out.flags.length} flagged`)
-      await checkpoint(job, progress, scope, [...out.rejects, ...out.flags], sets, out.managerPairs, Date.now() - started)
+      await checkpoint(job, progress, scope, [...out.rejects, ...out.flags, ...destRejects], sets, out.managerPairs, Date.now() - started)
+      destRejects = []
 
       // PD-10: error-rate threshold.
       const maxPct = def.settings.maxErrorPercent

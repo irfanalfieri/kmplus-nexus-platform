@@ -556,7 +556,7 @@ export function RouterEditor({ step, columns, options, onChange }: { step: Route
 
 // ── Destination ──────────────────────────────────────────────────────────────
 
-const WRITABLE = new Set(['postgres', 'mysql', 'supabase'])
+const WRITABLE = new Set(['postgres', 'mysql', 'supabase', 'kmplus'])
 
 export function DestinationEditor({ step, options, columns, onChange }: { step: DestinationStep; options: BuilderOptions; columns: Column[]; onChange: (s: DestinationStep) => void }) {
   const writable = options.dataSources.filter((d) => WRITABLE.has(d.sourceType))

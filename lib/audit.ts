@@ -26,6 +26,8 @@ export interface AuditEntry {
   resource: string
   resourceId?: string | null
   changes?: Record<string, unknown>
+  /** Before/after values of changed fields (lib/audit-diff.ts); stored as changes.diff. */
+  diff?: Record<string, unknown>
 }
 
 /** Client IP and user agent of the current request, if there is one. */
@@ -52,7 +54,7 @@ export async function recordAudit(actor: { userId: string; workspaceId: string |
     action: entry.action,
     resource: entry.resource,
     resourceId: entry.resourceId ?? null,
-    changes: entry.changes,
+    changes: entry.diff && Object.keys(entry.diff).length ? { ...(entry.changes ?? {}), diff: entry.diff } : entry.changes,
     ...meta,
   })
 }

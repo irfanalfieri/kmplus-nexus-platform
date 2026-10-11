@@ -154,7 +154,19 @@ const cases: Case[] = [
   env.DATABASE_URL
     ? { slug: 'file', label: 'File upload (temporary nexus_raw table)', setup: startFileFixture, sampleTable: 'employees' }
     : { slug: 'file', label: 'File upload', skip: 'run with --env-file=.env.local (uses the Nexus database)' },
+  { slug: 'kmplus', label: 'KMPlus product (local mock of the Nexus Ingest Contract)', setup: startKmplus, sampleTable: 'employee' },
 ]
+
+// ── KMPlus product mock (Nexus Ingest Contract) on 127.0.0.1 ──────────────
+let kmplusMock: Awaited<ReturnType<typeof import('./test/kmplus-mock').startKmplusMock>> | null = null
+async function startKmplus() {
+  process.env.NEXUS_ALLOW_PRIVATE_URLS = 'true'
+  const { startKmplusMock } = await import('./test/kmplus-mock')
+  kmplusMock = await startKmplusMock()
+  const { writeKmplusEntity } = await import('@/lib/connectors/drivers/kmplus')
+  await writeKmplusEntity({ product: 'LMS', baseUrl: kmplusMock.baseUrl, apiToken: kmplusMock.token }, 'employee', [{ employee_code: 'E1', full_name: 'Ana', email: 'ana@kmplus.test' }])
+  return () => kmplusMock?.stop()
+}
 
 // ── File upload fixture: one uploaded "file" in nexus_raw, removed afterwards ──
 const FILE_KEY = `harness-${randomBytes(4).toString('hex')}`
@@ -177,6 +189,7 @@ async function runCase(c: Case): Promise<Outcome> {
       c.slug === 'talenta' ? { clientId: TALENTA_ID, clientSecret: TALENTA_SECRET, baseUrl: talentaBase, pageSize: '3' }
       : c.slug === 'postgres' && !c.credentials ? { connectionString: postgresFixtureUrl, schema: fixtureSchema }
       : c.slug === 'file' ? { storageKey: FILE_KEY }
+      : c.slug === 'kmplus' ? { product: 'LMS', baseUrl: kmplusMock!.baseUrl, apiToken: kmplusMock!.token }
       : c.credentials!
     const test = await testConnectorConnection(c.slug, credentials)
     if (!test.ok && c.publicEndpoint && NETWORK_ERROR.test(test.message)) {

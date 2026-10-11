@@ -10,6 +10,7 @@ export type ConnectorSlug =
   | 'talenta'
   | 'ldap'
   | 'file'
+  | 'kmplus'
 
 export interface CredentialField {
   key: string

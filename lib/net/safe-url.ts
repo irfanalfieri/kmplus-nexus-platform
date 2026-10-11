@@ -20,6 +20,12 @@ function privateV6(ip: string) {
   return /^(fc|fd|fe8|fe9|fea|feb|ff)/.test(v)
 }
 
+/**
+ * Local development and tests may reach services on this machine (mock KMPlus
+ * products, webhook receivers) with NEXUS_ALLOW_PRIVATE_URLS=true. Never in production.
+ */
+const allowPrivate = () => process.env.NEXUS_ALLOW_PRIVATE_URLS === 'true' && process.env.NODE_ENV !== 'production'
+
 export const isPrivateAddress = (ip: string) => (isIP(ip) === 4 ? privateV4(ip) : isIP(ip) === 6 ? privateV6(ip) : true)
 
 /** Throws unless the URL is https on a public host (every resolved address public). */
@@ -30,9 +36,10 @@ export async function assertPublicHttpsUrl(raw: string): Promise<URL> {
   } catch {
     throw new UnsafeUrlError('Enter a full URL starting with https://')
   }
-  if (url.protocol !== 'https:') throw new UnsafeUrlError('Only https:// URLs are allowed.')
+  if (url.protocol !== 'https:' && !(allowPrivate() && url.protocol === 'http:')) throw new UnsafeUrlError('Only https:// URLs are allowed.')
   if (url.username || url.password) throw new UnsafeUrlError("URLs can't contain a username or password.")
   const host = url.hostname.replace(/^\[|\]$/g, '')
+  if (allowPrivate()) return url
   if (/^(localhost|.*\.local|.*\.internal|metadata\.google\.internal)$/i.test(host)) throw new UnsafeUrlError('Internal hosts are not allowed.')
   const addresses = isIP(host) ? [{ address: host }] : await lookup(host, { all: true }).catch(() => [])
   if (!addresses.length) throw new UnsafeUrlError(`${host} could not be resolved.`)

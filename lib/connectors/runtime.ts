@@ -10,6 +10,7 @@ import * as snowflake from './drivers/snowflake'
 import * as talenta from './drivers/talenta'
 import * as ldap from './drivers/ldap'
 import * as file from './drivers/file'
+import * as kmplus from './drivers/kmplus'
 
 export async function testConnectorConnection(
   slug: ConnectorSlug,
@@ -38,6 +39,8 @@ export async function testConnectorConnection(
       return ldap.testLdapConnection(credentials)
     case 'file':
       return file.testFileConnection(credentials)
+    case 'kmplus':
+      return kmplus.testKmplusConnection(credentials)
     default:
       return { ok: false, message: `Unsupported connector: ${slug}` }
   }
@@ -70,6 +73,8 @@ export async function scanConnectorSchema(
       return ldap.scanLdapSchema(credentials)
     case 'file':
       return file.scanFileSchema(credentials)
+    case 'kmplus':
+      return kmplus.scanKmplusSchema(credentials)
     default:
       throw new Error(`Unsupported connector: ${slug}`)
   }
@@ -104,6 +109,8 @@ export async function sampleConnectorTable(
       return ldap.sampleLdapObject(credentials, tableName, limit)
     case 'file':
       return file.sampleFileTable(credentials, tableName, limit)
+    case 'kmplus':
+      return kmplus.sampleKmplusEntity(credentials, tableName, limit)
     default:
       throw new Error(`Unsupported connector: ${slug}`)
   }

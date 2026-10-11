@@ -158,6 +158,20 @@ export const CONNECTOR_CATALOG: ConnectorDefinition[] = [
     premium: false,
     credentialFields: [],
   },
+  {
+    slug: 'kmplus',
+    name: 'KMPlus Products (KMS, LMS, TMS, PMS, CMS, IMS)',
+    category: 'KMPlus',
+    version: '1.0.0',
+    description: 'Send Employee, Organization, Position and other business entities to a KMPlus product through the Nexus Ingest Contract (destination)',
+    includedByDefault: true,
+    premium: false,
+    credentialFields: [
+      { key: 'product', label: 'Product (KMS, LMS, TMS, PMS, CMS or IMS)', type: 'text', required: true, placeholder: 'LMS' },
+      { key: 'baseUrl', label: 'Base URL', type: 'text', required: true, placeholder: 'https://lms.kmplus.co.id' },
+      { key: 'apiToken', label: 'API token (issued by the product for Nexus)', type: 'password', required: true },
+    ],
+  },
 ]
 
 export function getConnectorDefinition(slug: string): ConnectorDefinition | undefined {
