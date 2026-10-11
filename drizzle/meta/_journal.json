@@ -113,6 +113,20 @@
       "when": 1791715277124,
       "tag": "0015_catalog_api_domains",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1791720371467,
+      "tag": "0016_sso_webhooks_templates_quality",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1791721440310,
+      "tag": "0017_scheduler_webhooks",
+      "breakpoints": true
     }
   ]
 }

@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import { betterAuth, type BetterAuthPlugin } from 'better-auth'
-import { createAuthMiddleware } from 'better-auth/api'
+import { APIError, createAuthMiddleware } from 'better-auth/api'
 import { twoFactor } from 'better-auth/plugins'
+import { sso } from '@better-auth/sso'
+import { auditSsoLogin, emailAllowedForProvider, enforcedProviderFor, provisionSsoUser } from '@/lib/auth/sso'
 import { pool } from '@/lib/db'
 import { emailEnabled, sendEmail } from '@/lib/email'
 
@@ -14,7 +16,33 @@ export const APP_NAME = 'KMPlus Nexus'
  *   sign-in → password → /verify-2fa (6-digit code or a backup code) → dashboard.
  * 2FA is mandatory: requireSession() in lib/auth/session.ts rejects accounts
  * without it, and the dashboard redirects them to /setup-2fa.
+ *   SSO (GV-8): "Sign in with SSO" → the workspace's identity provider → back
+ *   signed in (session.authMethod = "sso"; the IdP enforces MFA, so no TOTP).
  */
+
+/** Plugin endpoints Nexus doesn't expose: providers are managed by workspace admins in app/actions/sso.ts. */
+const SSO_ADMIN_PATHS = ['/sso/register', '/sso/update-provider', '/sso/delete-provider', '/sso/request-domain-verification', '/sso/verify-domain', '/sso/providers', '/sso/get-provider']
+const ssoProviderIdOf = (ctx: { path?: string; params?: Record<string, string> } | null) =>
+  ctx?.path?.startsWith('/sso/') ? (ctx.params?.providerId ?? null) : null
+
+/** Domains that require SSO can't use passwords (sign-in, sign-up, reset). */
+const enforceSso = () =>
+  ({
+    id: 'nexus-enforce-sso',
+    hooks: {
+      before: [
+        {
+          matcher: (ctx) => ['/sign-in/email', '/sign-up/email', '/request-password-reset', '/forget-password'].includes(ctx.path ?? ''),
+          handler: createAuthMiddleware(async (ctx) => {
+            const email = (ctx.body as { email?: unknown } | undefined)?.email
+            if (typeof email !== 'string') return
+            const label = await enforcedProviderFor(email)
+            if (label) throw new APIError('FORBIDDEN', { message: `Your organization signs in with ${label}. Use "Sign in with SSO".` })
+          }),
+        },
+      ],
+    },
+  }) satisfies BetterAuthPlugin
 
 const LOGIN_PATHS = new Set(['/sign-in/email', '/two-factor/verify-totp', '/two-factor/verify-backup-code', '/verify-email'])
 /** Self-service security changes (Settings → Your account security). */
@@ -112,7 +140,34 @@ export const auth = betterAuth({
       backupCodeOptions: { amount: 10, length: 10 },
     }),
     auditLogins(),
+    sso({
+      domainVerification: { enabled: true },
+      provisionUserOnEveryLogin: true,
+      provisionUser: async ({ user, provider }) => provisionSsoUser(provider.providerId, user),
+    }),
+    enforceSso(),
   ],
+  disabledPaths: SSO_ADMIN_PATHS,
+  databaseHooks: {
+    user: {
+      create: {
+        // SSO only creates accounts for emails at the provider's verified domain.
+        before: async (user, ctx) => {
+          const providerId = ssoProviderIdOf(ctx)
+          if (providerId && !(await emailAllowedForProvider(providerId, user.email))) return false
+        },
+      },
+    },
+    session: {
+      create: {
+        before: async (session, ctx) => (ssoProviderIdOf(ctx) ? { data: { ...session, authMethod: 'sso' } } : undefined),
+        after: async (session, ctx) => {
+          const providerId = ssoProviderIdOf(ctx)
+          if (providerId) await auditSsoLogin(session, providerId)
+        },
+      },
+    },
+  },
   trustedOrigins: [
     ...(process.env.V0_RUNTIME_URL ? [process.env.V0_RUNTIME_URL] : []),
     ...(process.env.VERCEL_URL ? [`https://${process.env.VERCEL_URL}`] : []),
@@ -124,6 +179,9 @@ export const auth = betterAuth({
     'https://vm-rafjbtamt3i.vusercontent.net',
   ],
   session: {
+    additionalFields: {
+      authMethod: { type: 'string', required: false, input: false },
+    },
     expiresIn: 60 * 60 * 24 * 7, // 7 days
     updateAge: 60 * 60 * 24, // 1 day
   },

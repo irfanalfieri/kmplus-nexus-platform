@@ -14,11 +14,15 @@ export function newId(prefix: string) {
   return `${prefix}_${randomUUID()}`
 }
 
-/** Signed-in user with 2FA set up, or throws. Two-factor authentication is mandatory (TD-2). */
+/** SSO sessions are MFA-protected by the identity provider; every other session needs Nexus TOTP. */
+const secondFactorDone = (session: { user: { twoFactorEnabled?: boolean | null }; session: { authMethod?: string | null } }) =>
+  Boolean(session.user.twoFactorEnabled) || session.session.authMethod === 'sso'
+
+/** Signed-in user with 2FA set up (or signed in through SSO), or throws. Two-factor authentication is mandatory (TD-2). */
 async function requireSession() {
   const session = await auth.api.getSession({ headers: await headers() })
   if (!session?.user) throw new Error('Unauthorized')
-  if (!session.user.twoFactorEnabled) throw new Error('Set up two-factor authentication first (reload the page).')
+  if (!secondFactorDone(session)) throw new Error('Set up two-factor authentication first (reload the page).')
   return session.user
 }
 
@@ -30,7 +34,7 @@ export async function requirePageUser(nextPath: string) {
   const session = await auth.api.getSession({ headers: await headers() })
   const next = encodeURIComponent(nextPath)
   if (!session?.user) redirect(`/sign-in?next=${next}`)
-  if (!session.user.twoFactorEnabled) redirect(`/setup-2fa?next=${next}`)
+  if (!secondFactorDone(session)) redirect(`/setup-2fa?next=${next}`)
   return session.user
 }
 

@@ -3,4 +3,4 @@
 import * as actions from '@/app/actions/catalog'
 import { unwrapActions } from '@/lib/action-result'
 
-export const { listCatalog, getCatalogSample, saveCatalogEntry, refreshCatalogCache, saveDomainMapping, deleteDomainMapping } = unwrapActions(actions)
+export const { getLineage, getQualityHistory, listCatalog, getCatalogSample, saveCatalogEntry, refreshCatalogCache, saveDomainMapping, deleteDomainMapping } = unwrapActions(actions)

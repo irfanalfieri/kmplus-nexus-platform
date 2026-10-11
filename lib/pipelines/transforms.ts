@@ -79,9 +79,21 @@ function formatDateIn(date: Date, pattern: string, timeZone: string) {
   }
 }
 
-export function applyTransform(value: unknown, t: Transform, row: Row = {}): unknown {
+/** Loaded lookup tables: "dataset|key|value" → (key → value). */
+export type LookupTables = Map<string, Map<string, unknown>>
+
+export function applyTransform(value: unknown, t: Transform, row: Row = {}, tables?: LookupTables): unknown {
   const [a = '', b = '', c = '', d = ''] = t.args
   switch (t.fn) {
+    case 'lookup': {
+      const table = tables?.get(`${a.trim()}|${b.trim()}|${c.trim()}`)
+      if (!table) throw new Error(`lookup table ${a}.${b} → ${c} is not loaded`)
+      if (isEmpty(value)) return value
+      const found = table.get(asString(value).trim())
+      if (found !== undefined) return found
+      // Not found: "{value}" keeps the input, empty gives null, anything else is the default.
+      return d === '{value}' ? value : d === '' ? null : d
+    }
     case 'trim':
       return typeof value === 'string' ? value.trim() : value
     case 'uppercase':
@@ -241,7 +253,7 @@ export function matchesFilter(row: Row, step: FilterStep, rules?: Map<string, Bu
 }
 
 /** Applies a Map step. Returns the new row plus per-field conversion errors. */
-export function applyMap(row: Row, step: MapStep): { row: Row; errors: string[] } {
+export function applyMap(row: Row, step: MapStep, tables?: LookupTables): { row: Row; errors: string[] } {
   const out: Row = {}
   const errors: string[] = []
   if (step.keepUnmapped) {
@@ -253,7 +265,7 @@ export function applyMap(row: Row, step: MapStep): { row: Row; errors: string[] 
   for (const field of step.fields) {
     try {
       let value = row[field.from]
-      for (const t of field.transforms) value = applyTransform(value, t, row)
+      for (const t of field.transforms) value = applyTransform(value, t, row, tables)
       out[field.to] = coerce(value, field.type)
     } catch (err) {
       out[field.to] = null

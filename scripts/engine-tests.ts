@@ -19,7 +19,15 @@ import { ApiQueryError, buildApiSql, decodeCursor, encodeCursor, parseApiQuery, 
 import { freshness, matchesSearch, parseKey } from '@/lib/catalog/definition'
 import { applyRules, describeRule } from '@/lib/rules/evaluate'
 import { refreshSchedule } from '@/lib/catalog/refresh'
-import { randomBytes } from 'node:crypto'
+import { createHmac, randomBytes } from 'node:crypto'
+import { DOMAIN_ENTITIES, suggestCanonicalField } from '@/lib/domain/model'
+import { BUILTIN_MAPPING_TEMPLATES, PIPELINE_TEMPLATES, applyMappingTemplate, buildPipelineTemplate, mapToEntity } from '@/lib/pipelines/templates'
+import { buildLineage } from '@/lib/catalog/lineage'
+import { signPayload } from '@/lib/webhooks/deliver'
+import { isPrivateAddress } from '@/lib/net/safe-url'
+import { issuerFor, PUBLIC_EMAIL_DOMAINS, DOMAIN_RE } from '@/lib/auth/sso-presets'
+import { rateLimitHeaders } from '@/lib/api/rate-limit'
+import { openApiSpec } from '@/lib/api/openapi'
 
 let passed = 0
 async function test(name: string, fn: () => void | Promise<void>) {
@@ -492,6 +500,99 @@ async function main() {
     assert.throws(() => decryptCredentials('src_1', sealed, 'ws_b'), /another workspace/)
     assert.equal(needsReencryption(sealed), false)
     assert.equal(needsReencryption({ password: 'plain' }), true)
+  })
+
+  await test('domain synonyms are normalized so every one can match', () => {
+    for (const e of DOMAIN_ENTITIES) for (const f of e.fields) for (const syn of f.synonyms) assert.match(syn, /^[a-z0-9]+$/, `${e.name}.${f.name}: ${syn}`)
+    assert.equal(suggestCanonicalField('USRID_LONG'), 'email')
+    assert.equal(suggestCanonicalField('Tgl Masuk'), 'hire_date')
+  })
+
+  await test('lookup transform translates codes through a loaded dataset table', () => {
+    const tables = new Map([['orgs|org_code|org_name', new Map<string, unknown>([['FIN', 'Finance'], ['HR', 'Human Resources']])]])
+    const lookup = (v: unknown, otherwise = '') => applyTransform(v, { fn: 'lookup', args: ['orgs', 'org_code', 'org_name', otherwise] }, {}, tables)
+    assert.equal(lookup(' FIN '), 'Finance')
+    assert.equal(lookup('IT'), null, 'not found → null')
+    assert.equal(lookup('IT', '{value}'), 'IT', '{value} keeps the input')
+    assert.equal(lookup('IT', 'Unknown'), 'Unknown')
+    assert.throws(() => applyTransform('FIN', { fn: 'lookup', args: ['nope', 'a', 'b'] }, {}, tables), /not loaded/)
+  })
+
+  await test('templates: SAP/AD mapping templates, entity auto-map, every pipeline template is a valid definition', () => {
+    const sap = applyMappingTemplate(BUILTIN_MAPPING_TEMPLATES[0], [{ name: 'pernr', type: 'text' }, { name: 'ENAME', type: 'text' }, { name: 'BEGDA', type: 'text' }])
+    assert.deepEqual(sap.fields.map((f) => [f.from, f.to]), [['pernr', 'employee_code'], ['ENAME', 'full_name'], ['BEGDA', 'hire_date']])
+    assert.ok(sap.missing.includes('ORGEH'))
+    assert.equal(applyTransform('20240131', sap.fields[2].transforms[0]), '2024-01-31')
+    const begdaEnd = BUILTIN_MAPPING_TEMPLATES[0].fields.find((f) => f.from === 'ENDDA')!
+    let v: unknown = '99991231'
+    for (const t of begdaEnd.transforms) v = applyTransform(v, t)
+    assert.ok(v === '' || v === null, 'SAP open-ended 9999-12-31 means no termination date')
+    const ad = BUILTIN_MAPPING_TEMPLATES.find((t) => t.id === 'builtin:ad-users')!
+    const mgr = ad.fields.find((f) => f.from === 'manager')!
+    assert.equal(applyTransform('CN=Budi Santoso,OU=Staff,DC=kmplus,DC=co,DC=id', mgr.transforms[0]), 'Budi Santoso')
+    const uac = ad.fields.find((f) => f.from === 'userAccountControl')!
+    assert.equal(applyTransform('514', uac.transforms[0]), 'Disabled')
+    assert.equal(applyTransform('512', uac.transforms[0]), 'Enabled')
+    assert.deepEqual(mapToEntity([{ name: 'NIP', type: 'varchar' }, { name: 'TGL_MASUK', type: 'date' }, { name: 'random', type: 'text' }], 'employee').map((f) => [f.to, f.type]), [['employee_code', 'text'], ['hire_date', 'date']])
+    const cols = [{ name: 'PERNR', type: 'text' }, { name: 'ENAME', type: 'text' }, { name: 'USRID_LONG', type: 'text' }, { name: 'sAMAccountName', type: 'text' }, { name: 'mail', type: 'text' }, { name: 'Join Date', type: 'date' }]
+    for (const t of PIPELINE_TEMPLATES) {
+      for (const sourceType of ['sap', 'talenta', 'postgres', 'ldap', 'file']) {
+        const built = buildPipelineTemplate(t.id, { dataSourceId: 'src_1', sourceType, table: 'Org Chart', columns: cols, datasets: [] })
+        const parsed = definitionSchema.safeParse({ schemaVersion: 2, nodes: built.nodes, edges: built.edges, settings: {} })
+        assert.ok(parsed.success, `${t.id}/${sourceType}: ${parsed.success ? '' : parsed.error.issues[0]?.message}`)
+      }
+    }
+    const hris = buildPipelineTemplate('hris-employee', { dataSourceId: 's', sourceType: 'sap', table: 'PA0001', columns: cols, datasets: [] })
+    const dest = hris.nodes.find((n) => n.type === 'destination')!
+    assert.ok(dest.type === 'destination' && dest.kind === 'dataset' && dest.mode === 'upsert' && dest.keys[0] === 'employee_code' && dest.softDeleteMissing)
+    assert.ok(hris.nodes.some((n) => n.type === 'validate' && n.rules.some((r) => r.rule === 'unique')), 'HR rule pack added')
+    const csv = buildPipelineTemplate('csv-dataset', { dataSourceId: 's', sourceType: 'file', table: 'org_chart_2026', columns: cols, datasets: [] })
+    assert.ok(csv.nodes.some((n) => n.type === 'map' && n.fields.some((f) => f.to === 'join_date' && f.type === 'date')))
+  })
+
+  await test('lineage: sources → pipelines → datasets → dashboards / entities, with chains', () => {
+    const def = (src: string, table: string, ds: string) => definitionSchema.parse({ schemaVersion: 2, nodes: [{ id: 's', type: 'source', dataSourceId: src, table }, { id: 'd', type: 'destination', kind: 'dataset', datasetName: ds }], edges: [{ id: 'e', from: 's', to: 'd' }] })
+    const g = buildLineage('dataset:employees', {
+      sources: [{ id: 'src_sap', name: 'SAP' }],
+      pipelines: [
+        { id: 'p1', name: 'Employee sync', definition: def('src_sap', 'PA0001', 'employees'), after: null },
+        { id: 'p2', name: 'Org sync', definition: def('src_sap', 'HRP1000', 'orgs'), after: 'p1' },
+      ],
+      dashboards: [{ id: 'd1', name: 'Headcount', datasets: ['employees'] }],
+      entities: [{ entity: 'employee', datasetName: 'employees' }],
+    })
+    const depth = (id: string) => g.nodes.find((n) => n.id === id)?.depth
+    assert.equal(depth('dataset:employees'), 0)
+    assert.equal(depth('pipeline:p1'), -1)
+    assert.equal(depth('source:src_sap:PA0001'), -2)
+    assert.equal(depth('dashboard:d1'), 1)
+    assert.equal(depth('entity:employee'), 1)
+    assert.equal(depth('pipeline:p2'), undefined, 'a pipeline chained after the producer is not downstream of the dataset')
+    const fromSource = buildLineage('source:src_sap:PA0001', { sources: [{ id: 'src_sap', name: 'SAP' }], pipelines: [{ id: 'p1', name: 'x', definition: def('src_sap', 'PA0001', 'employees'), after: null }, { id: 'p2', name: 'y', definition: def('src_sap', 'HRP1000', 'orgs'), after: 'p1' }], dashboards: [], entities: [] })
+    assert.equal(fromSource.nodes.find((n) => n.id === 'pipeline:p2')?.depth, 2, 'chained pipelines are downstream of the first one')
+    assert.deepEqual(buildLineage('dataset:nope', { sources: [], pipelines: [], dashboards: [], entities: [] }).nodes, [])
+  })
+
+  await test('webhooks, SSRF guard, SSO presets, rate-limit headers, OpenAPI, "after" schedules', () => {
+    const sig = signPayload('whsec_x', '{"a":1}', 1700000000)
+    assert.equal(sig, `t=1700000000,v1=${createHmac('sha256', 'whsec_x').update('1700000000.{"a":1}').digest('hex')}`)
+    for (const ip of ['127.0.0.1', '10.1.2.3', '172.20.0.1', '192.168.1.1', '169.254.169.254', '100.64.0.1', '::1', 'fd00::1', '::ffff:10.0.0.1', '0.0.0.0']) assert.ok(isPrivateAddress(ip), ip)
+    for (const ip of ['8.8.8.8', '20.190.128.1', '2606:4700::1111']) assert.equal(isPrivateAddress(ip), false, ip)
+    assert.equal(issuerFor('azure', ' 72f988bf-86f1-41af-91ab-2d7cd011db47 '), 'https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47/v2.0')
+    assert.equal(issuerFor('okta', 'https://kmplus.okta.com/'), 'https://kmplus.okta.com')
+    assert.equal(issuerFor('google', 'ignored'), 'https://accounts.google.com')
+    assert.ok(PUBLIC_EMAIL_DOMAINS.has('gmail.com') && DOMAIN_RE.test('kmplus.co.id') && !DOMAIN_RE.test('kmplus') && !DOMAIN_RE.test('-x.com'))
+    const blocked = rateLimitHeaders({ allowed: false, limit: 120, remaining: 0, resetAt: Math.floor(Date.now() / 1000) + 30 })
+    assert.equal(blocked['X-RateLimit-Remaining'], '0')
+    assert.ok(Number(blocked['Retry-After']) >= 1 && Number(blocked['Retry-After']) <= 30)
+    assert.equal(rateLimitHeaders({ allowed: true, limit: 120, remaining: 5, resetAt: 0 })['Retry-After'], undefined)
+    const spec = openApiSpec('https://nexus.example') as { openapi: string; paths: Record<string, unknown>; webhooks: Record<string, unknown> }
+    assert.equal(spec.openapi, '3.1.0')
+    for (const path of ['/datasets/{name}', '/domains/{entity}', '/pipelines/{id}/runs', '/runs/{id}']) assert.ok(spec.paths[path], path)
+    assert.deepEqual(Object.keys(spec.webhooks).sort(), ['dataset.updated', 'run.failed', 'run.succeeded'])
+    const after = scheduleSchema.parse({ type: 'after', afterPipelineId: 'p1', afterOn: 'success_or_partial' })
+    assert.deepEqual(nextRunTimes(after, 3), [])
+    assert.match(describeSchedule(after), /After another pipeline succeeds \(also partially\)/)
   })
 
   console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`)

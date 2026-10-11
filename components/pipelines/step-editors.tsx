@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import { Plus, Sparkles, Trash2, Wand2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -23,7 +24,9 @@ import {
   type ValidateStep,
   type ValidationRuleSpec,
 } from '@/lib/pipelines/definition'
-import { autoMapName, suggestCanonicalField } from '@/lib/domain/model'
+import { autoMapName } from '@/lib/domain/model'
+import { BUILTIN_MAPPING_TEMPLATES, applyMappingTemplate, autoMapFields, columnTypeFromSql, hrRulePack, newValidationRule, type MappingTemplate } from '@/lib/pipelines/templates'
+import { saveMappingTemplate } from '@/lib/actions/templates'
 import type { getBuilderOptions } from '@/lib/actions/pipelines'
 
 export type BuilderOptions = Awaited<ReturnType<typeof getBuilderOptions>>
@@ -52,20 +55,8 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
 
 export const human = (s: string) => s.replace(/_/g, ' ')
 
-/** Maps scan SQL types (VARCHAR, INTEGER, TIMESTAMP WITH TIME ZONE …) to pipeline column types. */
-export function columnTypeFromSql(sqlType: string): ColumnType {
-  const t = sqlType.toUpperCase()
-  if (/^(INT|INTEGER|BIGINT|SMALLINT|TINYINT|INT2|INT4|INT8|SERIAL|BIGSERIAL)\b/.test(t)) return 'integer'
-  if (/(NUMERIC|DECIMAL|DOUBLE|REAL|FLOAT|NUMBER|MONEY)/.test(t)) return 'numeric'
-  if (/^(BOOL|BOOLEAN|BIT)\b/.test(t)) return 'boolean'
-  if (/TIMESTAMP|DATETIME/.test(t)) return 'timestamp'
-  if (/^DATE\b/.test(t)) return 'date'
-  if (/JSON/.test(t)) return 'json'
-  return 'text'
-}
-
 export const newCondition = (field = ''): Condition => ({ field, operator: 'equals', value: '', valueField: '' })
-export const newValidationRule = (field = ''): ValidationRuleSpec => ({ field, rule: 'required', value: '', severity: 'error', otherField: '', operator: 'greater_or_equal', ruleId: '' })
+export { columnTypeFromSql, newValidationRule }
 
 // ── Source ───────────────────────────────────────────────────────────────────
 
@@ -269,23 +260,36 @@ const TRANSFORM_ARGS: Partial<Record<TransformName, string[]>> = {
   number_format: ['decimals', 'locale (id-ID)'],
   hash: ['salt (optional)'],
   conditional: ['operator (equals)', 'value', 'then', 'else ({value} keeps it)'],
+  lookup: ['dataset', 'key column', 'value column', 'if not found (empty = null, {value} keeps it)'],
 }
 
-export function MapEditor({ step, columns, onChange }: { step: MapStep; columns: Column[]; onChange: (s: MapStep) => void }) {
+export function MapEditor({ step, columns, options, onChange }: { step: MapStep; columns: Column[]; options?: BuilderOptions; onChange: (s: MapStep) => void }) {
   const update = (i: number, patch: Partial<MapStep['fields'][number]>) => onChange({ ...step, fields: step.fields.map((f, j) => (j === i ? { ...f, ...patch } : f)) })
+  const [templateMsg, setTemplateMsg] = useState('')
   const autoMap = () => {
+    // HR synonyms (PERNR → employee_code, TGL_LAHIR → birth_date …), else a safe snake_case name.
     const existing = new Set(step.fields.map((f) => f.from))
-    const used = new Set(step.fields.map((f) => f.to))
-    const added = columns
-      .filter((c) => !existing.has(c.name))
-      .map((c) => {
-        // HR synonyms (PERNR → employee_code, TGL_LAHIR → birth_date …), else a safe snake_case name.
-        let to = autoMapName(c.name)
-        if (used.has(to)) to = c.name.replace(/[^A-Za-z0-9_]/g, '_').toLowerCase()
-        used.add(to)
-        return { from: c.name, to, type: columnTypeFromSql(c.type), transforms: [] }
-      })
+    const added = autoMapFields(columns, existing).filter((f) => !step.fields.some((x) => x.to === f.to))
     onChange({ ...step, fields: [...step.fields.filter((f) => f.from), ...added] })
+  }
+  const templates: MappingTemplate[] = [...BUILTIN_MAPPING_TEMPLATES, ...(options?.mappingTemplates ?? [])]
+  const applyTemplate = (id: string) => {
+    const tpl = templates.find((x) => x.id === id)
+    if (!tpl) return
+    const { fields, missing } = applyMappingTemplate(tpl, columns.length ? columns : tpl.fields.map((f) => ({ name: f.from, type: 'text' })))
+    if (!fields.length) return setTemplateMsg(`None of the template's columns (${tpl.fields.map((f) => f.from).slice(0, 5).join(', ')}…) are in this step's input.`)
+    onChange({ ...step, fields, keepUnmapped: tpl.keepUnmapped })
+    setTemplateMsg(`Applied "${tpl.name}": ${fields.length} fields${missing.length ? `; not in the input: ${missing.join(', ')}` : ''}.`)
+  }
+  const saveTemplate = async () => {
+    const name = window.prompt('Template name (e.g. "HRIS export → Employee")')
+    if (!name) return
+    try {
+      const res = await saveMappingTemplate({ name, fields: step.fields.filter((f) => f.from && f.to), keepUnmapped: step.keepUnmapped })
+      setTemplateMsg(`${res.replaced ? 'Updated' : 'Saved'} template "${name}". It appears in the templates list of every pipeline (after reopening the editor).`)
+    } catch (err) {
+      setTemplateMsg(err instanceof Error ? err.message : 'Save failed')
+    }
   }
   return (
     <div className="space-y-2">
@@ -293,12 +297,25 @@ export function MapEditor({ step, columns, onChange }: { step: MapStep; columns:
         <Button size="sm" variant="outline" onClick={autoMap} disabled={!columns.length}>
           <Wand2 className="mr-1 h-4 w-4" /> Auto-map all columns
         </Button>
+        <select value="" onChange={(e) => applyTemplate(e.target.value)} className="h-8 rounded-md border border-input bg-background px-2 text-xs" aria-label="Apply a mapping template">
+          <option value="">Apply template…</option>
+          {templates.map((tpl) => (
+            <option key={tpl.id} value={tpl.id}>
+              {tpl.name}
+              {tpl.builtIn ? '' : ' (saved)'}
+            </option>
+          ))}
+        </select>
+        <Button size="sm" variant="ghost" onClick={() => void saveTemplate()} disabled={!step.fields.some((f) => f.from && f.to)}>
+          Save as template
+        </Button>
         <label className="flex items-center gap-2 text-sm text-muted-foreground">
           <input type="checkbox" checked={step.keepUnmapped} onChange={(e) => onChange({ ...step, keepUnmapped: e.target.checked })} />
           Pass through unmapped columns
         </label>
       </div>
-      <p className="text-xs text-muted-foreground">Auto-map recognizes common HR column names (e.g. PERNR → employee_code, TGL_LAHIR → birth_date).</p>
+      <p className="text-xs text-muted-foreground">Auto-map recognizes common HR column names (e.g. PERNR → employee_code, TGL_LAHIR → birth_date). Templates map SAP, Talenta and Active Directory fields; the lookup transform translates codes using a dataset.</p>
+      {templateMsg && <p className="rounded-md bg-muted/50 p-2 text-xs">{templateMsg}</p>}
       {step.fields.map((f, i) => (
         <div key={i} className="rounded-md border border-border/70 p-2">
           <div className="grid grid-cols-[1fr_1fr_auto] gap-1.5">
@@ -385,45 +402,11 @@ const RULE_LABEL: Record<ValidationRuleSpec['rule'], string> = {
 }
 const VALUE_RULES = new Set(['regex', 'min_length', 'max_length', 'min', 'max', 'one_of'])
 
-/** HR rule pack (DQ-5) from recognized column names. */
-function hrRulePack(columns: Column[], options: BuilderOptions): { rules: ValidationRuleSpec[]; notes: string[] } {
-  const byCanonical = new Map<string, string>()
-  for (const c of columns) {
-    const canonical = suggestCanonicalField(c.name)
-    if (canonical && !byCanonical.has(canonical)) byCanonical.set(canonical, c.name)
-  }
-  const col = (n: string) => byCanonical.get(n)
-  const rules: ValidationRuleSpec[] = []
-  const notes: string[] = []
-  const add = (field: string | undefined, patch: Partial<ValidationRuleSpec>) => field && rules.push({ ...newValidationRule(field), ...patch })
-  const code = col('employee_code')
-  for (const f of ['employee_code', 'full_name', 'email', 'org_code', 'hire_date']) add(col(f), { rule: 'required' })
-  add(code, { rule: 'unique' })
-  add(col('email'), { rule: 'email' })
-  add(col('phone'), { rule: 'phone', severity: 'warning' })
-  add(col('national_id'), { rule: 'nik', severity: 'warning' })
-  for (const f of ['hire_date', 'birth_date']) {
-    add(col(f), { rule: 'date' })
-    add(col(f), { rule: 'not_future', severity: 'warning' })
-  }
-  if (col('termination_date') && col('hire_date')) add(col('termination_date'), { rule: 'compare', otherField: col('hire_date')!, operator: 'greater_or_equal' })
-  const lookup = (target: 'org_code' | 'position_code', hint: RegExp) => {
-    const ds = options.datasets.find((d) => hint.test(d.name) && d.columns.some((c) => c.name === target))
-    if (ds) add(col(target), { rule: 'exists_in', value: `${ds.name}.${target}` })
-    else if (col(target)) notes.push(`No dataset with ${target} yet; add an "exists in dataset" rule once one exists.`)
-  }
-  lookup('org_code', /org/)
-  lookup('position_code', /position|jabatan/)
-  if (code && col('manager_code')) add(col('manager_code'), { rule: 'manager', value: code, severity: 'warning' })
-  if (!code) notes.push('No employee code column recognized: map one (e.g. PERNR → employee_code) first.')
-  return { rules, notes }
-}
-
 export function ValidateEditor({ step, columns, options, onChange }: { step: ValidateStep; columns: Column[]; options: BuilderOptions; onChange: (s: ValidateStep) => void }) {
   const update = (i: number, patch: Partial<ValidationRuleSpec>) => onChange({ ...step, rules: step.rules.map((r, j) => (j === i ? { ...r, ...patch } : r)) })
   const lookups = options.datasets.flatMap((d) => d.columns.map((c) => `${d.name}.${c.name}`))
   const addPack = () => {
-    const { rules, notes } = hrRulePack(columns, options)
+    const { rules, notes } = hrRulePack(columns, options.datasets)
     if (!rules.length) return window.alert(notes.join('\n') || 'No HR columns recognized in this step\'s input.')
     const existing = step.rules.filter((r) => r.field)
     onChange({ ...step, rules: [...existing, ...rules] })

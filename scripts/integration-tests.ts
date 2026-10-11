@@ -13,14 +13,21 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { and, eq, inArray, like } from 'drizzle-orm'
 import { db, pool } from '@/lib/db'
-import { apiKeys, auditLogs, businessRuleVersions, businessRules, catalogEntries, connectorInstalls, dashboards, dataSources, datasetPolicies, domainMappings, executionLogs, nexusDatasets, pipelineJobs, pipelineRunRejects, pipelines, pipelineVersions, session, user, verification, workspaceInvites, workspaceMembers, workspaces } from '@/lib/db/schema'
+import { apiKeys, apiRateLimits, auditLogs, businessRuleVersions, businessRules, catalogEntries, connectorInstalls, dashboards, dataSources, datasetPolicies, datasetQualitySnapshots, domainMappings, mappingTemplates, ssoProvider, webhookDeliveries, webhooks, workspaceSso, executionLogs, nexusDatasets, pipelineJobs, pipelineRunRejects, pipelines, pipelineVersions, session, user, verification, workspaceInvites, workspaceMembers, workspaces } from '@/lib/db/schema'
 import { acceptInvite, changeMemberRole, createInvite, getWorkspaceContext, listMembers, resetMemberTwoFactor, switchWorkspace } from '@/lib/actions/workspaces'
 import { installConnector } from '@/lib/actions/connectors'
 import { createDataSource, deleteDataSource, getDataSources, setDataSourceRole, testConnection } from '@/lib/actions/data-sources'
-import { cancelPipelineRun, discardDraft, getDatasetPreview, getRunStatus, listPipelines, listRuns, publishPipeline, retryPipelineRun, runPipelineNow, savePipeline } from '@/lib/actions/pipelines'
+import { cancelPipelineRun, createWebhookTrigger, discardDraft, getBuilderOptions, getDatasetPreview, getRunStatus, listPipelines, listRuns, publishPipeline, retryPipelineRun, runPipelineNow, savePipeline } from '@/lib/actions/pipelines'
+import { createSsoProvider, deleteSsoProvider, listSsoProviders, updateSsoProvider, verifySsoDomain } from '@/lib/actions/sso'
+import { emailAllowedForProvider, enforcedProviderFor, provisionSsoUser } from '@/lib/auth/sso'
+import { createWebhook, deleteWebhook, listWebhooks, testWebhook } from '@/lib/actions/webhooks'
+import { deleteMappingTemplate, saveMappingTemplate } from '@/lib/actions/templates'
+import { POST as postHook } from '@/app/api/hooks/pipelines/[id]/[token]/route'
+import { POST as postRuns } from '@/app/api/v1/pipelines/[id]/runs/route'
+import { GET as getRun } from '@/app/api/v1/runs/[id]/route'
 import { deleteRule, listRuleVersions, listRules, saveRule, testRule } from '@/lib/actions/rules'
 import { approveRows, dismissRows, fixRow, getQualityOverview, listQuarantine, replayRows } from '@/lib/actions/quality'
-import { getCatalogSample, listCatalog, saveCatalogEntry, saveDomainMapping } from '@/lib/actions/catalog'
+import { getCatalogSample, getLineage, getQualityHistory, listCatalog, saveCatalogEntry, saveDomainMapping } from '@/lib/actions/catalog'
 import { createApiKey, revokeApiKey } from '@/lib/actions/api-keys'
 import { uploadFilePart } from '@/lib/actions/files'
 import { GET as getDataset } from '@/app/api/v1/datasets/[name]/route'
@@ -576,6 +583,152 @@ async function main() {
       assert.equal(left.rowCount, 0, 'deleting the source drops its uploads')
     })
 
+    await test('SSO: admins register an OIDC provider; sign-in needs a DNS-verified domain; users join with the default role', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      await rejectsWith(() => createSsoProvider({ label: 'x', preset: 'google', domain: 'gmail.com', clientId: 'c', clientSecret: 's' }), /public email provider/)
+      await rejectsWith(() => createSsoProvider({ label: 'x', preset: 'oidc', issuerValue: 'http://127.0.0.1:8080', domain: `${RUN}.example`, clientId: 'c', clientSecret: 's' }), /https|private|Could not read/)
+      const domain = `${RUN}.nexus-sso.test`
+      const { providerId } = await createSsoProvider({ label: 'Test Google', preset: 'google', domain, clientId: 'client-id', clientSecret: 'client-secret', defaultRole: 'analyst' })
+      const [listed] = await listSsoProviders()
+      assert.equal(listed.verified, false)
+      assert.match(listed.redirectUri, new RegExp(`/api/auth/sso/callback/${providerId}$`))
+      assert.equal(listed.dnsRecord.name, `_nexus-sso.${domain}`)
+      await rejectsWith(() => verifySsoDomain(providerId), /TXT record not found/)
+      await rejectsWith(() => updateSsoProvider({ providerId, enforce: true }), /Verify the domain before requiring SSO/)
+      setTestUser(viewer)
+      await switchWorkspace(adminWs)
+      await rejectsWith(() => listSsoProviders(), /Your role/)
+      // Simulate the DNS proof, then check what the sign-in hooks rely on.
+      await db.update(ssoProvider).set({ domainVerified: true }).where(eq(ssoProvider.providerId, providerId))
+      assert.equal(await emailAllowedForProvider(providerId, `someone@${domain}`), true)
+      assert.equal(await emailAllowedForProvider(providerId, 'someone@other.com'), false, 'SSO cannot create accounts outside the domain')
+      const ssoUser = newUser('sso')
+      await db.insert(user).values({ id: ssoUser.id, email: `person@${domain}`, name: 'SSO person', emailVerified: false, twoFactorEnabled: false })
+      await provisionSsoUser(providerId, { id: ssoUser.id, email: `person@${domain}` })
+      const [membership] = await db.select().from(workspaceMembers).where(and(eq(workspaceMembers.userId, ssoUser.id), eq(workspaceMembers.workspaceId, adminWs)))
+      assert.equal(membership?.role, 'analyst')
+      assert.equal((await db.select({ v: user.emailVerified }).from(user).where(eq(user.id, ssoUser.id)))[0].v, true)
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      assert.equal(await enforcedProviderFor(`person@${domain}`), null)
+      await updateSsoProvider({ providerId, enforce: true })
+      assert.equal(await enforcedProviderFor(`PERSON@${domain}`), 'Test Google', 'password sign-in is blocked for the domain')
+      await deleteSsoProvider(providerId)
+      assert.equal((await db.select().from(ssoProvider).where(eq(ssoProvider.providerId, providerId))).length, 0)
+    })
+
+    let chainedId = ''
+    await test('chaining, inbound webhook trigger, API runs, rate limits and quality snapshots', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const lookupDef = {
+        schemaVersion: 2,
+        nodes: [
+          { id: 's', type: 'source', position: { x: 0, y: 0 }, dataSourceId: sourceId, table: 'employees', maxRows: 30 },
+          // Lookup (MP-6): code → email from the employees dataset written earlier.
+          { id: 'm', type: 'map', position: { x: 1, y: 0 }, keepUnmapped: false, fields: [
+            { from: 'code', to: 'code', type: 'text', transforms: [] },
+            { from: 'code', to: 'email_from_lookup', type: 'text', transforms: [{ fn: 'lookup', args: [DATASET, 'code', 'email', 'missing'] }] },
+          ] },
+          { id: 'd', type: 'destination', position: { x: 2, y: 0 }, kind: 'dataset', datasetName: `${RUN}_chained`, mode: 'upsert', keys: ['code'] },
+        ],
+        edges: [{ id: 'e1', from: 's', to: 'm' }, { id: 'e2', from: 'm', to: 'd' }],
+        settings: { retries: 0 },
+      }
+      await rejectsWith(() => savePipeline({ publish: true, name: `${RUN} loop`, definition: lookupDef, schedule: { type: 'after', afterPipelineId: 'pipe_missing' } as never }), /no longer exists/)
+      const chained = await savePipeline({ publish: true, enabled: true, name: `${RUN} chained`, definition: lookupDef, schedule: { type: 'after', afterPipelineId: rulePipelineId, afterOn: 'success_or_partial' } as never })
+      chainedId = chained.id
+      // A loop: the rule pipeline may not run after the chained one.
+      const rulePipe = (await listPipelines()).find((x) => x.id === rulePipelineId)!
+      await rejectsWith(() => savePipeline({ id: rulePipelineId, name: rulePipe.name, definition: rulePipe.config as never, schedule: { type: 'after', afterPipelineId: chainedId } as never }), /loop/)
+
+      // Inbound webhook → rule pipeline run → chained pipeline queued automatically.
+      const { url } = await createWebhookTrigger(rulePipelineId)
+      const token = url.split('/').pop()!
+      const hook = (t: string) => postHook(new Request(url, { method: 'POST' }), { params: Promise.resolve({ id: rulePipelineId, token: t }) })
+      assert.equal((await hook('wrong-token')).status, 404)
+      const started = await hook(token)
+      assert.equal(started.status, 202)
+      const { run_id } = (await started.json()) as { run_id: string }
+      takeAfterCallbacks()
+      await processJobs({})
+      const [hookRun] = await db.select().from(executionLogs).where(eq(executionLogs.id, run_id))
+      assert.equal(hookRun.trigger, 'webhook')
+      const [chainRun] = await db.select().from(executionLogs).where(and(eq(executionLogs.pipelineId, chainedId), eq(executionLogs.trigger, 'chain')))
+      assert.ok(chainRun, 'the chained pipeline ran after the webhook-triggered one')
+      assert.ok(['success', 'partial'].includes(chainRun.status!), chainRun.errorMessage ?? '')
+      const [ds] = await db.select().from(nexusDatasets).where(and(eq(nexusDatasets.workspaceId, adminWs), eq(nexusDatasets.name, `${RUN}_chained`)))
+      const { rows } = await pool.query(`SELECT code, email_from_lookup FROM "nexus_data"."${ds.tableName}" ORDER BY code LIMIT 2`)
+      assert.ok(rows.every((r) => r.email_from_lookup === 'missing' || String(r.email_from_lookup).includes('@')), 'lookup filled from the dataset')
+      const snaps = await db.select().from(datasetQualitySnapshots).where(and(eq(datasetQualitySnapshots.workspaceId, adminWs), eq(datasetQualitySnapshots.datasetName, `${RUN}_chained`)))
+      assert.equal(snaps.length, 1)
+      assert.equal(Number(snaps[0].uniqueness), 100, 'upsert keys are unique')
+      const history = await getQualityHistory(`${RUN}_chained`)
+      assert.equal(history.days.length, 1)
+      const lineage = await getLineage(`dataset:${RUN}_chained`)
+      assert.ok(lineage.nodes.some((n) => n.id === `pipeline:${chainedId}`) && lineage.nodes.some((n) => n.kind === 'source_table'))
+
+      // API: trigger + status with a pipelines:run key; a tiny rate limit returns 429.
+      const { key } = await createApiKey({ name: `${RUN} runner`, role: 'analyst', scopes: ['pipelines:run', 'runs:read'], rateLimitPerMinute: 10 })
+      const authed = (path: string, method = 'GET') => new Request(`http://localhost/api/v1${path}`, { method, headers: { authorization: `Bearer ${key}` } })
+      const trig = await postRuns(authed(`/pipelines/${chainedId}/runs`, 'POST'), { params: Promise.resolve({ id: chainedId }) })
+      assert.equal(trig.status, 202)
+      assert.equal(trig.headers.get('X-RateLimit-Limit'), '10')
+      const { run_id: apiRun } = (await trig.json()) as { run_id: string }
+      takeAfterCallbacks()
+      await processJobs({})
+      const status = (await (await getRun(authed(`/runs/${apiRun}`), { params: Promise.resolve({ id: apiRun }) })).json()) as { data: { status: string; trigger: string } }
+      assert.equal(status.data.trigger, 'api')
+      assert.ok(['success', 'partial'].includes(status.data.status))
+      assert.equal((await getDataset(authed(`/datasets/${DATASET}`), { params: Promise.resolve({ name: DATASET }) })).status, 403, 'scopes are enforced')
+      let last = 0
+      for (let i = 0; i < 10; i++) last = (await getRun(authed(`/runs/${apiRun}`), { params: Promise.resolve({ id: apiRun }) })).status
+      assert.equal(last, 429, 'the 10-per-minute limit is enforced')
+    })
+
+    await test('outbound webhooks: SSRF guard, signed delivery attempts, retries recorded', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      await rejectsWith(() => createWebhook({ url: 'http://example.com/hook', events: ['run.failed'] }), /https/)
+      await rejectsWith(() => createWebhook({ url: 'https://127.0.0.1/hook', events: ['run.failed'] }), /private network/)
+      await rejectsWith(() => createWebhook({ url: 'https://localhost/hook', events: ['run.failed'] }), /Internal hosts/)
+      const { id, secret } = await createWebhook({ url: 'https://example.com/nexus-hook', events: ['run.succeeded', 'dataset.updated'] })
+      assert.match(secret, /^whsec_/)
+      const [stored] = await db.select({ secret: webhooks.secret }).from(webhooks).where(eq(webhooks.id, id))
+      assert.ok(!JSON.stringify(stored.secret).includes(secret), 'the signing secret is stored encrypted')
+      // example.com answers 405/404 to POSTs: the delivery is recorded as a failed attempt, queued for retry.
+      const test = await testWebhook(id)
+      assert.equal(test.delivered, false)
+      const [d] = await db.select().from(webhookDeliveries).where(eq(webhookDeliveries.webhookId, id))
+      assert.equal(d.status, 'pending')
+      assert.equal(d.attempts, 1)
+      assert.ok(d.nextAttemptAt.getTime() > Date.now(), 'retry scheduled')
+      const hooks = await listWebhooks()
+      assert.ok(hooks[0].deliveries.length >= 1 && !('secret' in hooks[0]))
+      // A run emits events for subscribed webhooks.
+      const run = await runPipelineNow(chainedId)
+      takeAfterCallbacks()
+      await processJobs({})
+      const events = (await db.select({ event: webhookDeliveries.event, payload: webhookDeliveries.payload }).from(webhookDeliveries).where(eq(webhookDeliveries.webhookId, id))).map((e) => e.event)
+      assert.ok(events.includes('run.succeeded') && events.includes('dataset.updated'), events.join(','))
+      assert.ok(run.runId)
+      await deleteWebhook(id)
+    })
+
+    await test('mapping templates are saved per workspace and offered in the builder', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      await saveMappingTemplate({ name: `${RUN} HR export`, fields: [{ from: 'NIP', to: 'employee_code', type: 'text', transforms: [{ fn: 'trim', args: [] }] }] })
+      const again = await saveMappingTemplate({ name: `${RUN} HR export`, fields: [{ from: 'NIP', to: 'employee_code', type: 'text', transforms: [] }] })
+      assert.equal(again.replaced, true)
+      const opts = await getBuilderOptions()
+      const tpl = opts.mappingTemplates.find((x) => x.name === `${RUN} HR export`)!
+      assert.equal(tpl.fields[0].transforms.length, 0)
+      assert.ok(opts.pipelines.some((x) => x.id === chainedId))
+      await deleteMappingTemplate(tpl.id)
+    })
+
     await test('admins reset a member\'s 2FA (lost phone); members cannot', async () => {
       await db.insert(session).values({ id: `${RUN}_sess`, userId: viewer.id, token: `${RUN}_tok`, expiresAt: new Date(Date.now() + 86_400_000) })
       await db.insert(verification).values({ id: `${RUN}_trust`, identifier: `trust-device-${RUN}`, value: viewer.id, expiresAt: new Date(Date.now() + 86_400_000) })
@@ -611,7 +764,13 @@ async function cleanup(userIds: string[]) {
   for (const d of datasets) await pool.query(`DROP TABLE IF EXISTS "nexus_data"."${d.tableName}"`)
   await db.delete(session).where(inArray(session.userId, userIds))
   await db.delete(verification).where(inArray(verification.value, userIds))
-  for (const t of [apiKeys, catalogEntries, domainMappings, businessRuleVersions, businessRules, datasetPolicies, dashboards, nexusDatasets, pipelineRunRejects, executionLogs, pipelineJobs, pipelineVersions, pipelines, dataSources, connectorInstalls, workspaceInvites, auditLogs, workspaceMembers]) {
+  const keyIds = (await db.select({ id: apiKeys.id }).from(apiKeys).where(inArray(apiKeys.workspaceId, ws))).map((k) => `key:${k.id}`)
+  if (keyIds.length) await db.delete(apiRateLimits).where(inArray(apiRateLimits.bucket, keyIds))
+  const pipeIds = (await db.select({ id: pipelines.id }).from(pipelines).where(inArray(pipelines.workspaceId, ws))).map((x) => `hook:${x.id}`)
+  if (pipeIds.length) await db.delete(apiRateLimits).where(inArray(apiRateLimits.bucket, pipeIds))
+  const sso = await db.select({ providerId: workspaceSso.providerId }).from(workspaceSso).where(inArray(workspaceSso.workspaceId, ws))
+  if (sso.length) await db.delete(ssoProvider).where(inArray(ssoProvider.providerId, sso.map((x) => x.providerId)))
+  for (const t of [workspaceSso, webhookDeliveries, webhooks, mappingTemplates, datasetQualitySnapshots, apiKeys, catalogEntries, domainMappings, businessRuleVersions, businessRules, datasetPolicies, dashboards, nexusDatasets, pipelineRunRejects, executionLogs, pipelineJobs, pipelineVersions, pipelines, dataSources, connectorInstalls, workspaceInvites, auditLogs, workspaceMembers]) {
     await db.delete(t).where(inArray(t.workspaceId, ws))
   }
   await db.delete(auditLogs).where(inArray(auditLogs.userId, userIds))

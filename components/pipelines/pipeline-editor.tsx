@@ -37,8 +37,9 @@ import {
   type PipelineSettings,
 } from '@/lib/pipelines/definition'
 import { describeSchedule, formatInTimezone, nextRunTimes } from '@/lib/pipelines/schedule'
+import { AFTER_OUTCOMES } from '@/lib/pipelines/definition'
 import type { EngineResult, StepStat } from '@/lib/pipelines/engine'
-import { savePipeline, testPipeline } from '@/lib/actions/pipelines'
+import { createWebhookTrigger, disableWebhookTrigger, savePipeline, testPipeline } from '@/lib/actions/pipelines'
 import {
   DestinationEditor,
   FilterEditor,
@@ -68,6 +69,10 @@ export interface EditablePipeline {
   /** Published version (0 = never published) and the unpublished draft, if any. */
   publishedVersion?: number
   draftVersion?: number | null
+  /** An inbound webhook trigger URL exists (its token is only shown when created). */
+  webhookTrigger?: boolean
+  /** Notes from the template that built this pipeline. */
+  notes?: string[]
 }
 
 export function blankPipeline(): EditablePipeline {
@@ -196,6 +201,7 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
   const [error, setError] = useState('')
   const [changeNote, setChangeNote] = useState('')
   const [test, setTest] = useState<EngineResult | null>(null)
+  const [notes, setNotes] = useState(initial.notes ?? [])
 
   const definition = { nodes: draft.nodes, edges: draft.edges, settings: draft.settings }
   const columns = useMemo(() => columnsPerNode(draft.nodes, draft.edges, options), [draft.nodes, draft.edges, options])
@@ -286,6 +292,7 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
     if (!validation.success) return setError(describeDefinitionError(validation.error))
     if (!scheduleCheck.success) return setError('Check the schedule settings.')
     if (draft.schedule.type === 'cron' && !upcoming.length) return setError('The cron expression is invalid.')
+    if (draft.schedule.type === 'after' && !draft.schedule.afterPipelineId) return setError('Choose the pipeline this one runs after (Schedule tab).')
     setSaving(publish ? 'publish' : 'draft')
     try {
       const { id } = await savePipeline({ id: draft.id, name: draft.name, description: draft.description, definition, schedule: draft.schedule, enabled: draft.enabled, changeNote: changeNote || undefined, publish })
@@ -373,7 +380,7 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
                 </div>
                 {selected.type === 'source' && <SourceEditor step={selected} options={options} onChange={setNode} />}
                 {selected.type === 'filter' && <FilterEditor step={selected} columns={columns.get(selected.id) ?? []} options={options} onChange={setNode} />}
-                {selected.type === 'map' && <MapEditor step={selected} columns={columns.get(selected.id) ?? []} onChange={setNode} />}
+                {selected.type === 'map' && <MapEditor step={selected} columns={columns.get(selected.id) ?? []} options={options} onChange={setNode} />}
                 {selected.type === 'validate' && <ValidateEditor step={selected} columns={columns.get(selected.id) ?? []} options={options} onChange={setNode} />}
                 {selected.type === 'rules' && <RulesEditor step={selected} options={options} onChange={setNode} />}
                 {selected.type === 'router' && <RouterEditor step={selected} columns={columns.get(selected.id) ?? []} options={options} onChange={setNode} />}
@@ -447,6 +454,18 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
           </aside>
         </div>
 
+        {notes.length > 0 && (
+          <div className="flex items-start gap-2 border-t border-border bg-primary/5 px-3 py-2 text-xs" role="status">
+            <ul className="flex-1 list-disc pl-4">
+              {notes.map((n, i) => (
+                <li key={i}>{n}</li>
+              ))}
+            </ul>
+            <Button size="sm" variant="ghost" className="h-6" onClick={() => setNotes([])} aria-label="Dismiss notes">
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        )}
         <div className="max-h-[38vh] overflow-y-auto border-t border-border">
           <div className="flex gap-1 border-b border-border px-3 pt-2" role="tablist">
             {(['test', 'settings', 'schedule'] as const).map((t) => (
@@ -463,7 +482,20 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
           </div>
           <div className="p-3">
             {tab === 'settings' && <SettingsSection settings={draft.settings} onChange={(patch) => setDraft((d) => ({ ...d, settings: { ...d.settings, ...patch } }))} />}
-            {tab === 'schedule' && <ScheduleSection schedule={draft.schedule} enabled={draft.enabled} upcoming={upcoming} published={Boolean(draft.publishedVersion)} onChange={setSchedule} onEnabled={(enabled) => setDraft({ ...draft, enabled })} />}
+            {tab === 'schedule' && (
+              <>
+                <ScheduleSection
+                  schedule={draft.schedule}
+                  enabled={draft.enabled}
+                  upcoming={upcoming}
+                  published={Boolean(draft.publishedVersion)}
+                  pipelines={options.pipelines.filter((p) => p.id !== draft.id)}
+                  onChange={setSchedule}
+                  onEnabled={(enabled) => setDraft({ ...draft, enabled })}
+                />
+                <WebhookTrigger pipelineId={draft.id} exists={Boolean(draft.webhookTrigger)} onChange={(webhookTrigger) => setDraft((d) => ({ ...d, webhookTrigger }))} />
+              </>
+            )}
             {tab === 'test' && <TestSummary test={test} testing={testing} draft={draft} />}
           </div>
         </div>
@@ -619,6 +651,7 @@ function ScheduleSection({
   enabled,
   upcoming,
   published,
+  pipelines,
   onChange,
   onEnabled,
 }: {
@@ -626,6 +659,7 @@ function ScheduleSection({
   enabled: boolean
   upcoming: Date[]
   published: boolean
+  pipelines: { id: string; name: string; published: boolean }[]
   onChange: (patch: Partial<PipelineSchedule>) => void
   onEnabled: (v: boolean) => void
 }) {
@@ -641,7 +675,28 @@ function ScheduleSection({
           <option value="weekly">Weekly</option>
           <option value="monthly">Monthly</option>
           <option value="cron">Cron expression</option>
+          <option value="after">After another pipeline</option>
         </NativeSelect>
+        {schedule.type === 'after' && (
+          <>
+            <NativeSelect className="w-56" value={schedule.afterPipelineId} onChange={(v) => onChange({ afterPipelineId: v })} aria-label="Run after pipeline">
+              <option value="">Choose a pipeline…</option>
+              {pipelines.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                  {p.published ? '' : ' (not published)'}
+                </option>
+              ))}
+            </NativeSelect>
+            <NativeSelect className="w-56" value={schedule.afterOn} onChange={(v) => onChange({ afterOn: v as PipelineSchedule['afterOn'] })} aria-label="When">
+              {AFTER_OUTCOMES.map((o) => (
+                <option key={o} value={o}>
+                  {o === 'success' ? 'when it succeeds' : o === 'success_or_partial' ? 'when it succeeds or partially succeeds' : 'whenever it finishes'}
+                </option>
+              ))}
+            </NativeSelect>
+          </>
+        )}
         {schedule.type === 'hourly' && (
           <label className="flex items-center gap-2 text-sm">
             at minute
@@ -685,11 +740,61 @@ function ScheduleSection({
       )}
       <p className="text-xs text-muted-foreground">
         {describeSchedule(schedule)}
-        {schedule.type !== 'manual' && (upcoming.length ? ` · next: ${upcoming.map((d) => formatInTimezone(d, schedule.timezone)).join(' · ')}` : ' · invalid schedule')}
+        {schedule.type !== 'manual' && schedule.type !== 'after' && (upcoming.length ? ` · next: ${upcoming.map((d) => formatInTimezone(d, schedule.timezone)).join(' · ')}` : ' · invalid schedule')}
+        {schedule.type === 'after' && schedule.afterPipelineId && ` (${pipelines.find((p) => p.id === schedule.afterPipelineId)?.name ?? 'missing pipeline'})`}
         {schedule.type !== 'manual' && !enabled && ' · disabled, will not run automatically'}
         {schedule.type !== 'manual' && !published && ' · schedules start once the pipeline is published'}
         . Scheduled runs always execute the published version.
       </p>
+    </section>
+  )
+}
+
+/** Inbound webhook trigger (SC-1): a secret URL that starts this pipeline from another system. */
+function WebhookTrigger({ pipelineId, exists, onChange }: { pipelineId?: string; exists: boolean; onChange: (exists: boolean) => void }) {
+  const [url, setUrl] = useState<string | null>(null)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const act = async (fn: () => Promise<void>) => {
+    setBusy(true)
+    setError('')
+    try {
+      await fn()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <section className="mt-4 space-y-2 border-t border-border pt-3" aria-label="Webhook trigger">
+      <div className="text-sm font-medium">Webhook trigger</div>
+      <p className="text-xs text-muted-foreground">
+        Other systems (SAP event mesh, a CI job, a script) can start this pipeline with an HTTP POST to a secret URL. Runs use the published version; up to 30 calls per minute.
+      </p>
+      {!pipelineId ? (
+        <p className="text-xs text-muted-foreground">Save the pipeline first.</p>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => void act(async () => { setUrl((await createWebhookTrigger(pipelineId)).url); onChange(true) })}>
+            {exists ? 'Create a new URL (the old one stops working)' : 'Create webhook URL'}
+          </Button>
+          {exists && (
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => void act(async () => { await disableWebhookTrigger(pipelineId); setUrl(null); onChange(false) })}>
+              Turn off
+            </Button>
+          )}
+          {exists && !url && <span className="text-xs text-muted-foreground">A URL exists; it is only shown when created.</span>}
+        </div>
+      )}
+      {url && (
+        <div className="space-y-1 rounded-md border border-amber-500/40 bg-amber-500/5 p-2 text-xs">
+          <div className="font-medium">Copy this URL now; it won&apos;t be shown again.</div>
+          <Input readOnly value={url} className="h-8 font-mono text-xs" onFocus={(e) => e.target.select()} aria-label="Webhook URL" />
+          <div className="font-mono text-muted-foreground">curl -X POST &quot;{url.slice(0, 48)}…&quot;</div>
+        </div>
+      )}
+      {error && <p className="text-xs text-destructive">{error}</p>}
     </section>
   )
 }

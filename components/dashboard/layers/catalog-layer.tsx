@@ -12,6 +12,8 @@ import { DOMAIN_ENTITIES, DOMAIN_BY_NAME, suggestCanonicalField } from '@/lib/do
 import { NativeSelect } from '@/components/pipelines/step-editors'
 import { SampleTable } from '@/components/pipelines/pipeline-editor'
 import { useCan } from '@/components/workspace/workspace-context'
+import { LineageView } from '@/components/catalog/lineage-graph'
+import { QualityHistory } from '@/components/catalog/quality-history'
 
 type Catalog = Awaited<ReturnType<typeof listCatalog>>
 type Item = Catalog['items'][number]
@@ -116,7 +118,7 @@ export default function CatalogLayer() {
             ))}
           </ul>
           {selected ? (
-            <Detail key={selected.key} item={selected} catalog={data} onSaved={load} />
+            <Detail key={selected.key} item={selected} catalog={data} onSaved={load} onOpen={setSelectedKey} />
           ) : (
             <div className="flex items-center justify-center rounded-xl border border-dashed border-border p-10 text-sm text-muted-foreground">Select an item to see and document it.</div>
           )}
@@ -126,7 +128,7 @@ export default function CatalogLayer() {
   )
 }
 
-function Detail({ item, catalog, onSaved }: { item: Item; catalog: Catalog; onSaved: () => Promise<void> }) {
+function Detail({ item, catalog, onSaved, onOpen }: { item: Item; catalog: Catalog; onSaved: () => Promise<void>; onOpen: (key: string) => void }) {
   const canEdit = catalog.canEdit
   const canPreview = useCan('data:preview')
   const canRun = useCan('pipelines:run')
@@ -371,6 +373,18 @@ function Detail({ item, catalog, onSaved }: { item: Item; catalog: Catalog; onSa
           </table>
         </div>
       </section>
+
+      <section aria-label="Lineage">
+        <div className="mb-2 text-sm font-medium">Lineage</div>
+        <LineageView catalogKey={item.key} onOpen={onOpen} />
+      </section>
+
+      {item.kind === 'dataset' && (
+        <section aria-label="Quality history">
+          <div className="mb-2 text-sm font-medium">Quality</div>
+          <QualityHistory datasetName={item.name} />
+        </section>
+      )}
 
       {item.kind === 'dataset' && <DomainMapping item={item} catalog={catalog} onSaved={onSaved} />}
     </div>

@@ -1,11 +1,12 @@
 import { CronExpressionParser } from 'cron-parser'
 import type { PipelineSchedule } from './definition'
 
-/** Converts a schedule into a 5-field cron expression, or null for manual. */
+/** Converts a schedule into a 5-field cron expression, or null for manual and "after another pipeline". */
 export function scheduleToCron(schedule: PipelineSchedule): string | null {
   const [hh, mm] = schedule.time.split(':').map((n) => Number(n))
   switch (schedule.type) {
     case 'manual':
+    case 'after':
       return null
     case 'hourly':
       return `${schedule.minute} * * * *`
@@ -22,6 +23,7 @@ export function scheduleToCron(schedule: PipelineSchedule): string | null {
 
 /** Throws a readable error if the schedule can't produce run times. */
 export function assertValidSchedule(schedule: PipelineSchedule) {
+  if (schedule.type === 'after' && !schedule.afterPipelineId) throw new Error('Choose the pipeline this one runs after.')
   const expr = scheduleToCron(schedule)
   if (!expr) return
   try {
@@ -66,6 +68,8 @@ export function describeSchedule(schedule: PipelineSchedule): string {
       return `Monthly on day ${schedule.dayOfMonth} at ${schedule.time} ${tz}`
     case 'cron':
       return `Cron "${schedule.cron}" (${tz})`
+    case 'after':
+      return `After another pipeline ${schedule.afterOn === 'any' ? 'finishes' : schedule.afterOn === 'success_or_partial' ? 'succeeds (also partially)' : 'succeeds'}`
   }
 }
 

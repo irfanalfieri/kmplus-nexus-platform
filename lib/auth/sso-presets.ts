@@ -1,0 +1,51 @@
+/** Identity provider presets for the SSO settings form. Client-safe. */
+
+export const SSO_PRESETS = ['azure', 'google', 'okta', 'oidc'] as const
+export type SsoPreset = (typeof SSO_PRESETS)[number]
+
+export const SSO_PRESET_INFO: Record<SsoPreset, { label: string; field: string; placeholder: string; help: string }> = {
+  azure: {
+    label: 'Microsoft Entra ID (Azure AD)',
+    field: 'Directory (tenant) ID',
+    placeholder: '72f988bf-86f1-41af-91ab-2d7cd011db47',
+    help: 'Entra admin center → App registrations → New registration (Web). Add the redirect URI below, create a client secret, and copy the Application (client) ID and Directory (tenant) ID.',
+  },
+  google: {
+    label: 'Google Workspace',
+    field: '',
+    placeholder: '',
+    help: 'Google Cloud console → APIs & Services → Credentials → OAuth client ID (Web application). Add the redirect URI below. Set the consent screen to Internal so only your Workspace users can sign in.',
+  },
+  okta: {
+    label: 'Okta',
+    field: 'Okta domain',
+    placeholder: 'kmplus.okta.com',
+    help: 'Okta admin → Applications → Create App Integration → OIDC, Web Application. Add the redirect URI below as a sign-in redirect URI and assign the people who may sign in.',
+  },
+  oidc: {
+    label: 'Other OpenID Connect provider',
+    field: 'Issuer URL',
+    placeholder: 'https://login.example.com',
+    help: 'Create an OIDC web client with the redirect URI below; the issuer must publish /.well-known/openid-configuration.',
+  },
+}
+
+/** Issuer URL from the preset and its one field. */
+export function issuerFor(preset: SsoPreset, value: string): string {
+  const v = value.trim().replace(/\/+$/, '')
+  switch (preset) {
+    case 'azure':
+      return `https://login.microsoftonline.com/${v}/v2.0`
+    case 'google':
+      return 'https://accounts.google.com'
+    case 'okta':
+      return `https://${v.replace(/^https?:\/\//, '')}`
+    default:
+      return v
+  }
+}
+
+/** Free email providers can't be claimed for SSO: everyone shares them. */
+export const PUBLIC_EMAIL_DOMAINS = new Set(['gmail.com', 'googlemail.com', 'yahoo.com', 'yahoo.co.id', 'outlook.com', 'hotmail.com', 'live.com', 'icloud.com', 'me.com', 'aol.com', 'proton.me', 'protonmail.com', 'gmx.com', 'yandex.com', 'mail.com', 'zoho.com'])
+
+export const DOMAIN_RE = /^(?=.{3,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/

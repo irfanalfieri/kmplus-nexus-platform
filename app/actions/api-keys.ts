@@ -19,6 +19,7 @@ async function listApiKeysImpl() {
       prefix: apiKeys.prefix,
       role: apiKeys.role,
       scopes: apiKeys.scopes,
+      rateLimitPerMinute: apiKeys.rateLimitPerMinute,
       createdAt: apiKeys.createdAt,
       createdByEmail: user.email,
       lastUsedAt: apiKeys.lastUsedAt,
@@ -38,6 +39,7 @@ const createInput = z.object({
   scopes: z.array(z.enum(API_SCOPES)).min(1, 'Choose at least one scope'),
   /** null = never expires */
   expiresInDays: z.number().int().min(1).max(730).nullable().default(365),
+  rateLimitPerMinute: z.number().int().min(10).max(3000).default(120),
 })
 
 /** Creates a key and returns it once; only its hash is stored. */
@@ -54,10 +56,11 @@ async function createApiKeyImpl(input: z.input<typeof createInput>) {
     hash,
     role: data.role,
     scopes: data.scopes,
+    rateLimitPerMinute: data.rateLimitPerMinute,
     createdBy: ctx.userId,
     expiresAt: data.expiresInDays ? new Date(Date.now() + data.expiresInDays * 86_400_000) : null,
   })
-  await recordAudit(ctx, { action: 'CREATE', resource: 'api_key', resourceId: id, changes: { name: data.name, prefix, role: data.role, scopes: data.scopes, expiresInDays: data.expiresInDays } })
+  await recordAudit(ctx, { action: 'CREATE', resource: 'api_key', resourceId: id, changes: { name: data.name, prefix, role: data.role, scopes: data.scopes, expiresInDays: data.expiresInDays, rateLimitPerMinute: data.rateLimitPerMinute } })
   revalidatePath('/dashboard')
   return { id, key }
 }

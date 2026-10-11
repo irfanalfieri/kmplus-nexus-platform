@@ -9,21 +9,31 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card } from '@/components/ui/card'
 
-export function AuthForm({ mode, next = '/dashboard' }: { mode: 'sign-in' | 'sign-up'; next?: string }) {
+export function AuthForm({ mode, next = '/dashboard', ssoError }: { mode: 'sign-in' | 'sign-up'; next?: string; ssoError?: string }) {
   const router = useRouter()
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(ssoError ? `Single sign-on failed: ${ssoError}` : null)
+  const [useSso, setUseSso] = useState(Boolean(ssoError))
   const [loading, setLoading] = useState(false)
   const [sentTo, setSentTo] = useState<string | null>(null)
 
   const isSignUp = mode === 'sign-up'
 
+  /** SSO: the email's domain picks the workspace identity provider; the browser goes there and comes back signed in. */
+  const signInWithSso = async () => {
+    const { data, error } = await authClient.signIn.sso({ email, callbackURL: next, errorCallbackURL: `/sign-in?next=${encodeURIComponent(next)}` })
+    setLoading(false)
+    if (error) return setError(error.status === 404 || /not found|no provider/i.test(error.message ?? '') ? "Your organization hasn't set up single sign-on for this email domain. Sign in with your password." : (error.message ?? 'Single sign-on failed'))
+    if (data?.url) window.location.href = data.url
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError(null)
     setLoading(true)
+    if (!isSignUp && useSso) return signInWithSso()
 
     const setupPath = `/setup-2fa?next=${encodeURIComponent(next)}`
     if (isSignUp) {
@@ -113,18 +123,20 @@ export function AuthForm({ mode, next = '/dashboard' }: { mode: 'sign-in' | 'sig
               autoComplete="email"
             />
           </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="password">Password</Label>
-            <Input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              minLength={8}
-              autoComplete={isSignUp ? 'new-password' : 'current-password'}
-            />
-          </div>
+          {!useSso && (
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="password">Password</Label>
+              <Input
+                id="password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                minLength={8}
+                autoComplete={isSignUp ? 'new-password' : 'current-password'}
+              />
+            </div>
+          )}
 
           {error && (
             <p className="text-sm text-destructive" role="alert">
@@ -137,8 +149,23 @@ export function AuthForm({ mode, next = '/dashboard' }: { mode: 'sign-in' | 'sig
               ? 'Please wait...'
               : isSignUp
                 ? 'Create account'
-                : 'Sign in'}
+                : useSso
+                  ? 'Continue with SSO'
+                  : 'Sign in'}
           </Button>
+          {!isSignUp && (
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full"
+              onClick={() => {
+                setUseSso(!useSso)
+                setError(null)
+              }}
+            >
+              {useSso ? 'Sign in with a password instead' : 'Sign in with SSO (Microsoft, Google, Okta)'}
+            </Button>
+          )}
         </form>
 
         <p className="text-sm text-muted-foreground text-center mt-6">

@@ -287,6 +287,16 @@ export async function readDatasetColumnValues(tableName: string, column: string,
   return new Set(rows.map((r) => r.v))
 }
 
+/** key → value pairs of two dataset columns, for lookup transforms (first value wins for duplicate keys). */
+export async function readDatasetPairs(tableName: string, keyColumn: string, valueColumn: string, limit = 500_000): Promise<Map<string, unknown>> {
+  const { rows } = await nexusPool.query<{ k: string; v: unknown }>(
+    `SELECT DISTINCT ON (${qIdent(keyColumn)}::text) ${qIdent(keyColumn)}::text AS k, ${qIdent(valueColumn)} AS v FROM "nexus_data".${qIdent(tableName)}
+      WHERE "_nexus_deleted_at" IS NULL AND ${qIdent(keyColumn)} IS NOT NULL ORDER BY ${qIdent(keyColumn)}::text, "_nexus_loaded_at" DESC LIMIT $1`,
+    [limit]
+  )
+  return new Map(rows.map((r) => [r.k.trim(), r.v]))
+}
+
 export async function dropDatasetTable(tableName: string) {
   await nexusPool.query(`DROP TABLE IF EXISTS "nexus_data".${qIdent(tableName)}`)
 }

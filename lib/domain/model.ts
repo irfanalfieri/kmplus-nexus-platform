@@ -30,9 +30,9 @@ export const DOMAIN_ENTITIES: DomainEntity[] = [
     label: 'Employee',
     key: 'employee_code',
     fields: [
-      f('employee_code', 'text', 'Employee code', ['pernr', 'empid', 'employeeid', 'employeeno', 'employeenumber', 'empno', 'nip', 'nik_karyawan', 'nikkaryawan', 'nopeg', 'nopegawai', 'staffid', 'code']),
+      f('employee_code', 'text', 'Employee code', ['pernr', 'empid', 'employeeid', 'employeeno', 'employeenumber', 'empno', 'nip', 'nikkaryawan', 'nopeg', 'nopegawai', 'staffid', 'code']),
       f('full_name', 'text', 'Full name', ['ename', 'name', 'nama', 'fullname', 'employeename', 'namakaryawan', 'namalengkap', 'cname'], true),
-      f('email', 'text', 'Email', ['email', 'emailaddress', 'mail', 'workemail', 'emailkantor', 'usrid_long'], true),
+      f('email', 'text', 'Email', ['email', 'emailaddress', 'mail', 'workemail', 'emailkantor', 'usridlong'], true),
       f('phone', 'text', 'Phone', ['phone', 'mobile', 'hp', 'nohp', 'telp', 'telepon', 'phonenumber', 'handphone', 'mobilephone'], true),
       f('national_id', 'text', 'National ID (NIK)', ['nik', 'ktp', 'noktp', 'nationalid', 'idnumber', 'identitynumber'], true),
       f('gender', 'text', 'Gender', ['gender', 'sex', 'jeniskelamin', 'gesch'], true),

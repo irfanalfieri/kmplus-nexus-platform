@@ -1,16 +1,19 @@
-import { and, eq } from 'drizzle-orm'
+import { and, desc, eq } from 'drizzle-orm'
 import { NextResponse } from 'next/server'
 import { db, pool } from '@/lib/db'
-import { catalogEntries, dataSources, domainMappings, nexusDatasets } from '@/lib/db/schema'
+import { catalogEntries, dataSources, domainMappings, executionLogs, nexusDatasets, pipelines } from '@/lib/db/schema'
 import { recordAudit } from '@/lib/audit'
 import { accessFor, applyMasks, liveTableAccess } from '@/lib/governance/masking'
 import { rowAllowed } from '@/lib/governance/row-filters'
 import { DOMAIN_BY_NAME } from '@/lib/domain/model'
 import { liveQuery } from '@/lib/pipelines/io'
+import { enqueueRun } from '@/lib/pipelines/jobs'
+import { nudgeWorker, startWorker } from '@/lib/pipelines/worker'
 import { ApiAuthError, authenticate, type ApiCaller, type ApiScope } from './keys'
+import { consumeRateLimit, rateLimitHeaders } from './rate-limit'
 import { ApiQueryError, buildApiSql, parseApiQuery, toPage, type ApiQuery } from './query'
 
-/** Data API request handling (API-2/API-3). Errors are JSON: { error: { message } }. */
+/** Data API request handling (API-2/3/4/6). Errors are JSON: { error: { message } }. */
 
 type Column = { name: string; type: string }
 const QUERY_TIMEOUT = '15s'
@@ -20,10 +23,15 @@ const json = (body: unknown, status = 200, headers: Record<string, string> = {})
 
 const fail = (status: number, message: string) => json({ error: { status, message } }, status)
 
-export async function handle(req: Request, scope: ApiScope, fn: (caller: ApiCaller, params: URLSearchParams) => Promise<Response>) {
+export async function handle(req: Request, scope: ApiScope | ApiScope[], fn: (caller: ApiCaller, params: URLSearchParams) => Promise<Response>) {
   try {
     const caller = await authenticate(req.headers.get('authorization'), scope)
-    return await fn(caller, new URL(req.url).searchParams)
+    const limit = await consumeRateLimit(`key:${caller.keyId}`, caller.rateLimitPerMinute)
+    const headers = rateLimitHeaders(limit)
+    if (!limit.allowed) return json({ error: { status: 429, message: `Rate limit of ${limit.limit} requests per minute reached. Retry after the Retry-After header.` } }, 429, headers)
+    const res = await fn(caller, new URL(req.url).searchParams)
+    for (const [k, v] of Object.entries(headers)) res.headers.set(k, v)
+    return res
   } catch (err) {
     if (err instanceof ApiAuthError) return fail(err.status, err.message)
     if (err instanceof ApiQueryError) return fail(400, err.message)
@@ -136,4 +144,59 @@ export async function readDomain(caller: ApiCaller, entityName: string, params: 
     next_cursor: page.next_cursor,
     meta: { entity: entity.name, key: entity.key, dataset: d.name, last_loaded_at: d.lastLoadedAt, masked_fields: Object.keys(canonicalMasks), unmapped_fields: entity.fields.map((f) => f.name).filter((f) => !fields[f]) },
   })
+}
+
+// ── Pipelines and runs (API-4) ───────────────────────────────────────────────
+
+const runView = (r: typeof executionLogs.$inferSelect) => ({
+  id: r.id,
+  pipeline_id: r.pipelineId,
+  status: r.status,
+  trigger: r.trigger,
+  pipeline_version: r.pipelineVersion,
+  rows_read: r.recordsProcessed ?? 0,
+  rows_written: r.recordsSuccess ?? 0,
+  rows_quarantined: r.recordsError ?? 0,
+  error: r.errorMessage,
+  started_at: r.startTime,
+  finished_at: r.endTime,
+  duration_seconds: r.duration,
+})
+
+/** GET /api/v1/pipelines */
+export async function listPipelinesApi(caller: ApiCaller) {
+  const rows = await db
+    .select({ id: pipelines.id, name: pipelines.name, version: pipelines.version, enabled: pipelines.enabled, lastRunAt: pipelines.lastRunAt, lastRunStatus: pipelines.lastRunStatus, nextRunAt: pipelines.nextRunAt })
+    .from(pipelines)
+    .where(eq(pipelines.workspaceId, caller.workspaceId))
+  return json({ data: rows.map((p) => ({ id: p.id, name: p.name, published_version: p.version || null, scheduled: p.enabled, last_run_at: p.lastRunAt, last_run_status: p.lastRunStatus, next_run_at: p.nextRunAt })) })
+}
+
+/** POST /api/v1/pipelines/:id/runs: queue a run of the published version. */
+export async function triggerRunApi(caller: ApiCaller, pipelineId: string, origin: string) {
+  const [p] = await db.select({ id: pipelines.id, version: pipelines.version, userId: pipelines.userId }).from(pipelines).where(and(eq(pipelines.id, pipelineId), eq(pipelines.workspaceId, caller.workspaceId))).limit(1)
+  if (!p) throw new NotFound(`No pipeline ${pipelineId}.`)
+  if (!p.version) return fail(409, 'This pipeline has no published version yet.')
+  // Like scheduled runs, API runs act as the pipeline's creator (alerts go to the workspace as usual).
+  const outcome = await enqueueRun(p.id, { workspaceId: caller.workspaceId, actorId: p.userId }, 'api')
+  await recordAudit({ userId: `apikey:${caller.keyId}`, workspaceId: caller.workspaceId }, { action: 'RUN', resource: 'pipeline', resourceId: p.id, changes: { trigger: 'api', runId: outcome.runId, status: outcome.status } })
+  if (outcome.status === 'skipped') return json({ error: { status: 409, message: outcome.message }, run_id: outcome.runId || null }, 409)
+  startWorker()
+  return json({ run_id: outcome.runId, status: 'queued', status_url: `${origin}/api/v1/runs/${outcome.runId}` }, 202, { Location: `${origin}/api/v1/runs/${outcome.runId}` })
+}
+
+/** GET /api/v1/pipelines/:id/runs: latest runs. */
+export async function listRunsApi(caller: ApiCaller, pipelineId: string, params: URLSearchParams) {
+  const limit = Math.min(Math.max(Number(params.get('limit') ?? 20) || 20, 1), 100)
+  const rows = await db.select().from(executionLogs).where(and(eq(executionLogs.workspaceId, caller.workspaceId), eq(executionLogs.pipelineId, pipelineId))).orderBy(desc(executionLogs.createdAt)).limit(limit)
+  return json({ data: rows.map(runView) })
+}
+
+/** GET /api/v1/runs/:id */
+export async function getRunApi(caller: ApiCaller, runId: string) {
+  const [r] = await db.select().from(executionLogs).where(and(eq(executionLogs.id, runId), eq(executionLogs.workspaceId, caller.workspaceId))).limit(1)
+  if (!r) throw new NotFound(`No run ${runId}.`)
+  // Where no scheduler runs (dev/preview), polling keeps a waiting run moving.
+  if (r.status === 'queued' || r.status === 'running') await nudgeWorker(caller.workspaceId)
+  return json({ data: runView(r) })
 }

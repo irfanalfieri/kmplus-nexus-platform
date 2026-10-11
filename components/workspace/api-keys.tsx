@@ -20,6 +20,7 @@ export function ApiKeys() {
   const [role, setRole] = useState<'analyst' | 'steward'>('analyst')
   const [scopes, setScopes] = useState<string[]>(['datasets:read', 'domains:read'])
   const [expires, setExpires] = useState('365')
+  const [rate, setRate] = useState('120')
   const [busy, setBusy] = useState(false)
   const [created, setCreated] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
@@ -41,7 +42,7 @@ export function ApiKeys() {
     setBusy(true)
     setError('')
     try {
-      const res = await createApiKey({ name, role, scopes: scopes as ('datasets:read' | 'domains:read')[], expiresInDays: expires ? Number(expires) : null })
+      const res = await createApiKey({ name, role, scopes: scopes as ('datasets:read' | 'domains:read' | 'pipelines:run' | 'runs:read')[], expiresInDays: expires ? Number(expires) : null, rateLimitPerMinute: Number(rate) })
       setCreated(res.key)
       setCopied(false)
       setCreating(false)
@@ -73,7 +74,8 @@ export function ApiKeys() {
         <div className="flex-1">
           <h3 className="font-semibold">Data API keys</h3>
           <p className="text-sm text-muted-foreground">
-            Apps read datasets and business entities over HTTPS with a key: <span className="font-mono text-xs">GET {origin}/api/v1/datasets/&lt;name&gt;</span> or <span className="font-mono text-xs">/api/v1/domains/employee</span>. Masking and row-level access follow the key&apos;s role.
+            Apps read datasets and business entities, start pipelines and follow runs over HTTPS with a key: <span className="font-mono text-xs">GET {origin}/api/v1/datasets/&lt;name&gt;</span>, <span className="font-mono text-xs">/api/v1/domains/employee</span>, <span className="font-mono text-xs">POST /api/v1/pipelines/&lt;id&gt;/runs</span>. Masking and row-level access follow the key&apos;s role; each key has a per-minute request limit.{' '}
+            <a className="text-primary underline-offset-4 hover:underline" href="/api/v1/openapi.json" target="_blank" rel="noreferrer">OpenAPI spec</a>
           </p>
         </div>
         {!creating && (
@@ -126,9 +128,19 @@ export function ApiKeys() {
             </NativeSelect>
           </label>
           <div className="flex flex-wrap items-center gap-3 text-sm md:col-span-4">
+            <label className="flex items-center gap-1.5">
+              Limit
+              <NativeSelect className="h-8 w-36" value={rate} onChange={setRate} aria-label="Requests per minute">
+                {['60', '120', '300', '600', '1200'].map((r) => (
+                  <option key={r} value={r}>{r} / minute</option>
+                ))}
+              </NativeSelect>
+            </label>
             {[
               ['datasets:read', 'Read datasets'],
               ['domains:read', 'Read business entities'],
+              ['pipelines:run', 'Run pipelines'],
+              ['runs:read', 'Read run status'],
             ].map(([s, label]) => (
               <label key={s} className="flex items-center gap-1.5">
                 <input type="checkbox" checked={scopes.includes(s)} onChange={(e) => setScopes(e.target.checked ? [...scopes, s] : scopes.filter((x) => x !== s))} />
@@ -159,6 +171,7 @@ export function ApiKeys() {
                 <span className="font-medium">{k.name}</span>
                 <span className="font-mono text-xs text-muted-foreground">{k.prefix}…</span>
                 <Badge variant="outline">{k.role}</Badge>
+                <Badge variant="outline">{k.rateLimitPerMinute}/min</Badge>
                 {k.scopes.map((s) => (
                   <Badge key={s} variant="secondary" className="text-[10px]">{s}</Badge>
                 ))}

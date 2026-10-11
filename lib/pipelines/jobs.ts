@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { and, eq, inArray, lt, sql } from 'drizzle-orm'
 import { db, pool } from '@/lib/db'
-import { catalogEntries, executionLogs, pipelineJobPairs, pipelineJobSeen, pipelineJobs, pipelineRunRejects, pipelines } from '@/lib/db/schema'
+import { executionLogs, pipelineJobPairs, pipelineJobSeen, pipelineJobs, pipelineRunRejects, pipelines } from '@/lib/db/schema'
 import { newId } from '@/lib/auth/session'
 import { recordAudit } from '@/lib/audit'
 import { scheduleSchema, type DestinationStep, type PipelineDefinition, type SourceStep } from './definition'
@@ -10,6 +10,8 @@ import { dropDatasetTable, finalizeDatasetReplace, readSourceChunk, softDeleteDa
 import { checkManagers, type Row } from './transforms'
 import { loadRules, loadRunContext } from './context'
 import { notifyRule } from '@/lib/notifications'
+import { emitEvent } from '@/lib/webhooks/deliver'
+import { takeQualitySnapshot } from '@/lib/quality/snapshot'
 import { alertIfNeeded, currentWatermark, datasetTable, loadSource, parseDefinition, summarize, upsertDatasetRecord, watermarkKey, type PipelineState, type RunScope } from './runner'
 import { nextRunAt } from './schedule'
 
@@ -76,7 +78,7 @@ export type EnqueueOutcome = { runId: string; status: 'queued' | 'skipped'; mess
 // ── Enqueue ──────────────────────────────────────────────────────────────────
 
 /** Queues a run of the pipeline's published version. At most one active run per pipeline. */
-export async function enqueueRun(pipelineId: string, scope: RunScope, trigger: 'manual' | 'schedule' | 'replay', opts: { replayIds?: string[] } = {}): Promise<EnqueueOutcome> {
+export async function enqueueRun(pipelineId: string, scope: RunScope, trigger: 'manual' | 'schedule' | 'replay' | 'api' | 'webhook' | 'chain', opts: { replayIds?: string[] } = {}): Promise<EnqueueOutcome> {
   const [pipeline] = await db
     .select()
     .from(pipelines)
@@ -670,25 +672,67 @@ async function finishJob(job: Job, progress: JobProgress, def: PipelineDefinitio
   })
   if (cancelled) return runStatus
   if (def && status !== 'failed') await ruleSideEffects(def, totals, scope, pipeline?.name ?? 'Pipeline', job)
-  if (status !== 'failed') await refreshDependentCaches(scope, job.pipelineId)
+  await runDependents(scope, job.pipelineId, status)
+  if (def && status !== 'failed') await snapshotQuality(scope, def, totals, results)
+  await emitRunEvents(scope.workspaceId, job, runStatus, totals, results, error)
   const message = summarize(result)
   await alertIfNeeded({ def, pipelineName: pipeline?.name ?? 'Pipeline', pipelineId: job.pipelineId, scope, runId: job.id, trigger: job.trigger, result, attempts: progress.attempts.length, message })
   return runStatus
 }
 
-/** Catalog tables cached "after a pipeline finishes" (DV-2): queue their copy once this pipeline succeeded. */
-async function refreshDependentCaches(scope: RunScope, pipelineId: string) {
+/**
+ * Pipeline chaining (SC-5): published, enabled pipelines scheduled "after"
+ * this one run when it finishes with an outcome they accept. Catalog caches
+ * that refresh after a pipeline use the same schedule type.
+ */
+async function runDependents(scope: RunScope, pipelineId: string, status: EngineResult['status']) {
   try {
     const dependents = await db
-      .select({ cachePipelineId: catalogEntries.cachePipelineId })
-      .from(catalogEntries)
-      .where(and(eq(catalogEntries.workspaceId, scope.workspaceId), eq(catalogEntries.refresh, 'after_pipeline'), eq(catalogEntries.refreshAfterPipelineId, pipelineId), eq(catalogEntries.accessMode, 'cached')))
+      .select({ id: pipelines.id, userId: pipelines.userId, schedule: pipelines.schedule, version: pipelines.version })
+      .from(pipelines)
+      .where(and(eq(pipelines.workspaceId, scope.workspaceId), eq(pipelines.enabled, true), sql`${pipelines.schedule}->>'type' = 'after'`, sql`${pipelines.schedule}->>'afterPipelineId' = ${pipelineId}`))
     for (const d of dependents) {
-      if (d.cachePipelineId && d.cachePipelineId !== pipelineId) await enqueueRun(d.cachePipelineId, scope, 'schedule')
+      const schedule = scheduleSchema.safeParse(d.schedule ?? {})
+      if (!schedule.success || !d.version || d.id === pipelineId) continue
+      const on = schedule.data.afterOn
+      const ok = on === 'any' || status === 'success' || (on === 'success_or_partial' && status === 'partial')
+      if (ok) await enqueueRun(d.id, { workspaceId: scope.workspaceId, actorId: d.userId }, 'chain')
     }
   } catch (err) {
-    // Cache refreshes must never fail a finished run.
-    console.error('[catalog] dependent cache refresh failed:', errorInfo(err).message)
+    // Chained runs must never fail a finished run.
+    console.error('[jobs] chained runs failed to queue:', errorInfo(err).message)
+  }
+}
+
+/** Daily quality snapshot of each dataset the run wrote (DQ-4). */
+async function snapshotQuality(scope: RunScope, def: PipelineDefinition, totals: RunTotals, results: DestinationResult[]) {
+  const validity = totals.rowsRead ? Math.max(0, Math.round(((totals.rowsRead - totals.rejectedCount - totals.heldCount - totals.flaggedCount) / totals.rowsRead) * 1000) / 10) : null
+  for (const dest of def.nodes) {
+    if (dest.type !== 'destination' || dest.kind !== 'dataset' || !results.some((r) => r.id === dest.id)) continue
+    const tableName = await datasetTable(scope.workspaceId, dest.datasetName).catch(() => null)
+    if (!tableName) continue
+    const columns = (totals.columnsByDest[dest.id] ?? []).map((c) => c.name)
+    await takeQualitySnapshot({ workspaceId: scope.workspaceId, datasetName: dest.datasetName, tableName, columns, keys: dest.mode === 'upsert' ? dest.keys : [], validity })
+  }
+}
+
+/** Outbound webhooks (API-5): run.succeeded / run.failed, and dataset.updated per dataset written. */
+async function emitRunEvents(workspaceId: string, job: Job, runStatus: string, totals: RunTotals, results: DestinationResult[], error?: string) {
+  const run = {
+    id: job.id,
+    pipeline_id: job.pipelineId,
+    status: runStatus,
+    trigger: job.trigger,
+    rows_read: totals.rowsRead,
+    rows_written: totals.rowsWritten,
+    rows_quarantined: totals.rejectedCount + totals.heldCount,
+    error: error ?? null,
+  }
+  await emitEvent(workspaceId, runStatus === 'failed' ? 'run.failed' : 'run.succeeded', { run })
+  if (runStatus === 'failed') return
+  for (const r of results) {
+    if (r.kind !== 'dataset') continue
+    await emitEvent(workspaceId, 'dataset.updated', { dataset: r.target.replace(/^Dataset /, ''), row_count: r.rowCount ?? null, rows_written: r.written ?? 0, run_id: job.id, pipeline_id: job.pipelineId })
   }
 }
 

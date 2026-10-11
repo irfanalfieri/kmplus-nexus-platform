@@ -1,13 +1,15 @@
 'use server'
 
+import { createHash, randomBytes } from 'node:crypto'
 import { z } from 'zod'
+import { headers } from 'next/headers'
 import { and, desc, eq, inArray, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { newId, requireWorkspace, type WorkspaceContext } from '@/lib/auth/session'
 import { recordAudit, type AuditAction } from '@/lib/audit'
 import { db } from '@/lib/db'
-import { businessRules, dataSources, executionLogs, nexusDatasets, pipelineRunRejects, pipelineVersions, pipelines } from '@/lib/db/schema'
-import { definitionSchema, scheduleSchema, type PipelineDefinition, type PipelineSchedule } from '@/lib/pipelines/definition'
+import { businessRules, dataSources, executionLogs, mappingTemplates, nexusDatasets, pipelineRunRejects, pipelineVersions, pipelines } from '@/lib/db/schema'
+import { definitionSchema, scheduleSchema, type MapStep, type PipelineDefinition, type PipelineSchedule } from '@/lib/pipelines/definition'
 import { assertValidSchedule, nextRunAt } from '@/lib/pipelines/schedule'
 import { currentWatermark, parseDefinition, testRunDefinition } from '@/lib/pipelines/runner'
 import { cancelRun, enqueueRun } from '@/lib/pipelines/jobs'
@@ -56,6 +58,7 @@ async function listPipelinesImpl() {
       nextRunAt: pipelines.nextRunAt,
       state: pipelines.state,
       updatedAt: pipelines.updatedAt,
+      webhookTrigger: sql<boolean>`${pipelines.triggerTokenHash} IS NOT NULL`,
     })
     .from(pipelines)
     .where(eq(pipelines.workspaceId, ctx.workspaceId))
@@ -71,7 +74,7 @@ async function listPipelinesImpl() {
 /** Everything the builder needs to populate pickers (no credentials). */
 async function getBuilderOptionsImpl() {
   const ctx = await requireWorkspace()
-  const [sources, datasets, rules] = await Promise.all([
+  const [sources, datasets, rules, pipelineRows, templates] = await Promise.all([
     db
       .select({ id: dataSources.id, name: dataSources.name, sourceType: dataSources.sourceType, status: dataSources.status, config: dataSources.config })
       .from(dataSources)
@@ -87,6 +90,8 @@ async function getBuilderOptionsImpl() {
       .from(businessRules)
       .where(eq(businessRules.workspaceId, ctx.workspaceId))
       .orderBy(businessRules.name),
+    db.select({ id: pipelines.id, name: pipelines.name, version: pipelines.version }).from(pipelines).where(eq(pipelines.workspaceId, ctx.workspaceId)).orderBy(pipelines.name),
+    db.select().from(mappingTemplates).where(eq(mappingTemplates.workspaceId, ctx.workspaceId)).orderBy(mappingTemplates.name),
   ])
   return {
     dataSources: sources.map((s) => {
@@ -104,6 +109,8 @@ async function getBuilderOptionsImpl() {
       }
     }),
     datasets: datasets.map((d) => ({ ...d, columns: d.columns as { name: string; type: string }[] })),
+    pipelines: pipelineRows.map((p) => ({ id: p.id, name: p.name, published: (p.version ?? 0) > 0 })),
+    mappingTemplates: templates.map((m) => ({ id: m.id, name: m.name, description: m.description ?? '', fields: m.fields as MapStep['fields'], keepUnmapped: m.keepUnmapped })),
     rules: rules.map((r) => {
       const body = (r.body ?? {}) as { then?: { type: string; field?: string }[]; otherwise?: { type: string; field?: string }[] }
       // Fields the rule writes (set_field / calculate), so the editor knows the columns after a rules step.
@@ -205,10 +212,27 @@ function sourceRefs(definition: PipelineDefinition) {
  * draft until published (VC-2): scheduled and manual runs keep executing the
  * published one. Name, description and schedule apply immediately.
  */
+/** "Run after" must name a pipeline of this workspace, and chains can't loop (A after B after A). */
+async function assertChainValid(ctx: WorkspaceContext, selfId: string | null, afterId: string) {
+  const all = await db.select({ id: pipelines.id, name: pipelines.name, schedule: pipelines.schedule }).from(pipelines).where(eq(pipelines.workspaceId, ctx.workspaceId))
+  if (!all.some((p) => p.id === afterId)) throw new Error('The pipeline to run after no longer exists.')
+  if (selfId && afterId === selfId) throw new Error("A pipeline can't run after itself.")
+  const after = new Map(all.map((p) => [p.id, scheduleSchema.safeParse(p.schedule ?? {}).data]))
+  let cur: string | undefined = afterId
+  const seen = new Set<string>()
+  while (cur && !seen.has(cur)) {
+    if (cur === selfId) throw new Error('This would create a loop of pipelines running after each other.')
+    seen.add(cur)
+    const s = after.get(cur)
+    cur = s?.type === 'after' ? s.afterPipelineId : undefined
+  }
+}
+
 async function savePipelineAs(ctx: WorkspaceContext, input: z.input<typeof saveInput>) {
   const data = saveInput.parse(input)
   const definition = parseDefinition(data.definition)
   assertValidSchedule(data.schedule)
+  if (data.schedule.type === 'after') await assertChainValid(ctx, data.id ?? null, data.schedule.afterPipelineId)
   const now = new Date()
 
   let id = data.id
@@ -327,6 +351,33 @@ async function discardDraftImpl(rawId: string) {
   if (!existing.version) throw new Error('This pipeline was never published; delete it instead.')
   await db.update(pipelines).set({ draftConfig: null, draftVersion: null, updatedAt: new Date() }).where(and(eq(pipelines.id, id), eq(pipelines.workspaceId, ctx.workspaceId)))
   await audit(ctx, 'UPDATE', id, { discardedDraft: existing.draftVersion })
+  revalidatePath('/dashboard')
+}
+
+/**
+ * Inbound webhook trigger (SC-1): a secret URL that queues a run when called
+ * (POST /api/hooks/pipelines/<id>/<token>). Only a SHA-256 hash of the token is
+ * stored; the URL is shown once. Creating a new URL invalidates the old one.
+ */
+async function createWebhookTriggerImpl(rawId: string) {
+  const ctx = await requireWorkspace('pipelines:edit')
+  const id = idSchema.parse(rawId)
+  await getOwned(ctx, id)
+  const token = randomBytes(24).toString('base64url')
+  await db.update(pipelines).set({ triggerTokenHash: createHash('sha256').update(token).digest('hex'), updatedAt: new Date() }).where(and(eq(pipelines.id, id), eq(pipelines.workspaceId, ctx.workspaceId)))
+  await audit(ctx, 'UPDATE', id, { webhookTrigger: 'created' })
+  const h = await headers()
+  const origin = process.env.BETTER_AUTH_URL ?? `${h.get('x-forwarded-proto') ?? 'https'}://${h.get('host')}`
+  revalidatePath('/dashboard')
+  return { url: `${origin.replace(/\/+$/, '')}/api/hooks/pipelines/${id}/${token}` }
+}
+
+async function disableWebhookTriggerImpl(rawId: string) {
+  const ctx = await requireWorkspace('pipelines:edit')
+  const id = idSchema.parse(rawId)
+  await getOwned(ctx, id)
+  await db.update(pipelines).set({ triggerTokenHash: null, updatedAt: new Date() }).where(and(eq(pipelines.id, id), eq(pipelines.workspaceId, ctx.workspaceId)))
+  await audit(ctx, 'UPDATE', id, { webhookTrigger: 'disabled' })
   revalidatePath('/dashboard')
 }
 
@@ -545,6 +596,14 @@ export async function resetSyncPosition(...args: Parameters<typeof resetSyncPosi
 
 export async function publishPipeline(...args: Parameters<typeof publishPipelineImpl>) {
   return guard(() => publishPipelineImpl(...args))
+}
+
+export async function createWebhookTrigger(...args: Parameters<typeof createWebhookTriggerImpl>) {
+  return guard(() => createWebhookTriggerImpl(...args))
+}
+
+export async function disableWebhookTrigger(...args: Parameters<typeof disableWebhookTriggerImpl>) {
+  return guard(() => disableWebhookTriggerImpl(...args))
 }
 
 export async function discardDraft(...args: Parameters<typeof discardDraftImpl>) {

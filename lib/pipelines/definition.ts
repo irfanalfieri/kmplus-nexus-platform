@@ -68,7 +68,7 @@ export const exprSchema: z.ZodType<Expr, z.ZodTypeDef, unknown> = z.lazy(() =>
 export const TRANSFORMS = [
   'trim', 'uppercase', 'lowercase', 'titlecase', 'replace', 'regex_replace', 'regex_extract',
   'default_if_empty', 'coalesce', 'prefix', 'suffix', 'substring', 'concat', 'split',
-  'format_date', 'round', 'number_format', 'to_number', 'to_boolean', 'hash', 'conditional',
+  'format_date', 'round', 'number_format', 'to_number', 'to_boolean', 'hash', 'conditional', 'lookup',
 ] as const
 export type TransformName = (typeof TRANSFORMS)[number]
 
@@ -77,7 +77,8 @@ const transformSchema = z.object({
   /**
    * Argument(s): replace → [search, replacement]; regex_extract → [pattern, group]; substring → [start, length];
    * concat → [template with {column} placeholders]; split → [separator, index]; format_date → [pattern, inputFormat, timezone];
-   * number_format → [decimals, locale]; coalesce → [other columns…]; conditional → [operator, value, then, else].
+   * number_format → [decimals, locale]; coalesce → [other columns…]; conditional → [operator, value, then, else];
+   * lookup → [dataset, key column, value column, if not found] (MP-6: e.g. ORG_CODE → org_name from a dataset).
    */
   args: z.array(z.string()).default([]),
 })
@@ -389,7 +390,9 @@ export function referencedRuleIds(def: PipelineDefinition): string[] {
   return [...ids]
 }
 
-export const SCHEDULE_TYPES = ['manual', 'hourly', 'daily', 'weekly', 'monthly', 'cron'] as const
+export const SCHEDULE_TYPES = ['manual', 'hourly', 'daily', 'weekly', 'monthly', 'cron', 'after'] as const
+/** "after": run when another pipeline finishes (SC-5) with one of these outcomes. */
+export const AFTER_OUTCOMES = ['success', 'success_or_partial', 'any'] as const
 export const scheduleSchema = z.object({
   type: z.enum(SCHEDULE_TYPES).default('manual'),
   /** HH:mm (daily/weekly/monthly); minute past the hour for hourly. */
@@ -400,6 +403,8 @@ export const scheduleSchema = z.object({
   dayOfMonth: z.number().int().min(1).max(28).default(1),
   cron: z.string().default(''),
   timezone: z.string().default('Asia/Jakarta'),
+  afterPipelineId: z.string().max(100).default(''),
+  afterOn: z.enum(AFTER_OUTCOMES).default('success'),
 })
 export type PipelineSchedule = z.infer<typeof scheduleSchema>
 
@@ -414,4 +419,19 @@ export function describeDefinitionError(error: z.ZodError) {
   const issue = error.issues[0]
   if (!issue) return 'Invalid pipeline definition.'
   return issue.message
+}
+
+/** Lookup tables a definition reads: "dataset|key|value" (loaded before a run, MP-6). */
+export function lookupRefs(def: PipelineDefinition): { key: string; dataset: string; keyColumn: string; valueColumn: string }[] {
+  const refs = new Map<string, { key: string; dataset: string; keyColumn: string; valueColumn: string }>()
+  for (const n of def.nodes) {
+    if (n.type !== 'map') continue
+    for (const f of n.fields) for (const t of f.transforms) {
+      if (t.fn !== 'lookup') continue
+      const [dataset = '', keyColumn = '', valueColumn = ''] = t.args.map((x) => x.trim())
+      const key = `${dataset}|${keyColumn}|${valueColumn}`
+      refs.set(key, { key, dataset, keyColumn, valueColumn })
+    }
+  }
+  return [...refs.values()]
 }

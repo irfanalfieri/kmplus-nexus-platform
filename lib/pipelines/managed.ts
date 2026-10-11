@@ -18,7 +18,7 @@ import { refreshSchedule, type CacheRefreshOption as CacheRefresh } from '@/lib/
 /** Source table → dataset copy (replace), published as a new version of the managed pipeline. */
 export async function upsertCachePipeline(
   ctx: WorkspaceContext,
-  opts: { pipelineId?: string | null; name: string; dataSourceId: string; table: string; datasetName: string; refresh: CacheRefresh; maxRows: number; enabled: boolean }
+  opts: { pipelineId?: string | null; name: string; dataSourceId: string; table: string; datasetName: string; refresh: CacheRefresh; afterPipelineId?: string | null; maxRows: number; enabled: boolean }
 ): Promise<string> {
   const sourceId = newStepId()
   const destId = newStepId()
@@ -31,7 +31,7 @@ export async function upsertCachePipeline(
     edges: [{ id: newStepId(), from: sourceId, to: destId, branch: '' }],
     settings: { retries: 2, alertOn: 'failure' },
   })
-  const schedule = refreshSchedule(opts.refresh)
+  const schedule = refreshSchedule(opts.refresh, opts.afterPipelineId)
   const scheduled = opts.enabled && schedule.type !== 'manual'
   const now = new Date()
 

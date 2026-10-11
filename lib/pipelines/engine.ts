@@ -1,5 +1,5 @@
 import { OTHERWISE, stepTitle, topoOrder, type DestinationStep, type PipelineDefinition, type PipelineNode, type Severity, type SourceStep } from './definition'
-import { applyMap, matchesFilter, validateRow, type Row } from './transforms'
+import { applyMap, matchesFilter, validateRow, type LookupTables, type Row } from './transforms'
 import { evalGroup } from './conditions'
 import { compareWatermarks, inferColumns, maxWatermark, type OutputColumn, type TypeHints } from './columns'
 import type { BusinessRule } from '@/lib/rules/definition'
@@ -47,6 +47,8 @@ export interface EngineContext {
   seen: Map<string, Set<string>>
   /** Replay of approved rows: approval holds don't apply again. */
   approved?: boolean
+  /** Lookup tables for Map "lookup" transforms (MP-6). */
+  lookupTables?: LookupTables
 }
 
 export function emptyContext(): EngineContext {
@@ -268,7 +270,7 @@ export function transformChunk(
       case 'map': {
         const next: Row[] = []
         for (const r of rows) {
-          const { row, errors } = applyMap(r, node)
+          const { row, errors } = applyMap(r, node, ctx.lookupTables)
           if (errors.length) {
             stat.rejected++
             totals.rejectedCount++

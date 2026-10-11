@@ -20,10 +20,45 @@ export const session = pgTable('session', {
   token: text('token').notNull().unique(),
   ipAddress: text('ipAddress'),
   userAgent: text('userAgent'),
+  /** "sso" when the session came from a workspace identity provider (MFA is the IdP's job); null for password sign-ins. */
+  authMethod: text('authMethod'),
   expiresAt: timestamp('expiresAt', { withTimezone: true }).notNull(),
   createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
 })
+
+// Better Auth SSO plugin (@better-auth/sso). Rows are written by app/actions/sso.ts, not the plugin's public endpoints.
+export const ssoProvider = pgTable('ssoProvider', {
+  id: text('id').primaryKey(),
+  issuer: text('issuer').notNull(),
+  /** JSON (OIDCConfig) as the plugin expects it. */
+  oidcConfig: text('oidcConfig'),
+  samlConfig: text('samlConfig'),
+  userId: text('userId'),
+  providerId: text('providerId').notNull().unique(),
+  organizationId: text('organizationId'),
+  domain: text('domain').notNull(),
+  domainVerified: boolean('domainVerified').default(false),
+})
+
+/** Which workspace an SSO provider signs users into, with what role, and its DNS verification. */
+export const workspaceSso = pgTable('workspace_sso', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  providerId: text('providerId').notNull().unique(),
+  label: text('label').notNull(),
+  /** azure | google | okta | oidc */
+  preset: text('preset').notNull(),
+  domain: text('domain').notNull(),
+  defaultRole: text('defaultRole').notNull().default('viewer'),
+  /** Block password sign-in for emails at this domain. */
+  enforce: boolean('enforce').notNull().default(false),
+  verificationToken: text('verificationToken').notNull(),
+  verifiedAt: timestamp('verifiedAt', { withTimezone: true }),
+  createdBy: text('createdBy').notNull(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('workspace_sso_workspace_idx').on(t.workspaceId)])
 
 export const account = pgTable('account', {
   id: text('id').primaryKey(),
@@ -150,6 +185,8 @@ export const pipelines = pgTable('pipelines', {
   nextRunAt: timestamp('nextRunAt', { withTimezone: true }),
   /** Runtime state, e.g. { watermark: { column, value } } for incremental sync. Not versioned. */
   state: jsonb('state'),
+  /** SHA-256 of the inbound webhook trigger token (SC-1); null = webhook trigger off. */
+  triggerTokenHash: text('triggerTokenHash'),
   createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [index('pipelines_next_run_idx').on(t.nextRunAt), index('pipelines_workspace_idx').on(t.workspaceId)])
@@ -398,8 +435,10 @@ export const apiKeys = pgTable('api_keys', {
   hash: text('hash').notNull().unique(),
   /** Role whose masking and row filters apply to reads (analyst = masked, steward = unmasked). */
   role: text('role').notNull().default('analyst'),
-  /** ["datasets:read", "domains:read"] */
+  /** ["datasets:read", "domains:read", "pipelines:run", "runs:read"] */
   scopes: jsonb('scopes').notNull().default([]),
+  /** Requests per minute (API-6). */
+  rateLimitPerMinute: integer('rateLimitPerMinute').notNull().default(120),
   createdBy: text('createdBy').notNull(),
   createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
   lastUsedAt: timestamp('lastUsedAt', { withTimezone: true }),
@@ -454,3 +493,74 @@ export const auditLogs = pgTable('audit_logs', {
   createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
 })
 
+
+// Fixed-window request counters for the Data API and inbound webhooks (API-6).
+export const apiRateLimits = pgTable('api_rate_limits', {
+  /** "key:<apiKeyId>" or "hook:<pipelineId>" */
+  bucket: text('bucket').notNull(),
+  windowStart: timestamp('windowStart', { withTimezone: true }).notNull(),
+  count: integer('count').notNull().default(0),
+}, (t) => [primaryKey({ columns: [t.bucket, t.windowStart] })])
+
+// Outbound webhooks (API-5): HMAC-signed POSTs on run and dataset events.
+export const webhooks = pgTable('webhooks', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  url: text('url').notNull(),
+  description: text('description'),
+  /** ["run.succeeded", "run.failed", "dataset.updated"] */
+  events: jsonb('events').notNull().default([]),
+  /** Signing secret, encrypted like data source credentials. */
+  secret: jsonb('secret').notNull(),
+  enabled: boolean('enabled').notNull().default(true),
+  createdBy: text('createdBy').notNull(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('webhooks_workspace_idx').on(t.workspaceId)])
+
+export const webhookDeliveries = pgTable('webhook_deliveries', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  webhookId: text('webhookId').notNull(),
+  event: text('event').notNull(),
+  payload: jsonb('payload').notNull(),
+  /** pending | delivered | failed */
+  status: text('status').notNull().default('pending'),
+  attempts: integer('attempts').notNull().default(0),
+  nextAttemptAt: timestamp('nextAttemptAt', { withTimezone: true }).notNull().defaultNow(),
+  responseStatus: integer('responseStatus'),
+  error: text('error'),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  deliveredAt: timestamp('deliveredAt', { withTimezone: true }),
+}, (t) => [index('webhook_deliveries_due_idx').on(t.status, t.nextAttemptAt), index('webhook_deliveries_webhook_idx').on(t.webhookId, t.createdAt)])
+
+// Reusable Map-step field lists (MP-10).
+export const mappingTemplates = pgTable('mapping_templates', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  name: text('name').notNull(),
+  description: text('description'),
+  /** Map step fields: [{ from, to, type, transforms }] */
+  fields: jsonb('fields').notNull(),
+  keepUnmapped: boolean('keepUnmapped').notNull().default(false),
+  createdBy: text('createdBy').notNull(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex('mapping_templates_workspace_name_idx').on(t.workspaceId, t.name)])
+
+// Daily data quality measurements per dataset (DQ-4).
+export const datasetQualitySnapshots = pgTable('dataset_quality_snapshots', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  datasetName: text('datasetName').notNull(),
+  /** YYYY-MM-DD (Asia/Jakarta) */
+  day: text('day').notNull(),
+  rowCount: integer('rowCount').notNull().default(0),
+  /** Percentages 0–100; null when not measurable. */
+  completeness: numeric('completeness'),
+  uniqueness: numeric('uniqueness'),
+  validity: numeric('validity'),
+  freshnessHours: numeric('freshnessHours'),
+  score: numeric('score'),
+  takenAt: timestamp('takenAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex('dataset_quality_day_idx').on(t.workspaceId, t.datasetName, t.day)])

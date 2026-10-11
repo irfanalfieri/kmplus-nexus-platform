@@ -4,12 +4,14 @@ import { z } from 'zod'
 import { and, eq, gte, inArray, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/lib/db'
-import { catalogEntries, dataSources, domainMappings, executionLogs, nexusDatasets, pipelines, user, workspaceMembers } from '@/lib/db/schema'
+import { catalogEntries, dashboards, dataSources, datasetQualitySnapshots, domainMappings, executionLogs, nexusDatasets, pipelines, user, workspaceMembers } from '@/lib/db/schema'
 import { newId, requireWorkspace, type WorkspaceContext } from '@/lib/auth/session'
 import { can } from '@/lib/auth/permissions'
 import { recordAudit } from '@/lib/audit'
 import { catalogInputSchema, datasetKey, parseKey, sourceKey } from '@/lib/catalog/definition'
-import { definitionSchema } from '@/lib/pipelines/definition'
+import { definitionSchema, scheduleSchema } from '@/lib/pipelines/definition'
+import { buildLineage, type LineageGraph } from '@/lib/catalog/lineage'
+import { jakartaDay } from '@/lib/quality/snapshot'
 import { liveQuery, readDatasetSample, type StoredDataSource } from '@/lib/pipelines/io'
 import { pauseManagedPipeline, upsertCachePipeline } from '@/lib/pipelines/managed'
 import { enqueueRun } from '@/lib/pipelines/jobs'
@@ -239,6 +241,7 @@ async function saveCatalogEntryImpl(input: z.input<typeof catalogInputSchema>) {
         table: ref.tableName,
         datasetName: data.alias!,
         refresh: data.refresh,
+        afterPipelineId: data.refreshAfterPipelineId,
         maxRows: 1_000_000,
         enabled: true,
       })
@@ -291,6 +294,50 @@ async function refreshCatalogCacheImpl(rawKey: string) {
   return outcome
 }
 
+// ── Lineage (DC-4) and quality history (DQ-4) ────────────────────────────────
+
+/** Everything connected to a catalog item: sources → pipelines → datasets → dashboards / API entities. Metadata only. */
+async function getLineageImpl(rawKey: string): Promise<LineageGraph> {
+  const ctx = await requireWorkspace()
+  const key = z.string().min(1).max(400).parse(rawKey)
+  const [sources, pipes, dashes, mappings] = await Promise.all([
+    db.select({ id: dataSources.id, name: dataSources.name }).from(dataSources).where(eq(dataSources.workspaceId, ctx.workspaceId)),
+    db.select({ id: pipelines.id, name: pipelines.name, config: pipelines.config, schedule: pipelines.schedule }).from(pipelines).where(eq(pipelines.workspaceId, ctx.workspaceId)),
+    db.select({ id: dashboards.id, name: dashboards.name, widgets: dashboards.widgets }).from(dashboards).where(eq(dashboards.workspaceId, ctx.workspaceId)),
+    db.select({ entity: domainMappings.entity, datasetName: domainMappings.datasetName }).from(domainMappings).where(eq(domainMappings.workspaceId, ctx.workspaceId)),
+  ])
+  return buildLineage(key, {
+    sources,
+    pipelines: pipes.flatMap((p) => {
+      const def = definitionSchema.safeParse(p.config)
+      const schedule = scheduleSchema.safeParse(p.schedule ?? {})
+      return def.success ? [{ id: p.id, name: p.name, definition: def.data, after: schedule.success && schedule.data.type === 'after' ? schedule.data.afterPipelineId : null }] : []
+    }),
+    dashboards: dashes.map((d) => ({ id: d.id, name: d.name, datasets: [...new Set(((d.widgets as { dataset?: string }[]) ?? []).map((w) => w.dataset).filter((x): x is string => Boolean(x)))] })),
+    entities: mappings,
+  })
+}
+
+/** Daily quality snapshots of a dataset for the last 30 days, plus current freshness. */
+async function getQualityHistoryImpl(rawName: string) {
+  const ctx = await requireWorkspace()
+  const name = z.string().trim().min(1).max(63).parse(rawName)
+  const since = jakartaDay(new Date(Date.now() - 30 * 86_400_000))
+  const [rows, [d]] = await Promise.all([
+    db
+      .select()
+      .from(datasetQualitySnapshots)
+      .where(and(eq(datasetQualitySnapshots.workspaceId, ctx.workspaceId), eq(datasetQualitySnapshots.datasetName, name), gte(datasetQualitySnapshots.day, since)))
+      .orderBy(datasetQualitySnapshots.day),
+    db.select({ lastLoadedAt: nexusDatasets.lastLoadedAt }).from(nexusDatasets).where(and(eq(nexusDatasets.workspaceId, ctx.workspaceId), eq(nexusDatasets.name, name))).limit(1),
+  ])
+  const num = (v: string | null) => (v === null ? null : Number(v))
+  return {
+    days: rows.map((r) => ({ day: r.day, rowCount: r.rowCount, completeness: num(r.completeness), uniqueness: num(r.uniqueness), validity: num(r.validity), score: num(r.score) })),
+    freshnessHours: d?.lastLoadedAt ? Math.round(((Date.now() - new Date(d.lastLoadedAt).getTime()) / 3_600_000) * 10) / 10 : null,
+  }
+}
+
 // ── Domain mappings (API-3) ──────────────────────────────────────────────────
 
 const mappingInput = z.object({
@@ -341,6 +388,14 @@ export async function saveCatalogEntry(...args: Parameters<typeof saveCatalogEnt
 
 export async function refreshCatalogCache(...args: Parameters<typeof refreshCatalogCacheImpl>) {
   return guard(() => refreshCatalogCacheImpl(...args))
+}
+
+export async function getLineage(...args: Parameters<typeof getLineageImpl>) {
+  return guard(() => getLineageImpl(...args))
+}
+
+export async function getQualityHistory(...args: Parameters<typeof getQualityHistoryImpl>) {
+  return guard(() => getQualityHistoryImpl(...args))
 }
 
 export async function saveDomainMapping(...args: Parameters<typeof saveDomainMappingImpl>) {

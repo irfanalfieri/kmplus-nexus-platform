@@ -20,6 +20,8 @@ import { useCan, useWorkspace } from '@/components/workspace/workspace-context'
 import { AuditLog } from '@/components/workspace/audit-log'
 import { AccountSecurity } from '@/components/workspace/account-security'
 import { ApiKeys } from '@/components/workspace/api-keys'
+import { SsoSettings } from '@/components/workspace/sso-settings'
+import { Webhooks } from '@/components/workspace/webhooks'
 
 type Member = Awaited<ReturnType<typeof listMembers>>[number]
 type Invite = Awaited<ReturnType<typeof listInvites>>[number]
@@ -295,7 +297,11 @@ export default function WorkspaceSettingsLayer() {
         </section>
       )}
 
+      {isAdmin && <SsoSettings />}
+
       {canApi && <ApiKeys />}
+
+      {canApi && <Webhooks />}
 
       {canAudit && <AuditLog />}
 

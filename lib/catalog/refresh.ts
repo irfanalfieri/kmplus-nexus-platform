@@ -14,8 +14,11 @@ export const CACHE_REFRESH_LABELS: Record<CacheRefreshOption, string> = {
 }
 
 /** The managed pipeline's schedule for a refresh option. */
-export function refreshSchedule(refresh: CacheRefreshOption): PipelineSchedule {
+export function refreshSchedule(refresh: CacheRefreshOption, afterPipelineId?: string | null): PipelineSchedule {
   switch (refresh) {
+    case 'after_pipeline':
+      // A copy is worth refreshing even when the upstream run quarantined some rows.
+      return afterPipelineId ? scheduleSchema.parse({ type: 'after', afterPipelineId, afterOn: 'success_or_partial' }) : scheduleSchema.parse({ type: 'manual' })
     case '5m':
       return scheduleSchema.parse({ type: 'cron', cron: '*/5 * * * *' })
     case '15m':

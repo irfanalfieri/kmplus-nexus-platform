@@ -8,6 +8,7 @@ import { deletePipeline, discardDraft, getBuilderOptions, publishPipeline, getDa
 import { DEFAULT_SCHEDULE, DEFAULT_SETTINGS, definitionSchema, scheduleSchema, stepTitle, topoOrder, type PipelineDefinition } from '@/lib/pipelines/definition'
 import { describeSchedule } from '@/lib/pipelines/schedule'
 import PipelineEditor, { blankPipeline, SampleTable, type EditablePipeline } from '@/components/pipelines/pipeline-editor'
+import TemplatePicker from '@/components/pipelines/template-picker'
 import RunHistory, { formatWhen, statusBadge } from '@/components/pipelines/run-history'
 import type { BuilderOptions } from '@/components/pipelines/step-editors'
 import { NOTIFICATIONS_CHANGED } from '@/components/dashboard/notification-bell'
@@ -31,6 +32,7 @@ function toEditable(p: PipelineRow): EditablePipeline {
     syncPosition: p.syncPosition,
     publishedVersion: p.version ?? 0,
     draftVersion: p.draftVersion,
+    webhookTrigger: p.webhookTrigger,
   }
 }
 
@@ -47,11 +49,12 @@ function summarize(def: PipelineDefinition, sourceName: (id: string) => string) 
 
 export default function PipelineDesignerLayer() {
   const [items, setItems] = useState<PipelineRow[]>([])
-  const [options, setOptions] = useState<BuilderOptions>({ dataSources: [], datasets: [], rules: [] })
+  const [options, setOptions] = useState<BuilderOptions>({ dataSources: [], datasets: [], rules: [], pipelines: [], mappingTemplates: [] })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState<{ id: string; kind: 'ok' | 'warn' | 'err'; text: string } | null>(null)
   const [editing, setEditing] = useState<EditablePipeline | null>(null)
+  const [picking, setPicking] = useState(false)
   const [historyFor, setHistoryFor] = useState<PipelineRow | null>(null)
   const [running, setRunning] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
@@ -196,6 +199,16 @@ export default function PipelineDesignerLayer() {
           }}
         />
       )}
+      {picking && (
+        <TemplatePicker
+          options={options}
+          onClose={() => setPicking(false)}
+          onPick={(p) => {
+            setPicking(false)
+            setEditing(p)
+          }}
+        />
+      )}
       {historyFor && (
         <RunHistory
           pipelineId={historyFor.id}
@@ -217,7 +230,7 @@ export default function PipelineDesignerLayer() {
             <p className="mt-1 text-muted-foreground">Read from a data source, filter, map, validate and route rows through business rules, then write to one or more Nexus datasets or databases. Edits are saved as drafts; runs use the published version.</p>
           </div>
           {canEdit && (
-            <Button onClick={() => setEditing(blankPipeline())} disabled={loading}>
+            <Button onClick={() => setPicking(true)} disabled={loading}>
               <Plus className="mr-2 h-4 w-4" /> New pipeline
             </Button>
           )}
@@ -255,7 +268,7 @@ export default function PipelineDesignerLayer() {
                 : 'Connect a data source first (Data Sources tab), then create a pipeline that reads from it.'}
             </p>
             {canEdit ? (
-              <Button className="mt-4" onClick={() => setEditing(blankPipeline())}>
+              <Button className="mt-4" onClick={() => setPicking(true)}>
                 <Plus className="mr-2 h-4 w-4" /> New pipeline
               </Button>
             ) : (
@@ -291,6 +304,8 @@ export default function PipelineDesignerLayer() {
                     )}
                     <p className="mt-1 text-xs text-muted-foreground">
                       {describeSchedule(schedule)}
+                      {schedule.type === 'after' && ` (${items.find((x) => x.id === schedule.afterPipelineId)?.name ?? 'missing pipeline'})`}
+                      {p.webhookTrigger && ' · webhook trigger on'}
                       {schedule.type !== 'manual' && (p.enabled ? ` · next ${formatWhen(p.nextRunAt)}` : ' · paused')} · last run {formatWhen(p.lastRunAt)}
                     </p>
                   </div>

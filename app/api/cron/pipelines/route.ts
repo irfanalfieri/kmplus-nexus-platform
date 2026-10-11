@@ -6,13 +6,17 @@ import { scheduleSchema } from '@/lib/pipelines/definition'
 import { nextRunAt } from '@/lib/pipelines/schedule'
 import { enqueueRun, processJobs, WORKER_BUDGET_MS } from '@/lib/pipelines/jobs'
 import { applyDueRetention } from '@/lib/governance/retention'
+import { deliverDueWebhooks } from '@/lib/webhooks/deliver'
+import { pruneRateLimits } from '@/lib/api/rate-limit'
+import { upgradeCredentialEnvelopes } from '@/lib/security/upgrade'
 
 /**
  * Scheduler tick. Called every minute by Supabase pg_cron (see
  * drizzle/0011_scheduler_jobs.sql) with `Authorization: Bearer $CRON_SECRET`.
  * Queues pipelines whose nextRunAt is due, then works through the job queue
  * (new runs, retries, and runs resuming from a checkpoint) within the budget,
- * and enforces dataset retention policies (hourly per dataset).
+ * enforces dataset retention policies (hourly per dataset), retries webhook
+ * deliveries, prunes rate-limit counters and re-seals old credential envelopes.
  */
 export const maxDuration = 300
 export const dynamic = 'force-dynamic'
@@ -59,8 +63,12 @@ async function tick(request: Request) {
   }
 
   await applyDueRetention()
+  // Housekeeping never blocks the queue.
+  const webhooks = await deliverDueWebhooks().catch((err) => (console.error('[cron] webhooks:', err instanceof Error ? err.message : err), 0))
+  await pruneRateLimits().catch(() => undefined)
+  const credentials = await upgradeCredentialEnvelopes().catch((err) => (console.error('[cron] credentials:', err instanceof Error ? err.message : err), { upgraded: 0, failed: 0 }))
   const processed = await processJobs({ budgetMs: WORKER_BUDGET_MS })
-  return Response.json({ due: due.length, queued, processed })
+  return Response.json({ due: due.length, queued, processed, webhooks, credentials })
 }
 
 export const GET = tick
