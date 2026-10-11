@@ -9,6 +9,7 @@ import * as salesforce from './drivers/salesforce'
 import * as snowflake from './drivers/snowflake'
 import * as talenta from './drivers/talenta'
 import * as ldap from './drivers/ldap'
+import * as file from './drivers/file'
 
 export async function testConnectorConnection(
   slug: ConnectorSlug,
@@ -35,6 +36,8 @@ export async function testConnectorConnection(
       return talenta.testTalentaConnection(credentials)
     case 'ldap':
       return ldap.testLdapConnection(credentials)
+    case 'file':
+      return file.testFileConnection(credentials)
     default:
       return { ok: false, message: `Unsupported connector: ${slug}` }
   }
@@ -65,6 +68,8 @@ export async function scanConnectorSchema(
       return talenta.scanTalentaSchema(credentials)
     case 'ldap':
       return ldap.scanLdapSchema(credentials)
+    case 'file':
+      return file.scanFileSchema(credentials)
     default:
       throw new Error(`Unsupported connector: ${slug}`)
   }
@@ -97,6 +102,8 @@ export async function sampleConnectorTable(
       return talenta.sampleTalentaObject(credentials, tableName, limit)
     case 'ldap':
       return ldap.sampleLdapObject(credentials, tableName, limit)
+    case 'file':
+      return file.sampleFileTable(credentials, tableName, limit)
     default:
       throw new Error(`Unsupported connector: ${slug}`)
   }

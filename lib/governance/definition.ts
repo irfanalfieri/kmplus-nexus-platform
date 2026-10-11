@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { rowFiltersSchema } from './row-filters'
 
 /**
  * Dataset policies (PRD Layer 13, GV-5 / GV-10). Client-safe: the Governance
@@ -37,6 +38,8 @@ export const policyInputSchema = z.object({
   columns: z.record(z.string().max(128), columnPolicySchema).refine((c) => Object.keys(c).length <= 500, 'Too many columns'),
   /** Keep rows loaded in the last N days (1 day … 10 years); null keeps everything. */
   retentionDays: z.number().int().min(1).max(3650).nullable(),
+  /** Row-level access per role (DB-6). */
+  rowFilters: rowFiltersSchema.default([]),
 })
 export type PolicyInput = z.infer<typeof policyInputSchema>
 

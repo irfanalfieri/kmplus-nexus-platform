@@ -39,6 +39,14 @@ const MATRIX = {
   'data:erase': ['admin'],
   /** Create, edit and delete Analytics dashboards. */
   'dashboards:edit': ['admin', 'steward', 'analyst'],
+  /** Create, edit and delete business rules. */
+  'rules:edit': ['admin', 'steward'],
+  /** Fix, approve, dismiss and replay quarantined rows. */
+  'quality:manage': ['admin', 'steward'],
+  /** Edit catalog entries: owners, tags, descriptions, live/cached access. */
+  'catalog:edit': ['admin', 'steward'],
+  /** Create and revoke Data API keys. */
+  'api:manage': ['admin'],
 } as const satisfies Record<string, readonly Role[]>
 
 export type Permission = keyof typeof MATRIX

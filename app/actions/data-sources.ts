@@ -70,7 +70,9 @@ async function createDataSourceImpl(input: z.input<typeof createInput>) {
   await assertConnectorInstalled(data.sourceType)
 
   const id = newId('src')
-  const hasSchemaScan = Boolean(data.config.schemaScan)
+  // File sources store uploads in nexus_raw under their own storage key (DS-9); they have no credentials.
+  const isFile = data.sourceType === 'file'
+  const hasSchemaScan = Boolean(data.config.schemaScan) || isFile
   await db.insert(dataSources).values({
     id,
     userId: ctx.userId,
@@ -79,7 +81,7 @@ async function createDataSourceImpl(input: z.input<typeof createInput>) {
     type: data.type,
     sourceType: data.sourceType,
     config: data.config,
-    credentials: encryptCredentials(id, data.credentials),
+    credentials: encryptCredentials(id, isFile ? { storageKey: id } : data.credentials, ctx.workspaceId),
     status: hasSchemaScan ? 'connected' : 'disconnected',
     lastConnected: hasSchemaScan ? new Date() : undefined,
   })
@@ -148,6 +150,8 @@ async function getEditableCredentialsImpl(rawId: string) {
  */
 async function updateDataSourceCredentialsImpl(rawId: string, rawValues: Record<string, unknown>) {
   const ctx = await requireWorkspace('sources:manage')
+  const target = await getOwned(ctx, idSchema.parse(rawId))
+  if (target.sourceType === 'file') throw new Error('File sources have no credentials. Upload files instead.')
   const source = await getOwned(ctx, idSchema.parse(rawId))
   const values = asStrings(credentialValues.parse(rawValues))
   const stored = asStrings(decryptCredentials(source.id, source.credentials))
@@ -194,7 +198,7 @@ async function testAndSave(ctx: WorkspaceContext, source: typeof dataSources.$in
   await db
     .update(dataSources)
     .set({
-      credentials: encryptCredentials(source.id, merged),
+      credentials: encryptCredentials(source.id, merged, ctx.workspaceId),
       config: { ...(source.config as Record<string, unknown>), schemaScan: scan },
       status: 'connected',
       lastConnected: new Date(),
@@ -236,12 +240,20 @@ async function deleteDataSourceImpl(rawId: string) {
   const ctx = await requireWorkspace('sources:manage')
   const id = idSchema.parse(rawId)
   const used = await db
-    .select({ name: pipelines.name, sourceId: pipelines.sourceId, destinationId: pipelines.destinationId })
+    .select({ name: pipelines.name, config: pipelines.config, draftConfig: pipelines.draftConfig })
     .from(pipelines)
     .where(eq(pipelines.workspaceId, ctx.workspaceId))
-  const dependents = used.filter((p) => p.sourceId === id || p.destinationId === id).map((p) => p.name)
+  // Any node of the published or draft definition (sources and every destination).
+  const refers = (cfg: unknown) => JSON.stringify(cfg ?? {}).includes(`"dataSourceId":${JSON.stringify(id)}`)
+  const dependents = used.filter((p) => refers(p.config) || refers(p.draftConfig)).map((p) => p.name)
   if (dependents.length) {
     throw new Error(`Used by pipeline${dependents.length > 1 ? 's' : ''} ${dependents.map((n) => `"${n}"`).join(', ')}. Change or delete ${dependents.length > 1 ? 'them' : 'it'} first.`)
+  }
+  const source = await getOwned(ctx, id)
+  if (source.sourceType === 'file') {
+    const { dropAllFileTables } = await import('@/lib/connectors/drivers/file')
+    const storageKey = String(decryptCredentials(source.id, source.credentials).storageKey ?? '')
+    if (storageKey) await dropAllFileTables(storageKey)
   }
   await db.delete(dataSources).where(and(eq(dataSources.id, id), eq(dataSources.workspaceId, ctx.workspaceId)))
   await audit(ctx, 'DELETE', id)

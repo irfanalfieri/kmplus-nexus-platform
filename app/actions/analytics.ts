@@ -10,7 +10,7 @@ import { can } from '@/lib/auth/permissions'
 import { recordAudit } from '@/lib/audit'
 import { dashboardInputSchema, widgetSchema, type Widget, type WidgetResult } from '@/lib/analytics/definition'
 import { buildWidgetSql, isTimeSeries, WidgetQueryError, type DatasetColumn } from '@/lib/analytics/query'
-import { masksFor } from '@/lib/governance/masking'
+import { accessFor, masksFor } from '@/lib/governance/masking'
 import { guard } from '@/lib/server-action'
 
 const idSchema = z.string().trim().min(1).max(100)
@@ -96,14 +96,14 @@ async function deleteDashboardImpl(rawId: string) {
 
 async function runWidget(ctx: WorkspaceContext, widget: Widget): Promise<WidgetResult> {
   const [dataset] = await db
-    .select({ tableName: nexusDatasets.tableName, columns: nexusDatasets.columns })
+    .select({ tableName: nexusDatasets.tableName, columns: nexusDatasets.columns, lastLoadedAt: nexusDatasets.lastLoadedAt })
     .from(nexusDatasets)
     .where(and(eq(nexusDatasets.workspaceId, ctx.workspaceId), eq(nexusDatasets.name, widget.dataset)))
     .limit(1)
   if (!dataset) throw new WidgetQueryError(`Dataset ${widget.dataset} no longer exists.`)
-  const blockedColumns = Object.keys(await masksFor(ctx.workspaceId, widget.dataset, ctx.role))
+  const access = await accessFor(ctx.workspaceId, widget.dataset, ctx.role)
   const table = `"nexus_data"."${dataset.tableName.replace(/"/g, '""')}"`
-  const { text, params } = buildWidgetSql(widget, table, (dataset.columns as DatasetColumn[]) ?? [], { blockedColumns })
+  const { text, params } = buildWidgetSql(widget, table, (dataset.columns as DatasetColumn[]) ?? [], { blockedColumns: Object.keys(access.masks), rowFilters: access.rowFilters })
   const client = await pool.connect()
   try {
     await client.query('BEGIN READ ONLY')
@@ -114,7 +114,7 @@ async function runWidget(ctx: WorkspaceContext, widget: Widget): Promise<WidgetR
     const rows = res.rows.map((r) => ({ label: r.label ?? null, value: r.value === null ? null : Number(r.value) }))
     const truncated = Boolean(widget.dimension) && rows.length > widget.limit
     // Time series drop the oldest extra period; rankings drop the last.
-    return { rows: !truncated ? rows : isTimeSeries(widget) ? rows.slice(rows.length - widget.limit) : rows.slice(0, widget.limit), truncated }
+    return { rows: !truncated ? rows : isTimeSeries(widget) ? rows.slice(rows.length - widget.limit) : rows.slice(0, widget.limit), truncated, lastLoadedAt: dataset.lastLoadedAt }
   } catch (err) {
     await client.query('ROLLBACK').catch(() => undefined)
     if (err instanceof WidgetQueryError) throw err

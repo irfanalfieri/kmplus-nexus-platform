@@ -19,7 +19,7 @@ export type AuditAction =
   | 'VIEW_DATA' | 'TEST_RUN'
   | 'LOGIN' | 'ENABLE_2FA' | 'DISABLE_2FA' | 'REGENERATE_BACKUP_CODES' | 'RESET_2FA'
   | 'CANCEL' | 'RETRY'
-  | 'UPDATE_POLICY'
+  | 'UPDATE_POLICY' | 'PUBLISH' | 'REPLAY' | 'APPROVE' | 'DISMISS' | 'UPLOAD' | 'REVOKE' | 'API_READ'
 
 export interface AuditEntry {
   action: AuditAction

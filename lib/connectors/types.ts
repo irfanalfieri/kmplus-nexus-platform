@@ -9,6 +9,7 @@ export type ConnectorSlug =
   | 'supabase'
   | 'talenta'
   | 'ldap'
+  | 'file'
 
 export interface CredentialField {
   key: string

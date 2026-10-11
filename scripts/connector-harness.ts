@@ -151,7 +151,20 @@ const cases: Case[] = [
       }
     : { slug: 'snowflake', label: 'Snowflake', skip: 'needs a Snowflake account; set SNOWFLAKE_TEST_ACCOUNT/USER/PASSWORD/WAREHOUSE/DATABASE' },
   { slug: 'salesforce', label: 'Salesforce', skip: 'OAuth login needs a browser; test from Data Sources → Add Source with a Salesforce org' },
+  env.DATABASE_URL
+    ? { slug: 'file', label: 'File upload (temporary nexus_raw table)', setup: startFileFixture, sampleTable: 'employees' }
+    : { slug: 'file', label: 'File upload', skip: 'run with --env-file=.env.local (uses the Nexus database)' },
 ]
+
+// ── File upload fixture: one uploaded "file" in nexus_raw, removed afterwards ──
+const FILE_KEY = `harness-${randomBytes(4).toString('hex')}`
+async function startFileFixture() {
+  const { writeUploadPart, dropAllFileTables } = await import('@/lib/connectors/drivers/file')
+  const rows = Array.from({ length: 12 }, (_, i) => [`E${100 + i}`, `Employee ${i}`, i % 4 ? 'Active' : 'Terminated'])
+  await writeUploadPart({ storageKey: FILE_KEY, table: 'employees', columns: ['employee_code', 'full_name', 'status'], rows: rows.slice(0, 5), part: 0, final: false, mode: 'replace' })
+  await writeUploadPart({ storageKey: FILE_KEY, table: 'employees', columns: ['employee_code', 'full_name', 'status'], rows: rows.slice(5), part: 1, final: true, mode: 'replace' })
+  return () => dropAllFileTables(FILE_KEY)
+}
 
 async function runCase(c: Case): Promise<Outcome> {
   const started = Date.now()
@@ -163,6 +176,7 @@ async function runCase(c: Case): Promise<Outcome> {
     const credentials =
       c.slug === 'talenta' ? { clientId: TALENTA_ID, clientSecret: TALENTA_SECRET, baseUrl: talentaBase, pageSize: '3' }
       : c.slug === 'postgres' && !c.credentials ? { connectionString: postgresFixtureUrl, schema: fixtureSchema }
+      : c.slug === 'file' ? { storageKey: FILE_KEY }
       : c.credentials!
     const test = await testConnectorConnection(c.slug, credentials)
     if (!test.ok && c.publicEndpoint && NETWORK_ERROR.test(test.message)) {

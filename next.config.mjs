@@ -4,6 +4,10 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  experimental: {
+    // File uploads (DS-9) send parsed rows in parts of up to ~2 MB.
+    serverActions: { bodySizeLimit: '3mb' },
+  },
 }
 
 export default nextConfig

@@ -19,6 +19,7 @@ import { ROLE_INFO, ROLES, type Role } from '@/lib/auth/permissions'
 import { useCan, useWorkspace } from '@/components/workspace/workspace-context'
 import { AuditLog } from '@/components/workspace/audit-log'
 import { AccountSecurity } from '@/components/workspace/account-security'
+import { ApiKeys } from '@/components/workspace/api-keys'
 
 type Member = Awaited<ReturnType<typeof listMembers>>[number]
 type Invite = Awaited<ReturnType<typeof listInvites>>[number]
@@ -30,6 +31,7 @@ export default function WorkspaceSettingsLayer() {
   const { workspace, role } = useWorkspace()
   const isAdmin = useCan('workspace:manage')
   const canAudit = useCan('audit:view')
+  const canApi = useCan('api:manage')
   const [members, setMembers] = useState<Member[]>([])
   const [invites, setInvites] = useState<Invite[]>([])
   const [name, setName] = useState(workspace.name)
@@ -292,6 +294,8 @@ export default function WorkspaceSettingsLayer() {
           )}
         </section>
       )}
+
+      {canApi && <ApiKeys />}
 
       {canAudit && <AuditLog />}
 

@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Plus, Trash2, CheckCircle2, AlertCircle, X, Save, Edit, Eye, Lock, KeyRound } from 'lucide-react'
+import { Plus, Trash2, CheckCircle2, AlertCircle, X, Save, Edit, Eye, Lock, KeyRound, Upload } from 'lucide-react'
 import EditCredentialsDialog from '@/components/connectors/edit-credentials-dialog'
 import { useCan } from '@/components/workspace/workspace-context'
 import { Button } from '@/components/ui/button'
@@ -16,6 +16,8 @@ import {
 } from '@/components/ui/select'
 import ConnectorCredentialForm from '@/components/connectors/connector-credential-form'
 import SchemaExplorerModal from '@/components/modals/schema-explorer-modal'
+import FileUploadDialog from '@/components/data-sources/file-upload-dialog'
+import type { UploadedFile } from '@/app/actions/files'
 import { CONNECTOR_CATALOG, getConnectorDefinition } from '@/lib/connectors/catalog'
 import { REST_DEFAULTS, validateRestCredentials } from '@/lib/connectors/rest-client'
 import { validateSalesforceCredentials } from '@/lib/connectors/salesforce/oauth'
@@ -101,6 +103,7 @@ export default function DataSourcesLayer() {
   const canManage = useCan('sources:manage')
   const canPreview = useCan('data:preview')
   const [explorerOpen, setExplorerOpen] = useState(false)
+  const [uploadFor, setUploadFor] = useState<string | null>(null)
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null)
   const [restPreview, setRestPreview] = useState<RestRequestPreview | null>(null)
   const [restSending, setRestSending] = useState(false)
@@ -276,6 +279,18 @@ export default function DataSourcesLayer() {
           }}
         />
       )}
+      {uploadFor && (() => {
+        const src = sources.find((x) => x.id === uploadFor)
+        return src ? (
+          <FileUploadDialog
+            sourceId={src.id}
+            sourceName={src.name}
+            files={((src.config?.files ?? []) as UploadedFile[])}
+            onClose={() => setUploadFor(null)}
+            onDone={() => void loadAll()}
+          />
+        ) : null
+      })()}
       <SchemaExplorerModal
         isOpen={explorerOpen}
         sourceId={selectedSourceId || ''}
@@ -485,9 +500,15 @@ export default function DataSourcesLayer() {
                       <Button size="sm" variant="outline" disabled={retestingId === source.id} onClick={() => void handleRetest(source.id)}>
                         {retestingId === source.id ? 'Testing…' : 'Re-test'}
                       </Button>
-                      <Button size="sm" variant="outline" onClick={() => setCredentialsFor({ id: source.id, name: source.name })}>
-                        <KeyRound className="mr-1 h-4 w-4" /> Credentials
-                      </Button>
+                      {source.sourceType === 'file' ? (
+                        <Button size="sm" variant="outline" onClick={() => setUploadFor(source.id)}>
+                          <Upload className="mr-1 h-4 w-4" /> Upload file
+                        </Button>
+                      ) : (
+                        <Button size="sm" variant="outline" onClick={() => setCredentialsFor({ id: source.id, name: source.name })}>
+                          <KeyRound className="mr-1 h-4 w-4" /> Credentials
+                        </Button>
+                      )}
                     </>
                   )}
                   {source.status === 'connected' ? (

@@ -1,13 +1,12 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Database, Edit, History, Loader2, Play, Plus, RotateCcw, Trash2, Workflow } from 'lucide-react'
+import { Database, Edit, History, Loader2, Play, Plus, Rocket, RotateCcw, Trash2, Undo2, Workflow } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { deletePipeline, getBuilderOptions, getDatasetPreview, getRunStatus, listPipelines, resetSyncPosition, runPipelineNow, setPipelineEnabled } from '@/lib/actions/pipelines'
-import { DEFAULT_SCHEDULE, DEFAULT_SETTINGS, definitionSchema, scheduleSchema, type PipelineStep } from '@/lib/pipelines/definition'
+import { deletePipeline, discardDraft, getBuilderOptions, publishPipeline, getDatasetPreview, getRunStatus, listPipelines, resetSyncPosition, runPipelineNow, setPipelineEnabled } from '@/lib/actions/pipelines'
+import { DEFAULT_SCHEDULE, DEFAULT_SETTINGS, definitionSchema, scheduleSchema, stepTitle, topoOrder, type PipelineDefinition } from '@/lib/pipelines/definition'
 import { describeSchedule } from '@/lib/pipelines/schedule'
-import { stepLabel } from '@/lib/pipelines/engine'
 import PipelineEditor, { blankPipeline, SampleTable, type EditablePipeline } from '@/components/pipelines/pipeline-editor'
 import RunHistory, { formatWhen, statusBadge } from '@/components/pipelines/run-history'
 import type { BuilderOptions } from '@/components/pipelines/step-editors'
@@ -17,22 +16,38 @@ import { useCan } from '@/components/workspace/workspace-context'
 type PipelineRow = Awaited<ReturnType<typeof listPipelines>>[number]
 
 function toEditable(p: PipelineRow): EditablePipeline {
-  const def = definitionSchema.safeParse(p.config)
+  // Edit the unpublished draft when there is one, else the published definition.
+  const def = definitionSchema.safeParse(p.draftConfig ?? p.config)
+  const blank = blankPipeline()
   return {
     id: p.id,
     name: p.name,
     description: p.description ?? '',
     enabled: p.enabled ?? false,
     schedule: scheduleSchema.safeParse(p.schedule ?? {}).data ?? DEFAULT_SCHEDULE,
-    steps: def.success ? def.data.steps : blankPipeline().steps,
+    nodes: def.success ? def.data.nodes : blank.nodes,
+    edges: def.success ? def.data.edges : blank.edges,
     settings: def.success ? def.data.settings : DEFAULT_SETTINGS,
     syncPosition: p.syncPosition,
+    publishedVersion: p.version ?? 0,
+    draftVersion: p.draftVersion,
   }
+}
+
+/** One-line description of a graph: source → steps → destinations. */
+function summarize(def: PipelineDefinition, sourceName: (id: string) => string) {
+  const order = topoOrder(def.nodes, def.edges) ?? def.nodes
+  const src = order.find((n) => n.type === 'source')
+  const middle = order.filter((n) => n.type !== 'source' && n.type !== 'destination')
+  const dests = order.filter((n) => n.type === 'destination')
+  const from = src?.type === 'source' ? `${sourceName(src.dataSourceId)} · ${src.table}` : 'No source'
+  const to = dests.map((d) => (d.type === 'destination' ? (d.kind === 'dataset' ? `dataset ${d.datasetName}` : `${sourceName(d.dataSourceId)} · ${d.table}`) : '')).join(', ') || 'No destination'
+  return `${from} → ${middle.map(stepTitle).join(' → ') || 'no transforms'} → ${to}`
 }
 
 export default function PipelineDesignerLayer() {
   const [items, setItems] = useState<PipelineRow[]>([])
-  const [options, setOptions] = useState<BuilderOptions>({ dataSources: [], datasets: [] })
+  const [options, setOptions] = useState<BuilderOptions>({ dataSources: [], datasets: [], rules: [] })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState<{ id: string; kind: 'ok' | 'warn' | 'err'; text: string } | null>(null)
@@ -139,6 +154,26 @@ export default function PipelineDesignerLayer() {
     }
   }
 
+  const publish = async (p: PipelineRow) => {
+    try {
+      const { version } = await publishPipeline(p.id)
+      setNotice({ id: p.id, kind: 'ok', text: `Published v${version}. Scheduled and manual runs now use it.` })
+      await load()
+    } catch (err) {
+      setNotice({ id: p.id, kind: 'err', text: err instanceof Error ? err.message : 'Publish failed' })
+    }
+  }
+
+  const discard = async (p: PipelineRow) => {
+    try {
+      await discardDraft(p.id)
+      setNotice({ id: p.id, kind: 'ok', text: 'Draft discarded. The draft stays in History.' })
+      await load()
+    } catch (err) {
+      setNotice({ id: p.id, kind: 'err', text: err instanceof Error ? err.message : 'Discard failed' })
+    }
+  }
+
   const openPreview = async (name: string) => {
     try {
       const res = await getDatasetPreview(name)
@@ -165,7 +200,7 @@ export default function PipelineDesignerLayer() {
         <RunHistory
           pipelineId={historyFor.id}
           pipelineName={historyFor.name}
-          currentVersion={items.find((p) => p.id === historyFor.id)?.version ?? historyFor.version ?? 1}
+          currentVersion={items.find((p) => p.id === historyFor.id)?.version ?? historyFor.version ?? 0}
           onClose={() => setHistoryFor(null)}
           onRestored={load}
         />
@@ -179,7 +214,7 @@ export default function PipelineDesignerLayer() {
               <Badge variant="outline">Layer 4</Badge>
             </div>
             <h2 className="text-2xl font-bold">Pipelines</h2>
-            <p className="mt-1 text-muted-foreground">Read from a data source, filter, map and validate rows, then write to a Nexus dataset or back into a database.</p>
+            <p className="mt-1 text-muted-foreground">Read from a data source, filter, map, validate and route rows through business rules, then write to one or more Nexus datasets or databases. Edits are saved as drafts; runs use the published version.</p>
           </div>
           {canEdit && (
             <Button onClick={() => setEditing(blankPipeline())} disabled={loading}>
@@ -230,9 +265,9 @@ export default function PipelineDesignerLayer() {
         ) : (
           items.map((p) => {
             const def = definitionSchema.safeParse(p.config)
-            const steps: PipelineStep[] = def.success ? def.data.steps : []
-            const src = steps[0]?.type === 'source' ? steps[0] : null
-            const dst = steps[steps.length - 1]?.type === 'destination' ? steps[steps.length - 1] : null
+            const srcNode = def.success ? def.data.nodes.find((n) => n.type === 'source') : undefined
+            const src = srcNode?.type === 'source' ? srcNode : null
+            const published = (p.version ?? 0) > 0
             const schedule = scheduleSchema.safeParse(p.schedule ?? {}).data ?? DEFAULT_SCHEDULE
             return (
               <div key={p.id} className="rounded-xl border border-border bg-card p-4">
@@ -241,13 +276,12 @@ export default function PipelineDesignerLayer() {
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-semibold">{p.name}</span>
                       {statusBadge(p.lastRunStatus)}
-                      <Badge variant="outline">v{p.version}</Badge>
+                      {published ? <Badge variant="outline">v{p.version}</Badge> : <Badge variant="secondary">never published</Badge>}
+                      {p.draftVersion && <Badge variant="secondary">draft v{p.draftVersion}</Badge>}
                     </div>
                     {p.description && <p className="mt-1 text-sm text-muted-foreground">{p.description}</p>}
                     <p className="mt-2 text-xs text-muted-foreground">
-                      {src ? `${sourceName(src.dataSourceId)} · ${src.table}` : 'No source'} →{' '}
-                      {steps.slice(1, -1).map((s) => stepLabel(s)).join(' → ') || 'no transforms'} →{' '}
-                      {dst?.type === 'destination' ? (dst.kind === 'dataset' ? `dataset ${dst.datasetName}` : `${sourceName(dst.dataSourceId)} · ${dst.table}`) : 'No destination'}
+                      {def.success ? summarize(def.data, sourceName) : 'Invalid definition'}
                     </p>
                     {src?.mode === 'incremental' && (
                       <p className="mt-1 text-xs text-muted-foreground">
@@ -261,13 +295,25 @@ export default function PipelineDesignerLayer() {
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    {schedule.type !== 'manual' && canRun && (
+                    {p.draftVersion && canEdit && (
+                      <>
+                        <Button size="sm" variant="outline" onClick={() => void publish(p)} title={`Make draft v${p.draftVersion} the version that runs`}>
+                          <Rocket className="mr-1 h-4 w-4" /> Publish draft
+                        </Button>
+                        {published && (
+                          <Button size="sm" variant="ghost" onClick={() => void discard(p)} title="Drop unpublished changes">
+                            <Undo2 className="mr-1 h-4 w-4" /> Discard draft
+                          </Button>
+                        )}
+                      </>
+                    )}
+                    {schedule.type !== 'manual' && canRun && published && (
                       <label className="flex items-center gap-2 rounded-md border border-border px-2 py-1 text-xs">
                         <input type="checkbox" checked={p.enabled ?? false} onChange={() => toggle(p)} />
                         Scheduled
                       </label>
                     )}
-                    {canRun && <Button size="sm" onClick={() => run(p)} disabled={running !== null}>
+                    {canRun && <Button size="sm" onClick={() => run(p)} disabled={running !== null || !published} title={published ? undefined : 'Publish the pipeline before running it'}>
                       {running === p.id ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Play className="mr-1 h-4 w-4" />}
                       {running === p.id ? 'Running…' : 'Run now'}
                     </Button>}

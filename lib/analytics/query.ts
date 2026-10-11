@@ -1,4 +1,5 @@
 import { NUMERIC_TYPES, TIME_TYPES, type Widget } from './definition'
+import { rowFilterSql, type RowFilter } from '@/lib/governance/row-filters'
 
 /**
  * Builds the SQL for one widget (pure; covered by scripts/engine-tests.ts).
@@ -19,7 +20,7 @@ export function buildWidgetSql(
   widget: Widget,
   table: string,
   columns: DatasetColumn[],
-  opts: { blockedColumns?: string[] } = {}
+  opts: { blockedColumns?: string[]; /** Row-level policy filters for the viewer's role. */ rowFilters?: RowFilter[] } = {}
 ): { text: string; params: unknown[] } {
   const byName = new Map(columns.map((c) => [c.name, c]))
   const blocked = new Set(opts.blockedColumns ?? [])
@@ -50,8 +51,8 @@ export function buildWidgetSql(
     measure = agg === 'count_distinct' ? `count(DISTINCT ${q(c.name)})` : `${agg}(${typed})`
   }
 
-  // Filters
-  const where: string[] = []
+  // Soft-deleted rows (PD-6) are never counted; row-level policies come first.
+  const where: string[] = ['"_nexus_deleted_at" IS NULL', ...rowFilterSql(opts.rowFilters ?? [], new Set(columns.map((c) => c.name)), bind)]
   for (const f of widget.filters) {
     const c = col(f.column)
     const ref = q(c.name)

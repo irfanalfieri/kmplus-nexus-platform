@@ -1,12 +1,15 @@
 import { createHash } from 'node:crypto'
 import { and, eq, inArray, lt, sql } from 'drizzle-orm'
 import { db, pool } from '@/lib/db'
-import { executionLogs, pipelineJobSeen, pipelineJobs, pipelineRunRejects, pipelines } from '@/lib/db/schema'
+import { catalogEntries, executionLogs, pipelineJobPairs, pipelineJobSeen, pipelineJobs, pipelineRunRejects, pipelines } from '@/lib/db/schema'
 import { newId } from '@/lib/auth/session'
 import { recordAudit } from '@/lib/audit'
-import { scheduleSchema, type PipelineDefinition, type SourceStep } from './definition'
-import { checkDestination, newRunTotals, outputColumns, totalsStatus, transformChunk, type EngineResult, type Reject, type RunTotals } from './engine'
-import { dropDatasetTable, finalizeDatasetReplace, readSourceChunk, stagingTableName, writeDataset, writeToDataSource, type ReadCache } from './io'
+import { scheduleSchema, type DestinationStep, type PipelineDefinition, type SourceStep } from './definition'
+import { checkDestination, newRunTotals, outputColumns, totalsStatus, transformChunk, upgradeTotals, type DestinationResult, type EngineResult, type Reject, type RunTotals } from './engine'
+import { dropDatasetTable, finalizeDatasetReplace, readSourceChunk, softDeleteDataSourceMissing, softDeleteDatasetMissing, stagingTableName, writeDataset, writeToDataSource, type ReadCache, type StoredDataSource } from './io'
+import { checkManagers, type Row } from './transforms'
+import { loadRules, loadRunContext } from './context'
+import { notifyRule } from '@/lib/notifications'
 import { alertIfNeeded, currentWatermark, datasetTable, loadSource, parseDefinition, summarize, upsertDatasetRecord, watermarkKey, type PipelineState, type RunScope } from './runner'
 import { nextRunAt } from './schedule'
 
@@ -31,10 +34,13 @@ const LEASE_MS = 5 * 60_000
 const CHUNK_HEADROOM_MS = 75_000
 /** Worker time per invocation, inside the 300 s function limit. */
 export const WORKER_BUDGET_MS = 240_000
-const MAX_REJECTS_KEPT = 500
+/** Quarantine rows kept per run (errors, approvals and flags); counts are always complete. */
+const QUARANTINE_CAP = 10_000
+const MAX_LOG_LINES = 200
 const DONE_JOB_RETENTION_DAYS = 30
 
 type Attempt = { attempt: number; error?: string; at: string }
+type LogLine = { at: string; level: 'info' | 'warn' | 'error'; message: string }
 
 interface JobProgress {
   /** Pipeline config snapshot taken at enqueue, so edits during a run don't mix versions. */
@@ -50,7 +56,18 @@ interface JobProgress {
   rejectsKept: number
   attempts: Attempt[]
   destination?: { kind: string; target: string; rowCount?: number }
+  /** The read stopped at the source's max-rows cap (rows may remain: no soft deletes). */
+  capped?: boolean
+  /** Run log (MN-3). */
+  log?: LogLine[]
+  /** Last error's stack, shown to admins only. */
+  errorStack?: string
+  /** Quarantine replay (DQ-3): these quarantined rows re-enter the graph at the step that held them, instead of reading the source. */
+  replay?: { rejectIds: string[] }
 }
+
+/** Rows one replay may re-run. */
+export const REPLAY_MAX_ROWS = 5000
 
 type Job = typeof pipelineJobs.$inferSelect
 
@@ -59,7 +76,7 @@ export type EnqueueOutcome = { runId: string; status: 'queued' | 'skipped'; mess
 // ── Enqueue ──────────────────────────────────────────────────────────────────
 
 /** Queues a run of the pipeline's published version. At most one active run per pipeline. */
-export async function enqueueRun(pipelineId: string, scope: RunScope, trigger: 'manual' | 'schedule'): Promise<EnqueueOutcome> {
+export async function enqueueRun(pipelineId: string, scope: RunScope, trigger: 'manual' | 'schedule' | 'replay', opts: { replayIds?: string[] } = {}): Promise<EnqueueOutcome> {
   const [pipeline] = await db
     .select()
     .from(pipelines)
@@ -75,6 +92,7 @@ export async function enqueueRun(pipelineId: string, scope: RunScope, trigger: '
   }
   const runId = newId('run')
   const progress: JobProgress = { config: pipeline.config, version: pipeline.version ?? 1, watermarkAfter, offset: 0, exhausted: false, chunks: 0, rejectsKept: 0, attempts: [] }
+  if (opts.replayIds) progress.replay = { rejectIds: opts.replayIds.slice(0, REPLAY_MAX_ROWS) }
 
   const queued = await db.transaction(async (tx) => {
     // The partial unique index (one non-done job per pipeline) makes this race-free.
@@ -210,8 +228,10 @@ class HashedSet extends Set<string> {
   }
 }
 
+/** Seen-value sets of "unique" rules, plus written keys of destinations that mark missing rows deleted. */
 async function loadSeen(jobId: string, def: PipelineDefinition) {
-  const fields = new Set(def.steps.flatMap((s) => (s.type === 'validate' ? s.rules.filter((r) => r.rule === 'unique').map((r) => r.field) : [])))
+  const fields = new Set(def.nodes.flatMap((s) => (s.type === 'validate' ? s.rules.filter((r) => r.rule === 'unique').map((r) => r.field) : [])))
+  for (const d of def.nodes) if (d.type === 'destination' && d.kind === 'datasource' && d.softDeleteMissing) fields.add(destKeyField(d.id))
   const seen = new Map<string, Set<string>>()
   if (!fields.size) return { seen, sets: [] as [string, HashedSet][] }
   const rows = await db.select({ field: pipelineJobSeen.field, hash: pipelineJobSeen.hash }).from(pipelineJobSeen).where(eq(pipelineJobSeen.jobId, jobId))
@@ -224,8 +244,21 @@ async function loadSeen(jobId: string, def: PipelineDefinition) {
   return { seen, sets }
 }
 
+const destKeyField = (destId: string) => `__dest:${destId}`
+const keyOf = (row: Row, keys: string[]) => keys.map((k) => (row[k] === null || row[k] === undefined ? '' : String(row[k]))).join('\u0001')
+
 function errorInfo(err: unknown) {
-  return { message: err instanceof Error ? err.message : String(err), retryable: (err as { retryable?: boolean } | null)?.retryable !== false }
+  return {
+    message: err instanceof Error ? err.message : String(err),
+    retryable: (err as { retryable?: boolean } | null)?.retryable !== false,
+    stack: err instanceof Error ? err.stack?.split('\n').slice(0, 12).join('\n') : undefined,
+  }
+}
+
+function log(progress: JobProgress, level: LogLine['level'], message: string) {
+  progress.log ??= []
+  progress.log.push({ at: new Date().toISOString(), level, message })
+  if (progress.log.length > MAX_LOG_LINES) progress.log.splice(1, progress.log.length - MAX_LOG_LINES)
 }
 
 /** Runs chunks of one job until it finishes, fails, or the invocation runs out of time. */
@@ -240,35 +273,127 @@ async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promi
   }
   if (job.status === 'cancelling') return finishJob(job, progress, def, { cancelled: true })
 
-  const source = def.steps[0] as SourceStep
-  const dest = def.steps[def.steps.length - 1]
-  if (dest.type !== 'destination') return finishJob(job, progress, def, { error: 'The last step must be a destination.' })
+  const source = def.nodes.find((n): n is SourceStep => n.type === 'source')!
+  const destinations = def.nodes.filter((n): n is DestinationStep => n.type === 'destination')
 
   if (!progress.startedAt) {
     progress.startedAt = new Date().toISOString()
+    log(progress, 'info', `Run started (v${progress.version}, ${job.trigger})`)
     await db.update(executionLogs).set({ status: 'running', startTime: new Date(progress.startedAt), updatedAt: new Date() }).where(eq(executionLogs.id, job.id))
+  } else {
+    log(progress, 'info', `Resumed at row ${progress.offset.toLocaleString()}`)
   }
-  const totals = progress.totals ?? newRunTotals(def)
+  const totals = upgradeTotals(progress.totals ?? newRunTotals(def))
   progress.totals = totals
+  const chunkRows = def.settings.batchSize ?? CHUNK_ROWS
 
   try {
     const sourceDs = await loadSource(scope.workspaceId, source.dataSourceId)
-    const destTable = dest.kind === 'dataset' ? await datasetTable(scope.workspaceId, dest.datasetName) : null
-    const destDs = dest.kind === 'datasource' ? await loadSource(scope.workspaceId, dest.dataSourceId) : null
-    const staging = dest.kind === 'dataset' && dest.mode === 'replace' ? stagingTableName(destTable!, job.id) : null
-    // A replace run that starts over (offset 0) discards what an earlier attempt staged.
-    if (staging && progress.offset === 0) await dropDatasetTable(staging)
+    // Destination targets: dataset table (+ staging for replace) or data source.
+    const targets = new Map<string, { node: DestinationStep; table?: string; staging?: string | null; ds?: StoredDataSource }>()
+    for (const d of destinations) {
+      if (d.kind === 'dataset') {
+        const table = await datasetTable(scope.workspaceId, d.datasetName)
+        // A replay adds rows to the live table; only a full run stages and swaps.
+        const staging = d.mode === 'replace' && !progress.replay ? stagingTableName(table, `${job.id}:${d.id}`) : null
+        // A replace run that starts over (offset 0) discards what an earlier attempt staged.
+        if (staging && progress.offset === 0) await dropDatasetTable(staging)
+        targets.set(d.id, { node: d, table, staging })
+      } else {
+        targets.set(d.id, { node: d, ds: await loadSource(scope.workspaceId, d.dataSourceId) })
+      }
+    }
 
+    const ctx = await loadRunContext(scope.workspaceId, def)
     const { seen, sets } = await loadSeen(job.id, def)
+    ctx.seen = seen
     const cache: ReadCache = new Map()
     const watermark = source.mode === 'incremental' ? { column: source.watermarkColumn, after: progress.watermarkAfter } : undefined
+    const timeoutAt = new Date(progress.startedAt!).getTime() + def.settings.timeoutMinutes * 60_000
+
+    const writeOutputs = async (out: ReturnType<typeof transformChunk>) => {
+      for (const [destId, target] of targets) {
+        const rows = out.byDestination.get(destId) ?? []
+        if (!rows.length) continue
+        const dest = target.node
+        const columns = totals.columnsByDest[destId] ?? []
+        checkDestination(def, columns, dest)
+        const writeStarted = Date.now()
+        let written = 0
+        if (dest.kind === 'dataset') {
+          const res = await writeDataset({
+            workspaceId: scope.workspaceId,
+            existingTableName: target.staging ?? target.table!,
+            datasetName: dest.datasetName,
+            mode: target.staging || (progress.replay && dest.mode === 'replace') ? 'append' : dest.mode,
+            keys: dest.keys,
+            columns,
+            rows,
+            runId: job.id,
+          })
+          written = res.written
+        } else {
+          const res = await writeToDataSource({ source: target.ds!, table: dest.table, mode: dest.mode, keys: dest.keys, columns, rows })
+          written = res.written
+          if (dest.softDeleteMissing && !progress.replay) {
+            const set = seen.get(destKeyField(destId))!
+            for (const r of rows) set.add(keyOf(r, dest.keys))
+          }
+        }
+        totals.rowsWritten += written
+        totals.writtenByDest[destId] = (totals.writtenByDest[destId] ?? 0) + written
+        const stat = totals.steps.find((s) => s.id === destId)
+        if (stat) {
+          stat.rowsOut += written
+          stat.durationMs += Date.now() - writeStarted
+        }
+      }
+    }
+
+    if (progress.replay && !progress.exhausted) {
+      const started = Date.now()
+      const held = await db
+        .select()
+        .from(pipelineRunRejects)
+        .where(and(eq(pipelineRunRejects.workspaceId, scope.workspaceId), eq(pipelineRunRejects.pipelineId, job.pipelineId), inArray(pipelineRunRejects.id, progress.replay.rejectIds)))
+      const groups = new Map<string, typeof held>()
+      for (const r of held) {
+        const key = `${r.nodeId ?? ''}|${r.kind}`
+        groups.set(key, [...(groups.get(key) ?? []), r])
+      }
+      const quarantine: Reject[] = []
+      const pairs: ChunkPairs = []
+      for (const [key, rows] of groups) {
+        const [nodeId, kind] = key.split('|')
+        if (!def.nodes.some((n) => n.id === nodeId)) {
+          log(progress, 'warn', `${rows.length} row(s) skipped: the step that held them no longer exists in the published pipeline`)
+          continue
+        }
+        // Approved rows pass require_approval; corrected rows are checked again from the same step.
+        const out = transformChunk(def, rows.map((r) => (r.fixedRow ?? r.row) as Row), totals, { ...ctx, approved: kind === 'approval' }, {}, { startNodeId: nodeId })
+        totals.rowsRead += rows.length
+        await writeOutputs(out)
+        quarantine.push(...out.rejects, ...out.flags)
+        pairs.push(...out.managerPairs)
+      }
+      await db
+        .update(pipelineRunRejects)
+        .set({ status: 'replayed', replayRunId: job.id, updatedAt: new Date() })
+        .where(and(eq(pipelineRunRejects.workspaceId, scope.workspaceId), inArray(pipelineRunRejects.id, held.map((r) => r.id))))
+      progress.exhausted = true
+      progress.chunks++
+      log(progress, 'info', `Replayed ${held.length.toLocaleString()} quarantined row(s); ${quarantine.filter((r) => r.kind !== 'flag').length} quarantined again`)
+      await checkpoint(job, progress, scope, quarantine, sets, pairs, Date.now() - started)
+    }
 
     let sliceChunks = 0
     while (!progress.exhausted) {
-      // Every slice makes progress (one chunk at least), then stops near the deadline.
       if (await isCancelling(job.id)) return finishJob(job, progress, def, { cancelled: true })
+      if (Date.now() > timeoutAt) throw Object.assign(new Error(`The run passed its ${def.settings.timeoutMinutes}-minute timeout.`), { retryable: false })
+      // Every slice makes progress (one chunk at least), then stops near the deadline.
       if (sliceChunks >= maxChunks || (sliceChunks > 0 && Date.now() > deadline - CHUNK_HEADROOM_MS)) {
         // Out of time: release the job; the next tick (or page poll) resumes it. Never overwrite a cancel request.
+        log(progress, 'info', `Paused at row ${progress.offset.toLocaleString()} (function time limit); continues in the next invocation`)
         const released = await db
           .update(pipelineJobs)
           .set({ status: 'queued', leaseUntil: null, availableAt: new Date(), progress, updatedAt: new Date() })
@@ -277,50 +402,38 @@ async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promi
         return released.length ? 'paused' : finishJob(job, progress, def, { cancelled: true })
       }
       const started = Date.now()
-      const read = await readSourceChunk(sourceDs, source.table, { offset: progress.offset, limit: CHUNK_ROWS, maxRows: source.maxRows, watermark, cache })
+      const read = await readSourceChunk(sourceDs, source.table, { offset: progress.offset, limit: chunkRows, maxRows: source.maxRows, watermark, cache })
       const readMs = Date.now() - started
-      const out = transformChunk(def, read.rows, totals, seen, read.types)
-      totals.steps[0].durationMs += readMs
-      const destStat = totals.steps[totals.steps.length - 1]
-
-      if (out.rows.length) {
-        checkDestination(def, totals.columns)
-        const writeStarted = Date.now()
-        if (dest.kind === 'dataset') {
-          const res = await writeDataset({
-            workspaceId: scope.workspaceId,
-            existingTableName: staging ?? destTable!,
-            datasetName: dest.datasetName,
-            mode: staging ? 'append' : dest.mode,
-            keys: dest.keys,
-            columns: totals.columns,
-            rows: out.rows,
-          })
-          totals.rowsWritten += res.written
-          destStat.rowsOut += res.written
-          progress.destination = { kind: 'dataset', target: `Dataset ${dest.datasetName}`, rowCount: staging ? undefined : res.rowCount }
-        } else {
-          const res = await writeToDataSource({ source: destDs!, table: dest.table, mode: dest.mode, keys: dest.keys, columns: totals.columns, rows: out.rows })
-          totals.rowsWritten += res.written
-          destStat.rowsOut += res.written
-          progress.destination = { kind: 'datasource', target: `${destDs!.name} · ${dest.table}` }
-        }
-        destStat.durationMs += Date.now() - writeStarted
-      }
+      const out = transformChunk(def, read.rows, totals, ctx, read.types)
+      const srcStat = totals.steps.find((s) => s.id === source.id)
+      if (srcStat) srcStat.durationMs += readMs
+      await writeOutputs(out)
 
       progress.offset += read.rows.length
       progress.exhausted = read.exhausted
+      if (read.exhausted && progress.offset >= source.maxRows) progress.capped = true
       progress.chunks++
       sliceChunks++
-      await checkpoint(job, progress, scope, out.rejects, sets, Date.now() - started)
+      log(progress, 'info', `Chunk ${progress.chunks}: read ${read.rows.length.toLocaleString()} rows in ${readMs} ms; ${out.rejects.length} quarantined, ${out.flags.length} flagged`)
+      await checkpoint(job, progress, scope, [...out.rejects, ...out.flags], sets, out.managerPairs, Date.now() - started)
+
+      // PD-10: error-rate threshold.
+      const maxPct = def.settings.maxErrorPercent
+      if (maxPct !== null && maxPct !== undefined && totals.rowsRead >= 100) {
+        const pct = (totals.rejectedCount / totals.rowsRead) * 100
+        if (pct > maxPct) throw Object.assign(new Error(`${pct.toFixed(1)}% of rows were quarantined, above this pipeline's ${maxPct}% limit.`), { retryable: false })
+      }
     }
   } catch (err) {
     const info = errorInfo(err)
     progress.attempts.push({ attempt: progress.attempts.length + 1, error: info.message, at: new Date().toISOString() })
-    const failures = job.attempts + 1
+    progress.errorStack = info.stack
+    log(progress, 'error', info.message)
     if (await isCancelling(job.id)) return finishJob(job, progress, def, { cancelled: true })
+    const failures = job.attempts + 1
     if (info.retryable && failures <= def.settings.retries) {
       const delaySec = Math.min(300, def.settings.retryDelaySeconds * 2 ** (failures - 1))
+      log(progress, 'warn', `Attempt ${failures} failed; retrying from the last checkpoint in ${delaySec}s`)
       const requeued = await db
         .update(pipelineJobs)
         .set({ status: 'queued', attempts: failures, availableAt: new Date(Date.now() + delaySec * 1000), leaseUntil: null, progress, updatedAt: new Date() })
@@ -335,22 +448,33 @@ async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promi
   return finishJob(job, progress, def, (await isCancelling(job.id)) ? { cancelled: true } : {})
 }
 
-/** Persists one chunk's outcome atomically: rejects, new "unique" hashes, counters and the cursor. */
-async function checkpoint(job: Job, progress: JobProgress, scope: RunScope, rejects: Reject[], sets: [string, HashedSet][], chunkMs: number) {
-  const keep = rejects.slice(0, Math.max(0, MAX_REJECTS_KEPT - progress.rejectsKept))
+/** Persists one chunk's outcome atomically: quarantine rows, new hashes, manager pairs, counters and the cursor. */
+async function checkpoint(
+  job: Job,
+  progress: JobProgress,
+  scope: RunScope,
+  quarantine: Reject[],
+  sets: [string, HashedSet][],
+  pairs: ChunkPairs,
+  chunkMs: number
+) {
+  const keep = quarantine.slice(0, Math.max(0, QUARANTINE_CAP - progress.rejectsKept))
   progress.rejectsKept += keep.length
   const totals = progress.totals!
   await db.transaction(async (tx) => {
-    if (keep.length) {
+    for (let i = 0; i < keep.length; i += 1000) {
       await tx.insert(pipelineRunRejects).values(
-        keep.map((r) => ({
+        keep.slice(i, i + 1000).map((r) => ({
           id: newId('rej'),
           runId: job.id,
           pipelineId: job.pipelineId,
           userId: scope.actorId,
           workspaceId: scope.workspaceId,
-          row: JSON.parse(JSON.stringify(r.row, (_k, v) => (typeof v === 'bigint' ? v.toString() : v))),
+          row: jsonSafe(r.row),
           errors: { stepId: r.stepId, messages: r.errors },
+          nodeId: r.stepId,
+          severity: r.severity ?? 'error',
+          kind: r.kind ?? 'invalid',
         }))
       )
     }
@@ -362,67 +486,122 @@ async function checkpoint(job: Job, progress: JobProgress, scope: RunScope, reje
           .onConflictDoNothing()
       }
     }
+    for (let i = 0; i < pairs.length; i += 5000) {
+      await tx.insert(pipelineJobPairs).values(pairs.slice(i, i + 5000).map((p) => ({ jobId: job.id, ...p })))
+    }
     await tx
       .update(pipelineJobs)
       .set({ progress, leaseUntil: new Date(Date.now() + LEASE_MS), updatedAt: new Date() })
       .where(eq(pipelineJobs.id, job.id))
     await tx
       .update(executionLogs)
-      .set({ recordsProcessed: totals.rowsRead, recordsSuccess: totals.rowsWritten, recordsError: totals.rejectedCount, updatedAt: new Date() })
+      .set({ recordsProcessed: totals.rowsRead, recordsSuccess: totals.rowsWritten, recordsError: totals.rejectedCount + totals.heldCount, updatedAt: new Date() })
       .where(eq(executionLogs.id, job.id))
   })
   for (const [, set] of sets) set.added = []
   if (chunkMs > 60_000) console.warn(`[jobs] ${job.id}: chunk took ${Math.round(chunkMs / 1000)}s`)
 }
 
-/** Completes a run: dataset swap/record, run log, pipeline state, audit, alerts. */
+type ChunkPairs = { nodeId: string; key: string; manager: string; field: string; keyField: string }[]
+
+const jsonSafe = (row: Row) => JSON.parse(JSON.stringify(row, (_k, v) => (typeof v === 'bigint' ? v.toString() : v)))
+
+/** Completes a run: manager checks, dataset swaps/soft deletes, run log, pipeline state, rule actions, audit, alerts. */
 async function finishJob(job: Job, progress: JobProgress, def: PipelineDefinition | null, outcome: { error?: string; cancelled?: boolean }): Promise<string> {
   const cancelled = Boolean(outcome.cancelled)
   const scope: RunScope = { workspaceId: job.workspaceId, actorId: job.actorId }
-  const totals = progress.totals ?? (def ? newRunTotals(def) : { steps: [], rowsRead: 0, rowsWritten: 0, rejectedCount: 0, columns: [] })
+  const totals = upgradeTotals(progress.totals ?? (def ? newRunTotals(def) : ({ steps: [], rowsRead: 0, rowsWritten: 0, rejectedCount: 0, columns: [] } as unknown as RunTotals)))
   let error = outcome.error
-  const dest = def?.steps[def.steps.length - 1]
+  const destinations = def ? def.nodes.filter((n): n is DestinationStep => n.type === 'destination') : []
+  const results: DestinationResult[] = []
+  const replay = Boolean(progress.replay)
 
-  if (!error && !cancelled && dest?.type === 'destination' && dest.kind === 'dataset') {
-    try {
-      const tableName = await datasetTable(scope.workspaceId, dest.datasetName)
-      const columns = totals.columns.length ? totals.columns : outputColumns(def!, [])
-      if (dest.mode === 'replace') {
-        const staging = stagingTableName(tableName, job.id)
-        // No rows at all: still create the (empty) dataset with the declared columns.
-        if (!totals.rowsWritten && columns.length) {
-          await writeDataset({ workspaceId: scope.workspaceId, existingTableName: staging, datasetName: dest.datasetName, mode: 'append', keys: [], columns, rows: [] })
-        }
-        const rowCount = await finalizeDatasetReplace(tableName, staging)
-        progress.destination = { kind: 'dataset', target: `Dataset ${dest.datasetName}`, rowCount }
-      } else if (!totals.rowsWritten && columns.length) {
-        const res = await writeDataset({ workspaceId: scope.workspaceId, existingTableName: tableName, datasetName: dest.datasetName, mode: dest.mode, keys: dest.keys, columns, rows: [] })
-        progress.destination = { kind: 'dataset', target: `Dataset ${dest.datasetName}`, rowCount: res.rowCount }
+  // Manager checks need every row of the run: unknown managers and reporting cycles become warnings.
+  if (!error && !cancelled && def) {
+    const pairs = await db.select().from(pipelineJobPairs).where(eq(pipelineJobPairs.jobId, job.id))
+    const byNode = new Map<string, typeof pairs>()
+    for (const p of pairs) byNode.set(`${p.nodeId}|${p.field}|${p.keyField}`, [...(byNode.get(`${p.nodeId}|${p.field}|${p.keyField}`) ?? []), p])
+    const flags: Reject[] = []
+    for (const group of byNode.values()) {
+      for (const f of checkManagers(group)) {
+        flags.push({ stepId: group[0].nodeId, row: { [group[0].keyField]: f.key, [group[0].field]: f.manager }, errors: [f.message], severity: 'warning', kind: 'flag' })
       }
-      if (columns.length) await upsertDatasetRecord(scope, job.pipelineId, dest.datasetName, tableName, columns, progress.destination?.rowCount ?? 0)
-    } catch (err) {
-      error = `Finishing the dataset failed: ${errorInfo(err).message}`
+    }
+    if (flags.length) {
+      totals.flaggedCount += flags.length
+      log(progress, 'warn', `${flags.length} manager issue(s): unknown managers or circular reporting lines`)
+      await checkpoint(job, progress, scope, flags, [], [], 0)
     }
   }
-  if ((error || cancelled) && dest?.type === 'destination' && dest.kind === 'dataset' && dest.mode === 'replace') {
-    // Leave the live dataset untouched; drop what this run staged.
-    await dropDatasetTable(stagingTableName(await datasetTable(scope.workspaceId, dest.datasetName), job.id)).catch(() => undefined)
+
+  for (const dest of destinations) {
+    try {
+      if (dest.kind === 'dataset') {
+        const tableName = await datasetTable(scope.workspaceId, dest.datasetName)
+        const staging = stagingTableName(tableName, `${job.id}:${dest.id}`)
+        const columns = totals.columnsByDest[dest.id]?.length ? totals.columnsByDest[dest.id] : outputColumns(def!, [], {}, dest.id)
+        if (error || cancelled) {
+          if (dest.mode === 'replace' && !replay) await dropDatasetTable(staging).catch(() => undefined)
+          continue
+        }
+        let rowCount: number | undefined
+        if (dest.mode === 'replace' && !replay) {
+          // No rows at all: still create the (empty) dataset with the declared columns.
+          if (!totals.writtenByDest[dest.id] && columns.length) {
+            await writeDataset({ workspaceId: scope.workspaceId, existingTableName: staging, datasetName: dest.datasetName, mode: 'append', keys: [], columns, rows: [] })
+          }
+          rowCount = await finalizeDatasetReplace(tableName, staging)
+        } else {
+          const res = await writeDataset({ workspaceId: scope.workspaceId, existingTableName: tableName, datasetName: dest.datasetName, mode: dest.mode === 'replace' ? 'append' : dest.mode, keys: dest.keys, columns, rows: [] })
+          rowCount = res.rowCount
+          if (dest.softDeleteMissing && !replay) {
+            if (progress.capped) log(progress, 'warn', `${dest.datasetName}: missing rows not marked deleted, the read stopped at the ${progress.offset.toLocaleString()}-row cap`)
+            else {
+              const marked = await softDeleteDatasetMissing(tableName, job.id)
+              if (marked) log(progress, 'info', `${dest.datasetName}: ${marked.toLocaleString()} row(s) no longer in the source marked deleted`)
+              rowCount = (await writeDataset({ workspaceId: scope.workspaceId, existingTableName: tableName, datasetName: dest.datasetName, mode: 'append', keys: [], columns, rows: [] })).rowCount
+            }
+          }
+        }
+        if (columns.length) await upsertDatasetRecord(scope, job.pipelineId, dest.datasetName, tableName, columns, rowCount ?? 0)
+        results.push({ id: dest.id, kind: 'dataset', target: `Dataset ${dest.datasetName}`, rowCount, written: totals.writtenByDest[dest.id] ?? 0 })
+      } else {
+        if (!error && !cancelled && dest.softDeleteMissing && !replay) {
+          if (progress.capped) log(progress, 'warn', `${dest.table}: missing rows not marked deleted, the read stopped at the row cap`)
+          else {
+            const { seen } = await loadSeen(job.id, def!)
+            const set = seen.get(destKeyField(dest.id))!
+            const ds = await loadSource(scope.workspaceId, dest.dataSourceId)
+            const marked = await softDeleteDataSourceMissing({ source: ds, table: dest.table, keys: dest.keys, column: dest.softDeleteColumn, isSeen: (k) => set.has(k) })
+            if (marked) log(progress, 'info', `${dest.table}: ${marked.toLocaleString()} row(s) no longer in the source marked deleted`)
+          }
+        }
+        results.push({ id: dest.id, kind: 'datasource', target: dest.table, written: totals.writtenByDest[dest.id] ?? 0 })
+      }
+    } catch (err) {
+      error = `Finishing ${dest.kind === 'dataset' ? `dataset ${dest.datasetName}` : dest.table} failed: ${errorInfo(err).message}`
+      progress.errorStack = errorInfo(err).stack
+    }
   }
 
   const status: EngineResult['status'] = error ? 'failed' : totalsStatus(totals)
   const runStatus = cancelled ? 'cancelled' : status
   if (error && !progress.attempts.some((a) => a.error === error)) progress.attempts.push({ attempt: progress.attempts.length + 1, error, at: new Date().toISOString() })
   if (!progress.attempts.length) progress.attempts.push({ attempt: 1, at: new Date().toISOString() })
+  log(progress, error ? 'error' : 'info', cancelled ? 'Cancelled' : error ? `Failed: ${error}` : `Finished: ${totals.rowsWritten.toLocaleString()} of ${totals.rowsRead.toLocaleString()} rows written`)
   const result: EngineResult = {
     status,
     steps: totals.steps,
     rejects: [],
     rejectedCount: totals.rejectedCount,
+    flaggedCount: totals.flaggedCount,
+    heldCount: totals.heldCount,
     rowsRead: totals.rowsRead,
     rowsWritten: totals.rowsWritten,
     columns: totals.columns,
     error,
-    destination: progress.destination,
+    destination: results[0],
+    destinations: results,
     watermark: totals.watermark,
   }
 
@@ -434,11 +613,23 @@ async function finishJob(job: Job, progress: JobProgress, def: PipelineDefinitio
       status: runStatus,
       recordsProcessed: totals.rowsRead,
       recordsSuccess: totals.rowsWritten,
-      recordsError: totals.rejectedCount,
+      recordsError: totals.rejectedCount + totals.heldCount,
       errorMessage: cancelled ? 'Cancelled by a user.' : (error ?? null),
       endTime,
       duration: Math.round((endTime.getTime() - startTime.getTime()) / 1000),
-      executionDetails: { steps: totals.steps, destination: progress.destination, columns: totals.columns, attempts: progress.attempts, watermark: totals.watermark, chunks: progress.chunks },
+      executionDetails: {
+        steps: totals.steps,
+        destination: results[0],
+        destinations: results,
+        columns: totals.columns,
+        attempts: progress.attempts,
+        watermark: totals.watermark,
+        chunks: progress.chunks,
+        flagged: totals.flaggedCount,
+        held: totals.heldCount,
+        log: progress.log ?? [],
+        errorStack: error ? progress.errorStack : undefined,
+      },
       updatedAt: endTime,
     })
     .where(eq(executionLogs.id, job.id))
@@ -447,7 +638,7 @@ async function finishJob(job: Job, progress: JobProgress, def: PipelineDefinitio
   if (pipeline) {
     // Advance the incremental watermark only after the whole run succeeded.
     let state = pipeline.state as PipelineState | null
-    const source = def?.steps[0]
+    const source = def?.nodes.find((n) => n.type === 'source')
     if (!cancelled && status !== 'failed' && totals.watermark?.value && source?.type === 'source' && source.mode === 'incremental') {
       state = { ...(state ?? {}), watermark: { column: totals.watermark.column, value: totals.watermark.value, sourceKey: watermarkKey(source) } }
     }
@@ -468,18 +659,64 @@ async function finishJob(job: Job, progress: JobProgress, def: PipelineDefinitio
   }
 
   await db.delete(pipelineJobSeen).where(eq(pipelineJobSeen.jobId, job.id))
+  await db.delete(pipelineJobPairs).where(eq(pipelineJobPairs.jobId, job.id))
   await db.update(pipelineJobs).set({ status: 'done', leaseUntil: null, progress, updatedAt: endTime }).where(eq(pipelineJobs.id, job.id))
 
   await recordAudit({ userId: scope.actorId, workspaceId: scope.workspaceId }, {
     action: 'RUN',
     resource: 'pipeline',
     resourceId: job.pipelineId,
-    changes: { runId: job.id, trigger: job.trigger, status: runStatus, attempts: progress.attempts.length, chunks: progress.chunks, rowsRead: totals.rowsRead, rowsWritten: totals.rowsWritten, rejected: totals.rejectedCount },
+    changes: { runId: job.id, trigger: job.trigger, status: runStatus, attempts: progress.attempts.length, chunks: progress.chunks, rowsRead: totals.rowsRead, rowsWritten: totals.rowsWritten, rejected: totals.rejectedCount, flagged: totals.flaggedCount, held: totals.heldCount },
   })
   if (cancelled) return runStatus
+  if (def && status !== 'failed') await ruleSideEffects(def, totals, scope, pipeline?.name ?? 'Pipeline', job)
+  if (status !== 'failed') await refreshDependentCaches(scope, job.pipelineId)
   const message = summarize(result)
   await alertIfNeeded({ def, pipelineName: pipeline?.name ?? 'Pipeline', pipelineId: job.pipelineId, scope, runId: job.id, trigger: job.trigger, result, attempts: progress.attempts.length, message })
   return runStatus
+}
+
+/** Catalog tables cached "after a pipeline finishes" (DV-2): queue their copy once this pipeline succeeded. */
+async function refreshDependentCaches(scope: RunScope, pipelineId: string) {
+  try {
+    const dependents = await db
+      .select({ cachePipelineId: catalogEntries.cachePipelineId })
+      .from(catalogEntries)
+      .where(and(eq(catalogEntries.workspaceId, scope.workspaceId), eq(catalogEntries.refresh, 'after_pipeline'), eq(catalogEntries.refreshAfterPipelineId, pipelineId), eq(catalogEntries.accessMode, 'cached')))
+    for (const d of dependents) {
+      if (d.cachePipelineId && d.cachePipelineId !== pipelineId) await enqueueRun(d.cachePipelineId, scope, 'schedule')
+    }
+  } catch (err) {
+    // Cache refreshes must never fail a finished run.
+    console.error('[catalog] dependent cache refresh failed:', errorInfo(err).message)
+  }
+}
+
+/** Business rule "notify" and "trigger pipeline" actions: once per run, for rules whose branch matched rows. */
+async function ruleSideEffects(def: PipelineDefinition, totals: RunTotals, scope: RunScope, pipelineName: string, job: Job) {
+  const hits = Object.entries(totals.ruleHits).filter(([, n]) => n > 0)
+  if (!hits.length) return
+  try {
+    const rules = await loadRules(scope.workspaceId, [...new Set(hits.map(([k]) => k.split(':')[0]))])
+    const triggered = new Set<string>()
+    for (const [key, count] of hits) {
+      const [ruleId, branch] = key.split(':')
+      const rule = rules.get(ruleId)
+      if (!rule) continue
+      for (const a of branch === 'then' ? rule.then : rule.otherwise) {
+        if (a.type === 'notify') {
+          await notifyRule({ scope, pipelineId: job.pipelineId, runId: job.id, title: `${rule.name}: ${count.toLocaleString()} row${count === 1 ? '' : 's'} in ${pipelineName}`, message: a.message, emails: a.emails })
+        } else if (a.type === 'trigger_pipeline' && !triggered.has(a.pipelineId) && a.pipelineId !== job.pipelineId) {
+          triggered.add(a.pipelineId)
+          const res = await enqueueRun(a.pipelineId, scope, 'manual').catch((err) => ({ status: 'error', message: errorInfo(err).message }))
+          console.info(`[rules] ${rule.name} → pipeline ${a.pipelineId}: ${res.status}`)
+        }
+      }
+    }
+  } catch (err) {
+    // Rule side effects must never fail a finished run.
+    console.error('[rules] side effects failed:', errorInfo(err).message)
+  }
 }
 
 /** Queued/running jobs of a workspace, for the Monitoring view. */

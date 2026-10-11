@@ -50,6 +50,12 @@ export function after(fn: () => unknown) {
   state.__testAfter!.push(fn)
 }
 
+export class NextResponse extends Response {
+  static json(body: unknown, init: ResponseInit = {}) {
+    return new Response(JSON.stringify(body), { ...init, headers: { 'content-type': 'application/json', ...(init.headers as Record<string, string>) } })
+  }
+}
+
 // @/lib/auth
 export const APP_NAME = 'KMPlus Nexus'
 export const auth = {

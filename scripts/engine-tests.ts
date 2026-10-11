@@ -5,13 +5,21 @@
 import assert from 'node:assert/strict'
 import { compareWatermarks, inferColumns, maxWatermark } from '@/lib/pipelines/columns'
 import { definitionSchema, scheduleSchema, settingsSchema } from '@/lib/pipelines/definition'
-import { checkDestination, newRunTotals, runEngine, transformChunk } from '@/lib/pipelines/engine'
+import { checkDestination, emptyContext, newRunTotals, runEngine, transformChunk } from '@/lib/pipelines/engine'
+import type { BusinessRule } from '@/lib/rules/definition'
 import { describeSchedule, nextRunTimes } from '@/lib/pipelines/schedule'
-import { formatDate, parseDate } from '@/lib/pipelines/transforms'
+import { applyTransform, checkManagers, formatDate, parseDate } from '@/lib/pipelines/transforms'
 import { widgetSchema } from '@/lib/analytics/definition'
 import { buildWidgetSql, WidgetQueryError } from '@/lib/analytics/query'
 import { suggestColumnPolicy } from '@/lib/governance/definition'
 import { applyMasks, maskValue } from '@/lib/governance/masking'
+import { cellText, cleanTableName, columnNames, detectType, toSheet, uploadParts } from '@/lib/files/parse'
+import { rowAllowed, rowFilterSql, type RowFilter } from '@/lib/governance/row-filters'
+import { ApiQueryError, buildApiSql, decodeCursor, encodeCursor, parseApiQuery, toPage } from '@/lib/api/query'
+import { freshness, matchesSearch, parseKey } from '@/lib/catalog/definition'
+import { applyRules, describeRule } from '@/lib/rules/evaluate'
+import { refreshSchedule } from '@/lib/catalog/refresh'
+import { randomBytes } from 'node:crypto'
 
 let passed = 0
 async function test(name: string, fn: () => void | Promise<void>) {
@@ -66,7 +74,7 @@ async function main() {
 
   await test('settings default and validate', () => {
     const def = definitionSchema.parse(base)
-    assert.deepEqual(def.settings, { retries: 2, retryDelaySeconds: 15, alertOn: 'failure', alertEmails: [] })
+    assert.deepEqual(def.settings, { retries: 2, retryDelaySeconds: 15, alertOn: 'failure', alertEmails: [], timeoutMinutes: 120, batchSize: 5000, maxErrorPercent: null })
     assert.equal(settingsSchema.safeParse({ alertEmails: ['not-an-email'] }).success, false)
     assert.equal(settingsSchema.safeParse({ retries: 9 }).success, false)
   })
@@ -178,13 +186,13 @@ async function main() {
     const T = '"nexus_data"."ds_x"'
     const base = { id: 'w', title: '', dataset: 'emp', filters: [], sort: 'value_desc', limit: 5, size: 'small' } as const
     const kpi = buildWidgetSql(widgetSchema.parse({ ...base, type: 'kpi', measure: { agg: 'count' } }), T, cols)
-    assert.equal(kpi.text, `SELECT count(*) AS value FROM ${T}`)
+    assert.equal(kpi.text, `SELECT count(*) AS value FROM ${T} WHERE "_nexus_deleted_at" IS NULL`)
     const bar = buildWidgetSql(
       widgetSchema.parse({ ...base, type: 'bar', measure: { agg: 'avg', column: 'salary' }, dimension: { column: 'department' }, filters: [{ column: 'email', op: 'contains', value: "x'; DROP TABLE t; --" }] }),
       T,
       cols
     )
-    assert.match(bar.text, /^SELECT "department"::text AS label, avg\("salary"::numeric\) AS value FROM .* WHERE "email"::text ILIKE '%' \|\| \$1 \|\| '%' GROUP BY 1 ORDER BY value DESC NULLS LAST, label ASC LIMIT 6$/)
+    assert.match(bar.text, /^SELECT "department"::text AS label, avg\("salary"::numeric\) AS value FROM .* WHERE "_nexus_deleted_at" IS NULL AND "email"::text ILIKE '%' \|\| \$1 \|\| '%' GROUP BY 1 ORDER BY value DESC NULLS LAST, label ASC LIMIT 6$/)
     assert.deepEqual(bar.params, ["x'; DROP TABLE t; --"], 'user values are parameters, never SQL')
     const line = buildWidgetSql(widgetSchema.parse({ ...base, type: 'line', measure: { agg: 'count' }, dimension: { column: 'hire_date', grain: 'month' }, filters: [{ column: 'salary', op: 'gte', value: '1000' }] }), T, cols)
     assert.match(line.text, /to_char\(date_trunc\('month', "hire_date"::timestamptz\), 'YYYY-MM'\) AS label/)
@@ -211,6 +219,158 @@ async function main() {
     assert.deepEqual(inferColumns([{ a: null }], { a: 'integer' }), [{ name: 'a', type: 'integer' }], 'all-null column takes the hint')
   })
 
+  await test('graph: v1 step lists convert; cycles, orphans and branchless router edges are rejected', () => {
+    const v2 = definitionSchema.parse(base)
+    assert.equal(v2.schemaVersion, 2)
+    assert.equal(v2.edges.length, base.steps.length - 1)
+    const src = { id: 'a', type: 'source', dataSourceId: 'x', table: 't' }
+    const dst = { id: 'z', type: 'destination', kind: 'dataset', datasetName: 'out', mode: 'append' }
+    const map = { id: 'm', type: 'map', fields: [{ from: 'a', to: 'a' }] }
+    const flt = { id: 'f', type: 'filter', conditions: [{ field: 'a', operator: 'is_not_empty' }] }
+    const ok = (d: object) => definitionSchema.safeParse(d).success
+    assert.equal(ok({ nodes: [src, dst], edges: [{ id: '1', from: 'a', to: 'z' }] }), true)
+    assert.equal(ok({ nodes: [src, map, flt, dst], edges: [{ id: '1', from: 'a', to: 'm' }, { id: '2', from: 'm', to: 'f' }, { id: '3', from: 'f', to: 'm' }, { id: '4', from: 'f', to: 'z' }] }), false, 'cycle')
+    assert.equal(ok({ nodes: [src, map, dst], edges: [{ id: '1', from: 'a', to: 'z' }] }), false, 'orphan')
+    const router = { id: 'r', type: 'router', branches: [{ id: 'b1', label: 'Finance', condition: { match: 'all', conditions: [{ field: 'a', operator: 'equals', value: 'x' }] } }] }
+    assert.equal(ok({ nodes: [src, router, dst], edges: [{ id: '1', from: 'a', to: 'r' }, { id: '2', from: 'r', to: 'z' }] }), false, 'router edge needs a branch')
+    assert.equal(ok({ nodes: [src, dst, { ...dst, id: 'z2', datasetName: 'other', mode: 'upsert' }], edges: [{ id: '1', from: 'a', to: 'z' }, { id: '2', from: 'a', to: 'z2' }] }), false, 'upsert needs keys')
+  })
+
+  await test('graph: router branches, fan-out to two destinations, per-destination columns', async () => {
+    const def = definitionSchema.parse({
+      nodes: [
+        { id: 'src', type: 'source', dataSourceId: 'x', table: 'PA0001' },
+        { id: 'r', type: 'router', branches: [{ id: 'act', label: 'Active', condition: { match: 'all', conditions: [{ field: 'STAT', operator: 'equals', value: 'Active' }] } }] },
+        { id: 'm', type: 'map', fields: [{ from: 'PERNR', to: 'code', transforms: [{ fn: 'trim' }] }] },
+        { id: 'active', type: 'destination', kind: 'dataset', datasetName: 'active_emp', mode: 'append' },
+        { id: 'others', type: 'destination', kind: 'dataset', datasetName: 'other_emp', mode: 'append' },
+        { id: 'all', type: 'destination', kind: 'dataset', datasetName: 'all_emp', mode: 'append' },
+      ],
+      edges: [
+        { id: '1', from: 'src', to: 'r' },
+        { id: '2', from: 'r', to: 'm', branch: 'act' },
+        { id: '3', from: 'm', to: 'active' },
+        { id: '4', from: 'r', to: 'others', branch: 'otherwise' },
+        { id: '5', from: 'src', to: 'all' },
+      ],
+    })
+    const written: Record<string, Record<string, unknown>[]> = {}
+    const res = await runEngine(def, { read: async () => hr, write: async (s, rows) => ((written[s.id] = rows), { written: rows.length, target: s.id }) })
+    assert.equal(res.status, 'success')
+    assert.equal(written.active.length, 4)
+    assert.deepEqual(Object.keys(written.active[0]), ['code'], 'map-declared columns for the mapped branch')
+    assert.equal(written.others.length, 1)
+    assert.equal(written.all.length, hr.length, 'fan-out: every row reaches the unconditional destination')
+    assert.equal(res.rowsWritten, 4 + 1 + hr.length)
+    assert.equal(res.destinations?.length, 3)
+  })
+
+  await test('business rules node: exclude, set, calculate, route, approval holds, hit counts', () => {
+    const rules = new Map<string, BusinessRule>([
+      ['inactive', { id: 'inactive', name: 'Drop inactive', version: 1, when: { match: 'all', conditions: [{ field: 'STAT', operator: 'equals', value: 'Inactive', valueField: '' }], groups: [] }, then: [{ type: 'exclude' }], otherwise: [] }],
+      ['label', { id: 'label', name: 'Label', version: 1, when: { match: 'all', conditions: [], groups: [] }, then: [{ type: 'set_field', field: 'source', value: 'SAP-{PERNR}' }, { type: 'calculate', field: 'salary_k', expr: { kind: 'op', op: '/', left: { kind: 'fn', fn: 'coalesce', args: [{ kind: 'field', name: 'SAL' }, { kind: 'value', value: '0' }] }, right: { kind: 'value', value: '1000' } } }], otherwise: [] }],
+      ['big', { id: 'big', name: 'Big salary', version: 1, when: { match: 'all', conditions: [{ field: 'SAL', operator: 'greater_than', value: '5000000', valueField: '' }], groups: [] }, then: [{ type: 'require_approval', reason: 'over 5M' }, { type: 'notify', message: 'Check', emails: [] }], otherwise: [{ type: 'route', branch: 'Normal' }] }],
+    ])
+    const def = definitionSchema.parse({
+      nodes: [
+        { id: 'src', type: 'source', dataSourceId: 'x', table: 't' },
+        { id: 'rules', type: 'rules', ruleIds: ['inactive', 'label', 'big'] },
+        { id: 'r', type: 'router', branches: [{ id: 'n', label: 'Normal' }] },
+        { id: 'normal', type: 'destination', kind: 'dataset', datasetName: 'normal', mode: 'append' },
+        { id: 'other', type: 'destination', kind: 'dataset', datasetName: 'other', mode: 'append' },
+      ],
+      edges: [{ id: '1', from: 'src', to: 'rules' }, { id: '2', from: 'rules', to: 'r' }, { id: '3', from: 'r', to: 'normal', branch: 'n' }, { id: '4', from: 'r', to: 'other', branch: 'otherwise' }],
+    })
+    const rows = [
+      { PERNR: '1', STAT: 'Active', SAL: '3000000' },
+      { PERNR: '2', STAT: 'Inactive', SAL: '1' },
+      { PERNR: '3', STAT: 'Active', SAL: '9000000' },
+    ]
+    const totals = newRunTotals(def)
+    const out = transformChunk(def, rows, totals, { ...emptyContext(), rules })
+    const normal = out.byDestination.get('normal')!
+    assert.equal(normal.length, 1)
+    assert.deepEqual(normal[0], { PERNR: '1', STAT: 'Active', SAL: '3000000', source: 'SAP-1', salary_k: 3000 }, '_nexus_route is stripped before writing')
+    assert.equal(out.byDestination.get('other')!.length, 0)
+    assert.equal(out.rejects.length, 1)
+    assert.equal(out.rejects[0].kind, 'approval')
+    assert.equal(totals.heldCount, 1)
+    assert.equal(totals.ruleHits['big:then'], 1, 'notify/trigger counts per branch')
+    const replay = transformChunk(def, [rows[2]], newRunTotals(def), { ...emptyContext(), rules, approved: true }, {}, { startNodeId: 'rules' })
+    assert.equal(replay.byDestination.get('other')!.length, 1, 'an approved row continues downstream')
+  })
+
+  await test('data quality: new rule types and severities (warnings are written and flagged)', () => {
+    const def = definitionSchema.parse({
+      nodes: [
+        { id: 'src', type: 'source', dataSourceId: 'x', table: 't' },
+        {
+          id: 'v',
+          type: 'validate',
+          rules: [
+            { field: 'nik', rule: 'nik' },
+            { field: 'npwp', rule: 'npwp', severity: 'warning' },
+            { field: 'phone', rule: 'phone', severity: 'warning' },
+            { field: 'end', rule: 'compare', otherField: 'start', operator: 'greater_or_equal' },
+            { field: 'org', rule: 'exists_in', value: 'organization.org_code' },
+            { field: 'start', rule: 'not_future', severity: 'info' },
+          ],
+        },
+        { id: 'd', type: 'destination', kind: 'dataset', datasetName: 'emp', mode: 'append' },
+      ],
+      edges: [{ id: '1', from: 'src', to: 'v' }, { id: '2', from: 'v', to: 'd' }],
+    })
+    const ctx = { ...emptyContext(), lookups: new Map([['organization.org_code', new Set(['HR', 'FIN'])]]) }
+    const good = { nik: '3174094512900001', npwp: '01.234.567.8-901.000', phone: '0812-3456-7890', start: '2020-01-01', end: '2021-01-01', org: 'HR' }
+    const rows = [
+      good,
+      { ...good, nik: '317409', org: 'XX' },
+      { ...good, end: '2019-01-01' },
+      { ...good, npwp: '123', phone: '12', start: '2999-01-01', end: '2999-02-01' },
+    ]
+    const totals = newRunTotals(def)
+    const out = transformChunk(def, rows, totals, ctx)
+    assert.equal(out.byDestination.get('d')!.length, 2, 'good row + warning-only row are written')
+    assert.equal(out.rejects.length, 2)
+    assert.deepEqual(out.rejects[0].errors.map((e) => e.split(' ')[0]), ['nik', 'org'])
+    assert.match(out.rejects[1].errors[0], /end .* must be greater or equal start/)
+    assert.equal(out.flags.length, 1)
+    assert.equal(out.flags[0].severity, 'warning')
+    assert.equal(out.flags[0].errors.length, 3)
+  })
+
+  await test('HR pack: manager checks find unknown managers and reporting cycles', () => {
+    const issues = checkManagers([
+      { key: 'A', manager: 'B' },
+      { key: 'B', manager: 'C' },
+      { key: 'C', manager: 'A' },
+      { key: 'D', manager: 'A' },
+      { key: 'E', manager: 'Z' },
+      { key: 'F', manager: 'F' },
+    ])
+    const by = (k: string) => issues.filter((i) => i.key === k).map((i) => i.message)
+    assert.ok(by('A').some((m) => /circular/.test(m)) && by('B').length && by('C').length, 'A→B→C→A flagged')
+    assert.equal(by('D').length, 0, 'reporting into a cycle is not itself a cycle')
+    assert.match(by('E')[0], /not an employee/)
+    // The top of the hierarchy has no manager; reporting to them is fine.
+    assert.deepEqual(checkManagers([{ key: 'CEO', manager: '' }, { key: 'X', manager: 'CEO' }, { key: 'Y', manager: 'X' }]), [])
+    assert.match(by('F')[0], /own manager/)
+  })
+
+  await test('transforms: concat, split, regex extract, hash, number format, conditional, coalesce, timezone', () => {
+    const row = { first: 'Budi', last: 'Santoso', alt: 'b@x.io', email: '' }
+    const t = (fn: string, value: unknown, ...args: string[]) => applyTransform(value, { fn: fn as never, args }, row)
+    assert.equal(t('concat', 'x', '{first} {last}'), 'Budi Santoso')
+    assert.equal(t('split', 'a;b;c', ';', '-1'), 'c')
+    assert.equal(t('regex_extract', 'EMP-00123/HR', '(\\d+)'), '00123')
+    assert.equal(t('hash', 'abc'), 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad')
+    assert.equal(t('number_format', 1234567.5, '2', 'id-ID'), '1.234.567,50')
+    assert.equal(t('conditional', 'A', 'equals', 'A', 'Active', 'Inactive'), 'Active')
+    assert.equal(t('conditional', 'X', 'equals', 'A', 'Active', '{value}'), 'X')
+    assert.equal(t('coalesce', '', 'email', 'alt'), 'b@x.io')
+    assert.equal(t('format_date', '2026-10-08T20:30:00Z', 'yyyy-MM-dd HH:mm', '', 'Asia/Jakarta'), '2026-10-09 03:30')
+  })
+
   await test('governance: masks and suggestions', () => {
     assert.equal(maskValue('budi@kmplus.co.id', 'partial'), '••••o.id')
     assert.equal(maskValue('12345678', 'full'), '••••••')
@@ -222,6 +382,116 @@ async function main() {
     assert.equal(suggestColumnPolicy('base_salary').classification, 'sensitive')
     assert.equal(suggestColumnPolicy('nik').classification, 'personal')
     assert.equal(suggestColumnPolicy('department').mask, 'none')
+  })
+
+  await test('file upload: headers, detected types, cells and request parts', () => {
+    assert.deepEqual(columnNames(['Employee ID', 'Name', 'name', '', '_nexus_x']), ['Employee ID', 'Name', 'name_2', 'column_4', 'nexus_x'])
+    assert.equal(detectType(['1', '42', null]), 'integer')
+    assert.equal(detectType(['007', '12']), 'text', 'leading zeros stay text (employee numbers, NIK)')
+    assert.equal(detectType(['1.5', '2']), 'numeric')
+    assert.equal(detectType(['2024-01-31', null]), 'date')
+    assert.equal(detectType(['2024-01-31T08:00:00Z', '2024-02-01']), 'timestamp')
+    assert.equal(detectType(['true', 'FALSE']), 'boolean')
+    assert.equal(detectType(['Finance', '12']), 'text')
+    assert.equal(cellText(new Date(Date.UTC(2024, 0, 31))), '2024-01-31')
+    assert.equal(cellText('  '), null)
+    assert.equal(cellText(12.5), '12.5')
+    const sheet = toSheet([['Code', 'Joined'], ['E1', new Date(Date.UTC(2023, 4, 2))], [null, null], ['E2', '2024-01-01']])
+    assert.deepEqual(sheet.rows, [['E1', '2023-05-02'], ['E2', '2024-01-01']], 'blank rows dropped')
+    assert.deepEqual(sheet.columns.map((c) => c.type), ['text', 'date'])
+    const parts = uploadParts(Array.from({ length: 25 }, (_, i) => [String(i)]), 1_000_000, 10)
+    assert.deepEqual(parts.map((x) => x.length), [10, 10, 5])
+    assert.equal(cleanTableName('Org Chart 2026.xlsx'), 'org_chart_2026')
+    assert.equal(cleanTableName('2026 export.csv'), 't_2026_export')
+  })
+
+  await test('row-level policies: SQL binds values, checks columns, fails closed', () => {
+    const filters: RowFilter[] = [
+      { roles: ['analyst'], column: 'company_code', operator: 'equals', value: "KMP'; DROP" },
+      { roles: ['analyst'], column: 'grade', operator: 'in_list', value: 'A, B' },
+    ]
+    const params: unknown[] = []
+    const sql = rowFilterSql(filters, new Set(['company_code', 'grade']), (v) => (params.push(v), `$${params.length}`))
+    assert.deepEqual(sql, ['"company_code"::text = $1', '"grade"::text = ANY($2::text[])'])
+    assert.deepEqual(params, ["KMP'; DROP", ['A', 'B']])
+    assert.throws(() => rowFilterSql(filters, new Set(['grade']), () => '$1'), /no longer has/)
+    assert.equal(rowAllowed({ company_code: "KMP'; DROP", grade: 'B' }, filters), true)
+    assert.equal(rowAllowed({ company_code: 'KMI', grade: 'B' }, filters), false)
+    const T = '"nexus_data"."t"'
+    const cols = [{ name: 'company_code', type: 'text' }, { name: 'grade', type: 'text' }]
+    const w = buildWidgetSql(widgetSchema.parse({ id: 'w', title: 't', dataset: 'd', type: 'kpi', measure: { agg: 'count' } }), T, cols, { rowFilters: [filters[0]] })
+    assert.equal(w.text, `SELECT count(*) AS value FROM ${T} WHERE "_nexus_deleted_at" IS NULL AND "company_code"::text = $1`)
+  })
+
+  await test('Data API: query parsing, SQL, cursors and pages', () => {
+    const cols = ['employee_code', 'department', 'salary']
+    const q = parseApiQuery(new URLSearchParams('fields=employee_code&filter[department]=Finance&filter[salary][gte]=100&updated_since=2026-10-01&limit=2&cursor=' + encodeCursor(41)), cols)
+    assert.deepEqual(q.fields, ['employee_code'])
+    assert.equal(q.afterId, 41)
+    const { text, params } = buildApiSql('"nexus_data"."t"', Object.fromEntries(cols.map((c) => [c, c])), q, { datasetColumns: cols })
+    assert.match(text, /^SELECT "_nexus_id" AS "__cursor", "employee_code" AS "employee_code" FROM "nexus_data"\."t" WHERE "_nexus_deleted_at" IS NULL AND "department"::text = \$1 AND .* >= \$2::numeric AND "_nexus_loaded_at" >= \$3::timestamptz AND "_nexus_id" > \$4 ORDER BY "_nexus_id" LIMIT \$5$/)
+    assert.deepEqual(params, ['Finance', '100', '2026-10-01', 41, 3])
+    const domain = buildApiSql('"t"', { employee_code: 'PERNR' }, parseApiQuery(new URLSearchParams('filter[employee_code]=E1'), ['employee_code']), { datasetColumns: ['PERNR'] })
+    assert.match(domain.text, /"PERNR" AS "employee_code"/, 'domain entities expose canonical names')
+    const bad = (qs: string, re: RegExp) => assert.throws(() => parseApiQuery(new URLSearchParams(qs), cols), (e: Error) => e instanceof ApiQueryError && re.test(e.message))
+    bad('fields=password', /Unknown field/)
+    bad('filter[x" OR 1 --]=1', /Unknown field/)
+    bad('filter[salary][like]=1', /Unknown operator/)
+    bad('limit=5000', /limit must be/)
+    bad('cursor=abc', /Invalid cursor/)
+    bad('updated_since=yesterday', /updated_since/)
+    assert.equal(decodeCursor(encodeCursor(7)), 7)
+    const page = toPage([{ __cursor: '5', a: 1 }, { __cursor: '6', a: 2 }, { __cursor: '7', a: 3 }], 2)
+    assert.deepEqual(page.data, [{ a: 1 }, { a: 2 }])
+    assert.equal(decodeCursor(page.next_cursor!), 6)
+    assert.equal(toPage([{ __cursor: '5', a: 1 }], 2).next_cursor, null)
+  })
+
+  await test('catalog: keys, search and freshness; cache refresh schedules', () => {
+    assert.deepEqual(parseKey('source:src_1:hr.employees'), { kind: 'source_table', dataSourceId: 'src_1', tableName: 'hr.employees' })
+    assert.deepEqual(parseKey('dataset:employees'), { kind: 'dataset', datasetName: 'employees' })
+    assert.equal(parseKey('nope'), null)
+    const item = { name: 'employees', description: 'Active staff from SAP', columns: [{ name: 'nik', doc: 'National ID' }], tags: ['hr'], owner: 'budi@kmplus.co.id', sourceName: 'SAP' }
+    assert.equal(matchesSearch(item, 'national #hr'), true)
+    assert.equal(matchesSearch(item, 'budi sap'), true)
+    assert.equal(matchesSearch(item, 'payroll'), false)
+    const now = Date.parse('2026-10-11T10:00:00Z')
+    assert.equal(freshness('2026-10-11T09:48:00Z', now), '12 min ago')
+    assert.equal(freshness(null, now), 'never loaded')
+    assert.equal(refreshSchedule('15m').cron, '*/15 * * * *')
+    assert.equal(refreshSchedule('after_pipeline').type, 'manual')
+  })
+
+  await test('business rules: shared evaluation and readable summary', () => {
+    const rule: BusinessRule = {
+      id: 'r1',
+      name: 'Finance hires',
+      version: 1,
+      when: { match: 'all', conditions: [{ field: 'department', operator: 'equals', value: 'Finance', valueField: '' }], groups: [] },
+      then: [{ type: 'set_field', field: 'label', value: '{name} (fin)' }, { type: 'require_approval', reason: 'payroll' }],
+      otherwise: [{ type: 'exclude' }],
+    }
+    const hit = applyRules([rule], { name: 'Ana', department: 'Finance' })
+    assert.equal(hit.row.label, 'Ana (fin)')
+    assert.equal(hit.hold, 'Finance hires: payroll')
+    assert.deepEqual(hit.hits, ['r1:then'])
+    assert.equal(applyRules([rule], { name: 'Ana', department: 'Finance' }, { approved: true }).hold, null)
+    assert.equal(applyRules([rule], { department: 'IT' }).keep, false)
+    assert.equal(describeRule(rule), 'IF department equals "Finance" THEN set label = "{name} (fin)", hold for approval (payroll) ELSE drop the row')
+  })
+
+  await test('credentials: per-workspace keys, bound to source and workspace', async () => {
+    process.env.NEXUS_ENCRYPTION_KEY = randomBytes(32).toString('base64')
+    const { decryptCredentials, encryptCredentials, needsReencryption } = await import('@/lib/security/credentials')
+    const sealed = encryptCredentials('src_1', { password: 's3cret' }, 'ws_a')
+    assert.equal(sealed.__enc, 'v2')
+    assert.equal(sealed.ws, 'ws_a')
+    assert.deepEqual(decryptCredentials('src_1', sealed), { password: 's3cret' })
+    assert.throws(() => decryptCredentials('src_2', sealed), /could not be decrypted/, 'bound to the data source')
+    assert.throws(() => decryptCredentials('src_1', { ...sealed, ws: 'ws_b' }), /could not be decrypted/, 'bound to the workspace')
+    assert.throws(() => decryptCredentials('src_1', sealed, 'ws_b'), /another workspace/)
+    assert.equal(needsReencryption(sealed), false)
+    assert.equal(needsReencryption({ password: 'plain' }), true)
   })
 
   console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`)

@@ -148,6 +148,16 @@ export const CONNECTOR_CATALOG: ConnectorDefinition[] = [
       { key: 'allowSelfSigned', label: 'Allow self-signed TLS (true/false)', type: 'text', required: false, placeholder: 'false' },
     ],
   },
+  {
+    slug: 'file',
+    name: 'File Upload (CSV / Excel)',
+    category: 'Files',
+    version: '1.0.0',
+    description: 'Upload CSV or Excel (.xlsx) files, for example HR exports and org charts; each sheet becomes a table pipelines can read',
+    includedByDefault: true,
+    premium: false,
+    credentialFields: [],
+  },
 ]
 
 export function getConnectorDefinition(slug: string): ConnectorDefinition | undefined {

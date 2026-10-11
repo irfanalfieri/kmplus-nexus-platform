@@ -1,7 +1,8 @@
 /**
- * Seals every data_sources.credentials row with the current NEXUS_ENCRYPTION_KEY:
- * plaintext rows (saved before encryption existed) and rows sealed with a
- * retired key (after a rotation). Rows already on the current key are skipped,
+ * Seals every data_sources.credentials row with its workspace's data key under
+ * the current NEXUS_ENCRYPTION_KEY: plaintext rows (saved before encryption
+ * existed), v1 rows (master key, before per-workspace keys) and rows sealed
+ * with a retired key (after a rotation). Rows already on the current key are skipped,
  * so it is safe to re-run.
  *
  * Dry run:  node --env-file=.env.local --experimental-strip-types scripts/reencrypt-credentials.mjs
@@ -25,7 +26,7 @@ if (!connectionString) {
 const client = new pg.Client({ connectionString, ssl: scriptSsl() })
 await client.connect()
 
-const { rows } = await client.query('select "id", "credentials" from "data_sources"')
+const { rows } = await client.query('select "id", "workspaceId", "credentials" from "data_sources"')
 const pending = rows.filter((r) => needsReencryption(r.credentials))
 const plaintext = pending.filter((r) => !isEncryptedCredentials(r.credentials)).length
 console.log(
@@ -38,7 +39,7 @@ if (apply && pending.length) {
   try {
     for (const row of pending) {
       const plain = decryptCredentials(row.id, row.credentials ?? {})
-      const sealed = encryptCredentials(row.id, plain)
+      const sealed = encryptCredentials(row.id, plain, row.workspaceId)
       // Round-trip check before writing.
       if (JSON.stringify(decryptCredentials(row.id, sealed)) !== JSON.stringify(plain)) {
         throw new Error(`Round-trip check failed for ${row.id}`)

@@ -11,7 +11,8 @@ import { can } from '@/lib/auth/permissions'
 import { recordAudit } from '@/lib/audit'
 import { currentKeyId } from '@/lib/security/credentials'
 import { policyInputSchema, suggestColumnPolicy, type ColumnPolicy } from '@/lib/governance/definition'
-import { applyMasks, masksFor } from '@/lib/governance/masking'
+import { accessFor, applyMasks } from '@/lib/governance/masking'
+import { rowFiltersSchema } from '@/lib/governance/row-filters'
 import { applyRetentionFor } from '@/lib/governance/retention'
 import { readDatasetSample } from '@/lib/pipelines/io'
 import { guard } from '@/lib/server-action'
@@ -44,6 +45,7 @@ async function getGovernanceOverviewImpl() {
         columns: datasetPolicies.columns,
         retentionDays: datasetPolicies.retentionDays,
         retentionAppliedAt: datasetPolicies.retentionAppliedAt,
+        rowFilters: datasetPolicies.rowFilters,
         updatedAt: datasetPolicies.updatedAt,
         updatedByEmail: user.email,
       })
@@ -73,6 +75,7 @@ async function getGovernanceOverviewImpl() {
       lastLoadedAt: d.lastLoadedAt,
       columns,
       policy: policy ? { retentionDays: policy.retentionDays, retentionAppliedAt: policy.retentionAppliedAt, updatedAt: policy.updatedAt, updatedByEmail: policy.updatedByEmail } : null,
+      rowFilters: rowFiltersSchema.safeParse(policy?.rowFilters ?? []).data ?? [],
       columnPolicies: effective,
     }
   })
@@ -87,8 +90,9 @@ async function getGovernanceOverviewImpl() {
       members: members.length,
       membersWith2fa: members.filter((m) => m.twoFactorEnabled).length,
       dataSources: sources.length,
-      encryptedSources: envelopes.filter((e) => e?.__enc === 'v1').length,
-      onCurrentKey: keyId ? envelopes.filter((e) => e?.kid === keyId).length : null,
+      encryptedSources: envelopes.filter((e) => e?.__enc === 'v1' || e?.__enc === 'v2').length,
+      // Current master key and a per-workspace data key (v2); v1 rows need reencrypt-credentials.
+      onCurrentKey: keyId ? envelopes.filter((e) => e?.kid === keyId && e?.__enc === 'v2').length : null,
       auditEvents7d: auditCount[0]?.n ?? 0,
       datasets: datasets.length,
       datasetsWithPolicy: policies.length,
@@ -112,18 +116,21 @@ async function saveDatasetPolicyImpl(input: z.input<typeof policyInputSchema>) {
   if (!dataset) throw new Error('Dataset not found')
   const known = new Set(((dataset.columns as DatasetColumn[]) ?? []).map((c) => c.name))
   const columns = Object.fromEntries(Object.entries(data.columns).filter(([name]) => known.has(name)))
+  const unknown = data.rowFilters.find((f) => !known.has(f.column))
+  if (unknown) throw new Error(`Row filter column "${unknown.column}" is not in dataset ${data.datasetName}.`)
+  const rowFilters = data.rowFilters
   const now = new Date()
   await db
     .insert(datasetPolicies)
-    .values({ id: newId('pol'), workspaceId: ctx.workspaceId, datasetName: data.datasetName, columns, retentionDays: data.retentionDays, updatedBy: ctx.userId })
+    .values({ id: newId('pol'), workspaceId: ctx.workspaceId, datasetName: data.datasetName, columns, retentionDays: data.retentionDays, rowFilters, updatedBy: ctx.userId })
     .onConflictDoUpdate({
       target: [datasetPolicies.workspaceId, datasetPolicies.datasetName],
-      set: { columns, retentionDays: data.retentionDays, retentionAppliedAt: null, updatedBy: ctx.userId, updatedAt: now },
+      set: { columns, retentionDays: data.retentionDays, rowFilters, retentionAppliedAt: null, updatedBy: ctx.userId, updatedAt: now },
     })
   const masked = Object.entries(columns).filter(([, p]) => p.mask !== 'none').map(([n, p]) => `${n}:${p.mask}`)
   let deleted = 0
   if (data.retentionDays != null) deleted = await applyRetentionFor(ctx.workspaceId, data.datasetName, data.retentionDays)
-  await recordAudit(ctx, { action: 'UPDATE_POLICY', resource: 'dataset', resourceId: data.datasetName, changes: { masked, retentionDays: data.retentionDays, retentionDeleted: deleted } })
+  await recordAudit(ctx, { action: 'UPDATE_POLICY', resource: 'dataset', resourceId: data.datasetName, changes: { masked, retentionDays: data.retentionDays, retentionDeleted: deleted, rowFilters: rowFilters.map((f) => `${f.roles.join('/')}: ${f.column} ${f.operator}`) } })
   revalidatePath('/dashboard')
   return { masked: masked.length, retentionDeleted: deleted }
 }
@@ -138,9 +145,11 @@ async function previewMaskedDatasetImpl(rawName: string) {
     .where(and(eq(nexusDatasets.workspaceId, ctx.workspaceId), eq(nexusDatasets.name, name)))
     .limit(1)
   if (!dataset) throw new Error('Dataset not found')
-  const masks = await masksFor(ctx.workspaceId, name, 'viewer')
+  const { masks, rowFilters } = await accessFor(ctx.workspaceId, name, 'analyst')
   await recordAudit(ctx, { action: 'VIEW_DATA', resource: 'dataset', resourceId: dataset.id, changes: { what: 'masked_preview', dataset: name } })
-  return { rows: applyMasks(await readDatasetSample(dataset.tableName, 10), masks), masked: Object.keys(masks) }
+  const columns = await db.select({ columns: nexusDatasets.columns }).from(nexusDatasets).where(eq(nexusDatasets.id, dataset.id)).limit(1)
+  const names = ((columns[0]?.columns as DatasetColumn[]) ?? []).map((c) => c.name)
+  return { rows: applyMasks(await readDatasetSample(dataset.tableName, 10, rowFilters, names), masks), masked: Object.keys(masks), rowFilters: rowFilters.length }
 }
 
 // ── Right to erasure (UU PDP) ────────────────────────────────────────────────

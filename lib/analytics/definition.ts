@@ -65,6 +65,8 @@ export interface WidgetResult {
   rows: { label: string | null; value: number | null }[]
   /** True when more groups exist than the limit. */
   truncated: boolean
+  /** When the dataset was last loaded (DV-4). */
+  lastLoadedAt?: Date | string | null
 }
 
 export function describeMeasure(w: Pick<Widget, 'measure'>) {

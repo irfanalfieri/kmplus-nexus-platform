@@ -7,7 +7,8 @@ import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { eraseRecords, findErasureMatches, getGovernanceOverview, listErasureColumns, previewMaskedDataset, saveDatasetPolicy } from '@/lib/actions/governance'
 import { CLASSIFICATIONS, CLASSIFICATION_INFO, MASKS, MASK_INFO, type ColumnPolicy } from '@/lib/governance/definition'
-import { ROLE_INFO } from '@/lib/auth/permissions'
+import { ROLES, ROLE_INFO } from '@/lib/auth/permissions'
+import { ROW_FILTER_OPERATORS, type RowFilter } from '@/lib/governance/row-filters'
 import { SampleTable } from '@/components/pipelines/pipeline-editor'
 
 type Overview = Awaited<ReturnType<typeof getGovernanceOverview>>
@@ -201,10 +202,11 @@ function PolicyEditor({ dataset, canManage, onSaved }: { dataset: Dataset; canMa
     Object.fromEntries(Object.entries(dataset.columnPolicies).map(([k, v]) => [k, { classification: v.classification, mask: v.mask }]))
   )
   const [retention, setRetention] = useState<number | null>(dataset.policy?.retentionDays ?? null)
+  const [rowFilters, setRowFilters] = useState<RowFilter[]>(dataset.rowFilters)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
-  const [preview, setPreview] = useState<{ rows: Record<string, unknown>[]; masked: string[] } | null>(null)
+  const [preview, setPreview] = useState<{ rows: Record<string, unknown>[]; masked: string[]; rowFilters: number } | null>(null)
   const suggestedCount = useMemo(() => Object.values(dataset.columnPolicies).filter((p) => p.suggested && p.mask !== 'none').length, [dataset])
 
   const set = (name: string, patch: Partial<ColumnPolicy>) => setColumns((c) => ({ ...c, [name]: { ...c[name], ...patch } }))
@@ -214,7 +216,7 @@ function PolicyEditor({ dataset, canManage, onSaved }: { dataset: Dataset; canMa
     setError('')
     setNotice('')
     try {
-      const res = await saveDatasetPolicy({ datasetName: dataset.name, columns, retentionDays: retention })
+      const res = await saveDatasetPolicy({ datasetName: dataset.name, columns, retentionDays: retention, rowFilters })
       setNotice(`Policy saved: ${res.masked} masked column${res.masked === 1 ? '' : 's'}${res.retentionDeleted ? `, ${res.retentionDeleted.toLocaleString()} rows older than the retention limit deleted` : ''}.`)
       onSaved()
     } catch (err) {
@@ -330,13 +332,75 @@ function PolicyEditor({ dataset, canManage, onSaved }: { dataset: Dataset; canMa
         </span>
       </label>
 
+      <RowFiltersEditor filters={rowFilters} columns={dataset.columns.map((c) => c.name)} canManage={canManage} onChange={setRowFilters} />
+
       {preview && (
         <div className="space-y-2">
-          <div className="text-sm font-medium">What an analyst sees (first rows, saved policy){preview.masked.length ? `: ${preview.masked.join(', ')} masked` : ': nothing masked'}</div>
+          <div className="text-sm font-medium">
+            What an analyst sees (first rows, saved policy){preview.masked.length ? `: ${preview.masked.join(', ')} masked` : ': nothing masked'}
+            {preview.rowFilters ? ` · ${preview.rowFilters} row filter${preview.rowFilters === 1 ? '' : 's'} applied` : ''}
+          </div>
           <SampleTable rows={preview.rows} />
         </div>
       )}
     </div>
+  )
+}
+
+function RowFiltersEditor({ filters, columns, canManage, onChange }: { filters: RowFilter[]; columns: string[]; canManage: boolean; onChange: (f: RowFilter[]) => void }) {
+  const update = (i: number, patch: Partial<RowFilter>) => onChange(filters.map((f, j) => (j === i ? { ...f, ...patch } : f)))
+  return (
+    <section className="space-y-2 rounded-md border border-border p-3" aria-label="Row-level access">
+      <div>
+        <div className="text-sm font-medium">Row-level access</div>
+        <p className="text-xs text-muted-foreground">
+          Limit which rows a role sees, e.g. analysts only see their company. Applies to previews, Analytics and the Data API. Several filters for the same role all apply.
+        </p>
+      </div>
+      {filters.length === 0 && <p className="text-xs text-muted-foreground">Every role sees every row.</p>}
+      {filters.map((f, i) => (
+        <div key={i} className="flex flex-wrap items-center gap-2 rounded-md bg-muted/30 p-2 text-sm">
+          <span className="text-xs text-muted-foreground">Roles</span>
+          <div className="flex flex-wrap gap-1">
+            {ROLES.map((r) => (
+              <button
+                key={r}
+                type="button"
+                disabled={!canManage}
+                aria-pressed={f.roles.includes(r)}
+                onClick={() => update(i, { roles: f.roles.includes(r) ? f.roles.filter((x) => x !== r) : [...f.roles, r] })}
+                className={`rounded border px-1.5 py-0.5 text-xs ${f.roles.includes(r) ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground'}`}
+              >
+                {ROLE_INFO[r].label}
+              </button>
+            ))}
+          </div>
+          <span className="text-xs text-muted-foreground">only see rows where</span>
+          <select className={selectClass} value={f.column} disabled={!canManage} onChange={(e) => update(i, { column: e.target.value })} aria-label="Column">
+            <option value="">column…</option>
+            {columns.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+          <select className={selectClass} value={f.operator} disabled={!canManage} onChange={(e) => update(i, { operator: e.target.value as RowFilter['operator'] })} aria-label="Operator">
+            {ROW_FILTER_OPERATORS.map((o) => (
+              <option key={o} value={o}>{o === 'in_list' ? 'is one of' : o.replace('_', ' ')}</option>
+            ))}
+          </select>
+          <Input className="h-8 w-48" value={f.value} disabled={!canManage} placeholder={f.operator === 'in_list' ? 'KMP, KMI' : 'value'} onChange={(e) => update(i, { value: e.target.value })} aria-label="Value" />
+          {canManage && (
+            <Button size="sm" variant="ghost" onClick={() => onChange(filters.filter((_, j) => j !== i))} aria-label="Remove row filter">
+              Remove
+            </Button>
+          )}
+        </div>
+      ))}
+      {canManage && (
+        <Button size="sm" variant="outline" onClick={() => onChange([...filters, { roles: ['analyst'], column: columns[0] ?? '', operator: 'equals', value: '' }])} disabled={filters.length >= 20}>
+          Add row filter
+        </Button>
+      )}
+    </section>
   )
 }
 

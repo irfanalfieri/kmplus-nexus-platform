@@ -5,7 +5,7 @@ import { History, Loader2, RotateCcw, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { getRunRejects, listRuns, listVersions, restoreVersion } from '@/lib/actions/pipelines'
-import type { StepStat } from '@/lib/pipelines/engine'
+import type { DestinationResult, StepStat } from '@/lib/pipelines/engine'
 import { useCan } from '@/components/workspace/workspace-context'
 
 type Run = Awaited<ReturnType<typeof listRuns>>[number]
@@ -47,7 +47,8 @@ export default function RunHistory({ pipelineId, pipelineName, currentVersion, o
   const [runs, setRuns] = useState<Run[]>([])
   const [versions, setVersions] = useState<Version[]>([])
   const [selected, setSelected] = useState<Run | null>(null)
-  const [rejects, setRejects] = useState<{ row: unknown; errors: unknown }[]>([])
+  const [rejects, setRejects] = useState<{ row: unknown; errors: unknown; severity: string | null; kind: string | null; status: string | null }[]>([])
+  const [showLog, setShowLog] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [restoring, setRestoring] = useState<number | null>(null)
@@ -74,7 +75,8 @@ export default function RunHistory({ pipelineId, pipelineName, currentVersion, o
   }, [load])
 
   useEffect(() => {
-    if (!selected?.recordsError || !canPreview) return setRejects([])
+    const flagged = Number((selected?.executionDetails as { flagged?: number } | null)?.flagged ?? 0)
+    if (!selected || (!selected.recordsError && !flagged) || !canPreview) return setRejects([])
     let cancelled = false
     getRunRejects(selected.id, 100).then((r) => !cancelled && setRejects(r)).catch(() => !cancelled && setRejects([]))
     return () => {
@@ -97,7 +99,12 @@ export default function RunHistory({ pipelineId, pipelineName, currentVersion, o
 
   const details = (selected?.executionDetails ?? {}) as {
     steps?: StepStat[]
-    destination?: { target: string; rowCount?: number }
+    destination?: DestinationResult
+    destinations?: DestinationResult[]
+    flagged?: number
+    held?: number
+    log?: { at: string; level: 'info' | 'warn' | 'error'; message: string }[]
+    errorStack?: string
     attempts?: { attempt: number; error?: string; at: string }[]
     watermark?: { column: string; value: string | null }
   }
@@ -109,7 +116,7 @@ export default function RunHistory({ pipelineId, pipelineName, currentVersion, o
           <History className="h-5 w-5 text-primary" />
           <div className="flex-1">
             <div className="font-semibold">{pipelineName}</div>
-            <div className="text-xs text-muted-foreground">Run and version history · current v{currentVersion}</div>
+            <div className="text-xs text-muted-foreground">Run and version history · {currentVersion ? `published v${currentVersion}` : 'never published'}</div>
           </div>
           <Button size="sm" variant={tab === 'runs' ? 'default' : 'outline'} onClick={() => setTab('runs')}>Runs</Button>
           <Button size="sm" variant={tab === 'versions' ? 'default' : 'outline'} onClick={() => setTab('versions')}>Versions</Button>
@@ -138,7 +145,7 @@ export default function RunHistory({ pipelineId, pipelineName, currentVersion, o
                       </div>
                       <div className="mt-1 text-xs text-muted-foreground">{formatWhen(r.startTime)}</div>
                       <div className="text-xs">
-                        {r.recordsSuccess ?? 0} written / {r.recordsProcessed ?? 0} read{r.recordsError ? ` · ${r.recordsError} rejected` : ''}
+                        {r.recordsSuccess ?? 0} written / {r.recordsProcessed ?? 0} read{r.recordsError ? ` · ${r.recordsError} quarantined` : ''}
                       </div>
                     </button>
                   </li>
@@ -159,13 +166,26 @@ export default function RunHistory({ pipelineId, pipelineName, currentVersion, o
                       </div>
                     ))}
                   </div>
-                  {details.destination && (
+                  {(details.destinations ?? (details.destination ? [details.destination] : [])).map((d) => (
+                    <p key={d.id ?? d.target} className="text-sm text-muted-foreground">
+                      Wrote {d.written != null && <>{d.written.toLocaleString()} rows </>}to <span className="font-medium text-foreground">{d.target}</span>
+                      {d.rowCount != null && ` (now ${d.rowCount.toLocaleString()} rows)`}
+                    </p>
+                  ))}
+                  {(!!details.flagged || !!details.held) && (
                     <p className="text-sm text-muted-foreground">
-                      Wrote to <span className="font-medium text-foreground">{details.destination.target}</span>
-                      {details.destination.rowCount != null && ` (now ${details.destination.rowCount.toLocaleString()} rows)`}
+                      {!!details.held && <>{details.held.toLocaleString()} row(s) held for approval. </>}
+                      {!!details.flagged && <>{details.flagged.toLocaleString()} row(s) written with warnings. </>}
+                      Review them in Data Quality.
                     </p>
                   )}
                   {selected.errorMessage && <p className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{selected.errorMessage}</p>}
+                  {details.errorStack && (
+                    <details className="rounded-md border border-border p-2 text-xs">
+                      <summary className="cursor-pointer text-muted-foreground">Stack trace (admins only)</summary>
+                      <pre className="mt-2 max-h-60 overflow-auto whitespace-pre-wrap font-mono">{details.errorStack}</pre>
+                    </details>
+                  )}
                   {details.attempts && details.attempts.length > 1 && (
                     <div className="rounded-md border border-border p-3 text-sm">
                       <div className="mb-1 font-medium">{details.attempts.length} attempts</div>
@@ -191,7 +211,7 @@ export default function RunHistory({ pipelineId, pipelineName, currentVersion, o
                           <th className="py-2">Step</th>
                           <th>In</th>
                           <th>Out</th>
-                          <th>Rejected</th>
+                          <th>Quarantined</th>
                           <th>Time</th>
                         </tr>
                       </thead>
@@ -211,15 +231,32 @@ export default function RunHistory({ pipelineId, pipelineName, currentVersion, o
                       </tbody>
                     </table>
                   )}
+                  {details.log && details.log.length > 0 && (
+                    <div className="rounded-md border border-border">
+                      <button className="w-full p-2 text-left text-sm font-medium" onClick={() => setShowLog((v) => !v)} aria-expanded={showLog}>
+                        Run log ({details.log.length} lines) {showLog ? '▾' : '▸'}
+                      </button>
+                      {showLog && (
+                        <ol className="max-h-64 overflow-auto border-t border-border p-2 font-mono text-xs">
+                          {details.log.map((l, i) => (
+                            <li key={i} className={l.level === 'error' ? 'text-destructive' : l.level === 'warn' ? 'text-amber-700 dark:text-amber-300' : 'text-muted-foreground'}>
+                              {formatWhen(l.at)} {l.level.toUpperCase()} {l.message}
+                            </li>
+                          ))}
+                        </ol>
+                      )}
+                    </div>
+                  )}
                   {rejects.length > 0 && (
                     <div>
-                      <div className="mb-2 text-sm font-medium">Rejected rows ({selected.recordsError}{selected.recordsError! > rejects.length ? `, showing ${rejects.length}` : ''})</div>
+                      <div className="mb-2 text-sm font-medium">Quarantined and flagged rows (showing {rejects.length}; fix or approve them in Data Quality)</div>
                       {/* Rows rejected at different steps have different columns, so show each row's own fields. */}
                       <div className="max-h-80 overflow-auto rounded-md border border-border">
                         <table className="w-full text-xs">
                           <thead className="sticky top-0 bg-muted">
                             <tr>
                               <th className="px-2 py-1 text-left font-medium">Step</th>
+                              <th className="px-2 py-1 text-left font-medium">Kind</th>
                               <th className="px-2 py-1 text-left font-medium">Why</th>
                               <th className="px-2 py-1 text-left font-medium">Row</th>
                             </tr>
@@ -231,7 +268,8 @@ export default function RunHistory({ pipelineId, pipelineName, currentVersion, o
                               return (
                                 <tr key={i} className="border-t border-border/60 align-top">
                                   <td className="whitespace-nowrap px-2 py-1">{step?.label ?? '—'}</td>
-                                  <td className="px-2 py-1 text-destructive">{(errs.messages ?? []).join('; ')}</td>
+                                  <td className="whitespace-nowrap px-2 py-1">{r.kind === 'flag' ? `flag (${r.severity})` : r.kind === 'approval' ? 'approval' : 'invalid'}{r.status && r.status !== 'open' ? ` · ${r.status}` : ''}</td>
+                                  <td className={`px-2 py-1 ${r.kind === 'flag' ? 'text-amber-700 dark:text-amber-300' : 'text-destructive'}`}>{(errs.messages ?? []).join('; ')}</td>
                                   <td className="px-2 py-1 font-mono">
                                     {Object.entries(r.row as Record<string, unknown>)
                                       .map(([k, v]) => `${k}: ${v === null || v === undefined ? '∅' : typeof v === 'object' ? JSON.stringify(v) : String(v)}`)
@@ -254,12 +292,13 @@ export default function RunHistory({ pipelineId, pipelineName, currentVersion, o
             {versions.map((v) => (
               <li key={v.version} className="flex items-center gap-3 border-b border-border/60 p-3 text-sm">
                 <Badge variant={v.version === currentVersion ? 'default' : 'outline'}>v{v.version}</Badge>
+                {v.version === currentVersion ? <Badge variant="secondary">live</Badge> : v.publishedAt ? <span className="text-xs text-muted-foreground">published {formatWhen(v.publishedAt)}</span> : <span className="text-xs text-muted-foreground">draft</span>}
                 <span className="flex-1">{v.changes}</span>
                 <span className="text-xs text-muted-foreground">{formatWhen(v.createdAt)}</span>
                 {v.version !== currentVersion && canEdit && (
                   <Button size="sm" variant="outline" disabled={restoring !== null} onClick={() => restore(v.version)}>
                     {restoring === v.version ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-1 h-4 w-4" />}
-                    Restore
+                    Restore &amp; publish
                   </Button>
                 )}
               </li>

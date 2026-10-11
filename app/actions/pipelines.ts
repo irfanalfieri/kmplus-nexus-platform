@@ -1,19 +1,19 @@
 'use server'
 
 import { z } from 'zod'
-import { and, desc, eq, inArray } from 'drizzle-orm'
+import { and, desc, eq, inArray, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { newId, requireWorkspace, type WorkspaceContext } from '@/lib/auth/session'
 import { recordAudit, type AuditAction } from '@/lib/audit'
 import { db } from '@/lib/db'
-import { dataSources, executionLogs, nexusDatasets, pipelineRunRejects, pipelineVersions, pipelines } from '@/lib/db/schema'
-import { definitionSchema, scheduleSchema, type PipelineSchedule } from '@/lib/pipelines/definition'
+import { businessRules, dataSources, executionLogs, nexusDatasets, pipelineRunRejects, pipelineVersions, pipelines } from '@/lib/db/schema'
+import { definitionSchema, scheduleSchema, type PipelineDefinition, type PipelineSchedule } from '@/lib/pipelines/definition'
 import { assertValidSchedule, nextRunAt } from '@/lib/pipelines/schedule'
 import { currentWatermark, parseDefinition, testRunDefinition } from '@/lib/pipelines/runner'
 import { cancelRun, enqueueRun } from '@/lib/pipelines/jobs'
 import { nudgeWorker, startWorker } from '@/lib/pipelines/worker'
 import { readDatasetSample } from '@/lib/pipelines/io'
-import { applyMasks, masksFor } from '@/lib/governance/masking'
+import { applyMasks, accessFor } from '@/lib/governance/masking'
 import type { SchemaScanResult } from '@/lib/connectors/types'
 import { guard } from '@/lib/server-action'
 
@@ -48,6 +48,8 @@ async function listPipelinesImpl() {
       enabled: pipelines.enabled,
       version: pipelines.version,
       config: pipelines.config,
+      draftConfig: pipelines.draftConfig,
+      draftVersion: pipelines.draftVersion,
       schedule: pipelines.schedule,
       lastRunAt: pipelines.lastRunAt,
       lastRunStatus: pipelines.lastRunStatus,
@@ -69,7 +71,7 @@ async function listPipelinesImpl() {
 /** Everything the builder needs to populate pickers (no credentials). */
 async function getBuilderOptionsImpl() {
   const ctx = await requireWorkspace()
-  const [sources, datasets] = await Promise.all([
+  const [sources, datasets, rules] = await Promise.all([
     db
       .select({ id: dataSources.id, name: dataSources.name, sourceType: dataSources.sourceType, status: dataSources.status, config: dataSources.config })
       .from(dataSources)
@@ -80,6 +82,11 @@ async function getBuilderOptionsImpl() {
       .from(nexusDatasets)
       .where(eq(nexusDatasets.workspaceId, ctx.workspaceId))
       .orderBy(nexusDatasets.name),
+    db
+      .select({ id: businessRules.id, name: businessRules.name, description: businessRules.description, body: businessRules.body })
+      .from(businessRules)
+      .where(eq(businessRules.workspaceId, ctx.workspaceId))
+      .orderBy(businessRules.name),
   ])
   return {
     dataSources: sources.map((s) => {
@@ -97,6 +104,12 @@ async function getBuilderOptionsImpl() {
       }
     }),
     datasets: datasets.map((d) => ({ ...d, columns: d.columns as { name: string; type: string }[] })),
+    rules: rules.map((r) => {
+      const body = (r.body ?? {}) as { then?: { type: string; field?: string }[]; otherwise?: { type: string; field?: string }[] }
+      // Fields the rule writes (set_field / calculate), so the editor knows the columns after a rules step.
+      const outputs = [...(body.then ?? []), ...(body.otherwise ?? [])].filter((a) => (a.type === 'set_field' || a.type === 'calculate') && a.field).map((a) => a.field as string)
+      return { id: r.id, name: r.name, description: r.description ?? '', outputs: [...new Set(outputs)] }
+    }),
   }
 }
 
@@ -104,12 +117,20 @@ async function listRunsImpl(rawPipelineId: string, limit = 20) {
   const ctx = await requireWorkspace()
   const pipelineId = idSchema.parse(rawPipelineId)
   await getOwned(ctx, pipelineId)
-  return db
+  const runs = await db
     .select()
     .from(executionLogs)
     .where(and(eq(executionLogs.pipelineId, pipelineId), eq(executionLogs.workspaceId, ctx.workspaceId)))
     .orderBy(desc(executionLogs.createdAt))
     .limit(Math.min(limit, 100))
+  // Stack traces are for admins only (MN-3).
+  if (ctx.role === 'admin') return runs
+  return runs.map((r) => {
+    const details = (r.executionDetails ?? {}) as Record<string, unknown>
+    if (!details.errorStack) return r
+    const { errorStack: _hidden, ...rest } = details
+    return { ...r, executionDetails: rest }
+  })
 }
 
 /** Rejected rows contain source data, so they need data:preview. */
@@ -117,7 +138,7 @@ async function getRunRejectsImpl(rawRunId: string, limit = 100) {
   const ctx = await requireWorkspace('data:preview')
   const runId = idSchema.parse(rawRunId)
   return db
-    .select({ id: pipelineRunRejects.id, row: pipelineRunRejects.row, errors: pipelineRunRejects.errors })
+    .select({ id: pipelineRunRejects.id, row: pipelineRunRejects.row, errors: pipelineRunRejects.errors, severity: pipelineRunRejects.severity, kind: pipelineRunRejects.kind, status: pipelineRunRejects.status })
     .from(pipelineRunRejects)
     .where(and(eq(pipelineRunRejects.runId, runId), eq(pipelineRunRejects.workspaceId, ctx.workspaceId)))
     .limit(Math.min(limit, 500))
@@ -132,7 +153,7 @@ async function listVersionsImpl(rawPipelineId: string) {
   const pipelineId = idSchema.parse(rawPipelineId)
   await getOwned(ctx, pipelineId)
   return db
-    .select({ version: pipelineVersions.version, changes: pipelineVersions.changes, createdAt: pipelineVersions.createdAt })
+    .select({ version: pipelineVersions.version, changes: pipelineVersions.changes, createdAt: pipelineVersions.createdAt, publishedAt: pipelineVersions.publishedAt })
     .from(pipelineVersions)
     .where(and(eq(pipelineVersions.pipelineId, pipelineId), eq(pipelineVersions.workspaceId, ctx.workspaceId)))
     .orderBy(desc(pipelineVersions.version))
@@ -148,10 +169,10 @@ async function getDatasetPreviewImpl(rawName: string) {
     .limit(1)
   if (!dataset) throw new Error('Dataset not found')
   // Dataset policies: masked columns for roles without data:unmasked (GV-5).
-  const masks = await masksFor(ctx.workspaceId, dataset.name, ctx.role)
+  const { masks, rowFilters } = await accessFor(ctx.workspaceId, dataset.name, ctx.role)
   const masked = Object.keys(masks)
-  await audit(ctx, 'VIEW_DATA', dataset.id, { what: 'dataset_preview', dataset: dataset.name, ...(masked.length ? { masked } : {}) }, 'dataset')
-  const rows = applyMasks(await readDatasetSample(dataset.tableName, 50), masks)
+  await audit(ctx, 'VIEW_DATA', dataset.id, { what: 'dataset_preview', dataset: dataset.name, ...(masked.length ? { masked } : {}), ...(rowFilters.length ? { rowFilters: rowFilters.length } : {}) }, 'dataset')
+  const rows = applyMasks(await readDatasetSample(dataset.tableName, 50, rowFilters, ((dataset.columns as { name: string }[]) ?? []).map((c) => c.name)), masks)
   return { name: dataset.name, rowCount: dataset.rowCount, lastLoadedAt: dataset.lastLoadedAt, rows, masked }
 }
 
@@ -165,36 +186,74 @@ const saveInput = z.object({
   schedule: scheduleSchema,
   enabled: z.boolean().default(false),
   changeNote: z.string().trim().max(200).optional(),
+  /** Publish this version right away (it becomes what runs). */
+  publish: z.boolean().default(false),
 })
 
+/** Data sources a definition reads from or writes to (delete guard, quick lookups). */
+function sourceRefs(definition: PipelineDefinition) {
+  const source = definition.nodes.find((n) => n.type === 'source')
+  const dest = definition.nodes.find((n) => n.type === 'destination' && n.kind === 'datasource')
+  return {
+    sourceId: source?.type === 'source' ? source.dataSourceId : null,
+    destinationId: dest?.type === 'destination' && dest.kind === 'datasource' ? dest.dataSourceId : null,
+  }
+}
+
+/**
+ * Saves the definition as a new immutable version (VC-1). The version is a
+ * draft until published (VC-2): scheduled and manual runs keep executing the
+ * published one. Name, description and schedule apply immediately.
+ */
 async function savePipelineAs(ctx: WorkspaceContext, input: z.input<typeof saveInput>) {
   const data = saveInput.parse(input)
   const definition = parseDefinition(data.definition)
   assertValidSchedule(data.schedule)
-  const source = definition.steps[0]
-  const dest = definition.steps[definition.steps.length - 1]
   const now = new Date()
-  const common = {
-    name: data.name,
-    description: data.description,
-    config: definition,
-    schedule: data.schedule,
-    enabled: data.enabled,
-    sourceId: source.type === 'source' ? source.dataSourceId : null,
-    destinationId: dest.type === 'destination' && dest.kind === 'datasource' ? dest.dataSourceId : null,
-    nextRunAt: computeNextRun(data.enabled, data.schedule),
-    updatedAt: now,
-  }
 
   let id = data.id
   let version = 1
+  let published = 0
   if (id) {
     const existing = await getOwned(ctx, id)
-    version = (existing.version ?? 1) + 1
-    await db.update(pipelines).set({ ...common, version }).where(and(eq(pipelines.id, id), eq(pipelines.workspaceId, ctx.workspaceId)))
+    const [{ max }] = await db
+      .select({ max: sql<number>`coalesce(max(${pipelineVersions.version}), 0)::int` })
+      .from(pipelineVersions)
+      .where(eq(pipelineVersions.pipelineId, id))
+    version = Math.max(max, existing.version ?? 0, existing.draftVersion ?? 0) + 1
+    published = existing.version ?? 0
+    await db
+      .update(pipelines)
+      .set({
+        name: data.name,
+        description: data.description,
+        schedule: data.schedule,
+        enabled: published > 0 ? data.enabled : false,
+        nextRunAt: published > 0 ? computeNextRun(data.enabled, data.schedule) : null,
+        draftConfig: definition,
+        draftVersion: version,
+        updatedAt: now,
+      })
+      .where(and(eq(pipelines.id, id), eq(pipelines.workspaceId, ctx.workspaceId)))
   } else {
     id = newId('pipe')
-    await db.insert(pipelines).values({ id, userId: ctx.userId, workspaceId: ctx.workspaceId, ...common, version, status: 'draft' })
+    // Never published yet (version 0): the definition is stored as the first draft.
+    await db.insert(pipelines).values({
+      id,
+      userId: ctx.userId,
+      workspaceId: ctx.workspaceId,
+      name: data.name,
+      description: data.description,
+      config: definition,
+      schedule: data.schedule,
+      enabled: false,
+      version: 0,
+      draftConfig: definition,
+      draftVersion: version,
+      status: 'draft',
+      ...sourceRefs(definition),
+      updatedAt: now,
+    })
   }
 
   await db.insert(pipelineVersions).values({
@@ -207,13 +266,68 @@ async function savePipelineAs(ctx: WorkspaceContext, input: z.input<typeof saveI
     changes: data.changeNote || (version === 1 ? 'Created' : 'Updated'),
     createdBy: ctx.userId,
   })
-  await audit(ctx, version === 1 ? 'CREATE' : 'UPDATE', id, { version })
+  await audit(ctx, version === 1 ? 'CREATE' : 'UPDATE', id, { version, draft: true })
+  if (data.publish) await publishVersion(ctx, id, version, data.enabled)
   revalidatePath('/dashboard')
-  return { id, version }
+  return { id, version, published: data.publish }
+}
+
+/** Makes a version the one that runs. */
+async function publishVersion(ctx: WorkspaceContext, id: string, version: number, enabled?: boolean) {
+  const existing = await getOwned(ctx, id)
+  const [snapshot] = await db
+    .select()
+    .from(pipelineVersions)
+    .where(and(eq(pipelineVersions.pipelineId, id), eq(pipelineVersions.workspaceId, ctx.workspaceId), eq(pipelineVersions.version, version)))
+    .limit(1)
+  if (!snapshot) throw new Error(`Version ${version} not found`)
+  const definition = parseDefinition((snapshot.config as { definition: unknown }).definition)
+  const schedule = scheduleSchema.parse(existing.schedule ?? {})
+  const isEnabled = enabled ?? existing.enabled ?? false
+  const now = new Date()
+  await db
+    .update(pipelines)
+    .set({
+      config: definition,
+      version,
+      // The draft is gone once it is the published version.
+      ...(existing.draftVersion !== null && existing.draftVersion <= version ? { draftConfig: null, draftVersion: null } : {}),
+      ...sourceRefs(definition),
+      enabled: isEnabled,
+      nextRunAt: computeNextRun(isEnabled, schedule),
+      status: existing.status === 'draft' ? 'active' : existing.status,
+      updatedAt: now,
+    })
+    .where(and(eq(pipelines.id, id), eq(pipelines.workspaceId, ctx.workspaceId)))
+  await db.update(pipelineVersions).set({ publishedAt: now, publishedBy: ctx.userId }).where(eq(pipelineVersions.id, snapshot.id))
+  await audit(ctx, 'PUBLISH', id, { version })
 }
 
 async function savePipelineImpl(input: z.input<typeof saveInput>) {
   return savePipelineAs(await requireWorkspace('pipelines:edit'), input)
+}
+
+/** Publishes the pipeline's draft (or a given version). */
+async function publishPipelineImpl(rawId: string, rawVersion?: number) {
+  const ctx = await requireWorkspace('pipelines:edit')
+  const id = idSchema.parse(rawId)
+  const existing = await getOwned(ctx, id)
+  const version = rawVersion !== undefined ? z.number().int().min(1).parse(rawVersion) : existing.draftVersion
+  if (!version) throw new Error('There is no draft to publish.')
+  await publishVersion(ctx, id, version)
+  revalidatePath('/dashboard')
+  return { version }
+}
+
+/** Drops unpublished edits; the draft versions stay in history. */
+async function discardDraftImpl(rawId: string) {
+  const ctx = await requireWorkspace('pipelines:edit')
+  const id = idSchema.parse(rawId)
+  const existing = await getOwned(ctx, id)
+  if (!existing.version) throw new Error('This pipeline was never published; delete it instead.')
+  await db.update(pipelines).set({ draftConfig: null, draftVersion: null, updatedAt: new Date() }).where(and(eq(pipelines.id, id), eq(pipelines.workspaceId, ctx.workspaceId)))
+  await audit(ctx, 'UPDATE', id, { discardedDraft: existing.draftVersion })
+  revalidatePath('/dashboard')
 }
 
 async function setPipelineEnabledImpl(rawId: string, rawEnabled: boolean) {
@@ -221,6 +335,7 @@ async function setPipelineEnabledImpl(rawId: string, rawEnabled: boolean) {
   const id = idSchema.parse(rawId)
   const enabled = z.boolean().parse(rawEnabled)
   const existing = await getOwned(ctx, id)
+  if (enabled && !existing.version) throw new Error('Publish the pipeline before turning its schedule on.')
   const schedule = scheduleSchema.parse(existing.schedule ?? {})
   await db
     .update(pipelines)
@@ -244,6 +359,7 @@ async function deletePipelineImpl(rawId: string) {
   revalidatePath('/dashboard')
 }
 
+/** Rollback (VC-4): an older version becomes a new version and is published; history is never rewritten. */
 async function restoreVersionImpl(rawId: string, rawVersion: number) {
   const ctx = await requireWorkspace('pipelines:edit')
   const id = idSchema.parse(rawId)
@@ -264,6 +380,7 @@ async function restoreVersionImpl(rawId: string, rawVersion: number) {
     schedule: scheduleSchema.parse(cfg.schedule ?? {}),
     enabled: existing.enabled ?? false,
     changeNote: `Restored v${version}`,
+    publish: true,
   })
 }
 
@@ -271,6 +388,8 @@ async function restoreVersionImpl(rawId: string, rawVersion: number) {
 async function runPipelineNowImpl(rawId: string) {
   const ctx = await requireWorkspace('pipelines:run')
   const id = idSchema.parse(rawId)
+  const existing = await getOwned(ctx, id)
+  if (!existing.version) throw new Error('Publish the pipeline before running it. Test runs work on the draft.')
   const outcome = await enqueueRun(id, scope(ctx), 'manual')
   if (outcome.status === 'queued') startWorker()
   revalidatePath('/dashboard')
@@ -297,12 +416,13 @@ async function retryPipelineRunImpl(rawRunId: string) {
   const ctx = await requireWorkspace('pipelines:run')
   const runId = idSchema.parse(rawRunId)
   const [run] = await db
-    .select({ pipelineId: executionLogs.pipelineId, status: executionLogs.status })
+    .select({ pipelineId: executionLogs.pipelineId, status: executionLogs.status, trigger: executionLogs.trigger })
     .from(executionLogs)
     .where(and(eq(executionLogs.id, runId), eq(executionLogs.workspaceId, ctx.workspaceId)))
     .limit(1)
   if (!run) throw new Error('Run not found')
   if (run.status === 'queued' || run.status === 'running') throw new Error('This run is still in progress.')
+  if (run.trigger === 'replay') throw new Error('This was a quarantine replay. Replay the rows again from Data Quality.')
   const outcome = await enqueueRun(run.pipelineId, scope(ctx), 'manual')
   if (outcome.status === 'queued') startWorker()
   await audit(ctx, 'RETRY', run.pipelineId, { previousRunId: runId, runId: outcome.runId })
@@ -421,4 +541,12 @@ export async function testPipeline(...args: Parameters<typeof testPipelineImpl>)
 
 export async function resetSyncPosition(...args: Parameters<typeof resetSyncPositionImpl>) {
   return guard(() => resetSyncPositionImpl(...args))
+}
+
+export async function publishPipeline(...args: Parameters<typeof publishPipelineImpl>) {
+  return guard(() => publishPipelineImpl(...args))
+}
+
+export async function discardDraft(...args: Parameters<typeof discardDraftImpl>) {
+  return guard(() => discardDraftImpl(...args))
 }

@@ -1,13 +1,18 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes } from 'node:crypto'
 
 /**
  * Data source credential encryption (AES-256-GCM).
  *
  * Credentials are stored in `data_sources.credentials` (JSONB) as an envelope:
- *   { "__enc": "v1", "kid": <key id>, "iv": <b64>, "tag": <b64>, "data": <b64> }
+ *   { "__enc": "v2", "kid": <master key id>, "ws": <workspace id>, "iv": <b64>, "tag": <b64>, "data": <b64> }
  *
- * The data source id is bound as additional authenticated data (AAD), so a
- * ciphertext copied onto another row fails to decrypt.
+ * Envelope encryption per workspace (GV-4): each workspace has its own data
+ * key, derived from the master key with HKDF-SHA256 (info = workspace id), so
+ * no two workspaces share a key and a master-key rotation re-keys every
+ * workspace. The data source id and workspace id are bound as additional
+ * authenticated data (AAD): a ciphertext copied onto another row or into
+ * another workspace fails to decrypt. Older "v1" envelopes (master key used
+ * directly) are still read; reencrypt-credentials upgrades them to v2.
  *
  * Keys (32 random bytes, base64):
  *   NEXUS_ENCRYPTION_KEY           current key; all new writes use it
@@ -26,13 +31,16 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:
  */
 
 const ALGORITHM = 'aes-256-gcm'
-const VERSION = 'v1'
+const VERSION = 'v2'
+const LEGACY = 'v1'
 
 export type StoredCredentials = Record<string, unknown>
 
 interface EncryptedEnvelope {
-  __enc: typeof VERSION
+  __enc: typeof VERSION | typeof LEGACY
   kid?: string
+  /** v2: workspace whose data key sealed it. */
+  ws?: string
   iv: string
   tag: string
   data: string
@@ -72,33 +80,37 @@ export function currentKeyId() {
   return currentKey().id
 }
 
-function aadFor(sourceId: string) {
-  return Buffer.from(`data_sources:${sourceId}`, 'utf8')
+function aadFor(sourceId: string, workspaceId?: string) {
+  return Buffer.from(workspaceId ? `data_sources:${sourceId}:workspace:${workspaceId}` : `data_sources:${sourceId}`, 'utf8')
+}
+
+/** The workspace's data key: HKDF-SHA256(master key, info = workspace id). */
+function workspaceKey(master: Key, workspaceId: string): Buffer {
+  return Buffer.from(hkdfSync('sha256', master.bytes, Buffer.from('kmplus-nexus/workspace-data-key'), Buffer.from(workspaceId, 'utf8'), 32))
 }
 
 export function isEncryptedCredentials(value: unknown): value is EncryptedEnvelope {
-  return (
-    !!value &&
-    typeof value === 'object' &&
-    (value as { __enc?: unknown }).__enc === VERSION &&
-    typeof (value as EncryptedEnvelope).data === 'string'
-  )
+  if (!value || typeof value !== 'object') return false
+  const env = value as { __enc?: unknown; data?: unknown; ws?: unknown }
+  return (env.__enc === VERSION && typeof env.ws === 'string' || env.__enc === LEGACY) && typeof env.data === 'string'
 }
 
-/** True when a stored value is plaintext or sealed with a key other than the current one. */
+/** True when a stored value is plaintext, a v1 envelope, or sealed with a key other than the current one. */
 export function needsReencryption(stored: unknown) {
-  return !isEncryptedCredentials(stored) || stored.kid !== currentKeyId()
+  return !isEncryptedCredentials(stored) || stored.__enc !== VERSION || stored.kid !== currentKeyId()
 }
 
-export function encryptCredentials(sourceId: string, credentials: StoredCredentials): EncryptedEnvelope {
+export function encryptCredentials(sourceId: string, credentials: StoredCredentials, workspaceId: string): EncryptedEnvelope {
+  if (!workspaceId) throw new Error('encryptCredentials needs the workspace id')
   const key = currentKey()
   const iv = randomBytes(12)
-  const cipher = createCipheriv(ALGORITHM, key.bytes, iv)
-  cipher.setAAD(aadFor(sourceId))
+  const cipher = createCipheriv(ALGORITHM, workspaceKey(key, workspaceId), iv)
+  cipher.setAAD(aadFor(sourceId, workspaceId))
   const data = Buffer.concat([cipher.update(JSON.stringify(credentials ?? {}), 'utf8'), cipher.final()])
   return {
     __enc: VERSION,
     kid: key.id,
+    ws: workspaceId,
     iv: iv.toString('base64'),
     tag: cipher.getAuthTag().toString('base64'),
     data: data.toString('base64'),
@@ -107,8 +119,9 @@ export function encryptCredentials(sourceId: string, credentials: StoredCredenti
 
 function tryDecrypt(key: Key, sourceId: string, stored: EncryptedEnvelope): StoredCredentials | null {
   try {
-    const decipher = createDecipheriv(ALGORITHM, key.bytes, Buffer.from(stored.iv, 'base64'))
-    decipher.setAAD(aadFor(sourceId))
+    const v2 = stored.__enc === VERSION
+    const decipher = createDecipheriv(ALGORITHM, v2 ? workspaceKey(key, stored.ws!) : key.bytes, Buffer.from(stored.iv, 'base64'))
+    decipher.setAAD(aadFor(sourceId, v2 ? stored.ws : undefined))
     decipher.setAuthTag(Buffer.from(stored.tag, 'base64'))
     const plain = Buffer.concat([decipher.update(Buffer.from(stored.data, 'base64')), decipher.final()])
     return JSON.parse(plain.toString('utf8')) as StoredCredentials
@@ -122,9 +135,10 @@ function tryDecrypt(key: Key, sourceId: string, stored: EncryptedEnvelope): Stor
  * encryption (plain objects) are returned as-is so they keep working until
  * `scripts/reencrypt-credentials.mjs` re-saves them encrypted.
  */
-export function decryptCredentials(sourceId: string, stored: unknown): StoredCredentials {
+export function decryptCredentials(sourceId: string, stored: unknown, expectedWorkspaceId?: string): StoredCredentials {
   if (!stored || typeof stored !== 'object') return {}
   if (!isEncryptedCredentials(stored)) return stored as StoredCredentials
+  if (expectedWorkspaceId && stored.ws && stored.ws !== expectedWorkspaceId) throw new Error('Stored credentials belong to another workspace.')
 
   const keys = allKeys()
   const candidates = stored.kid ? keys.filter((k) => k.id === stored.kid) : keys

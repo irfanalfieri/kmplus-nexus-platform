@@ -1,0 +1,6 @@
+// Client entry points for app/actions/catalog.ts: each action's error is thrown
+// again with its real message (lib/action-result.ts). Import actions from here.
+import * as actions from '@/app/actions/catalog'
+import { unwrapActions } from '@/lib/action-result'
+
+export const { listCatalog, getCatalogSample, saveCatalogEntry, refreshCatalogCache, saveDomainMapping, deleteDomainMapping } = unwrapActions(actions)

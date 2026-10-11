@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { Activity, BarChart3, Database, LayoutDashboard, LogOut, Settings, Shield, Workflow, Zap } from 'lucide-react'
+import { Activity, BarChart3, BookOpen, Database, LayoutDashboard, LogOut, Scale, Settings, Shield, ShieldCheck, Workflow, Zap } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { authClient } from '@/lib/auth-client'
 import WorkspaceSwitcher from '@/components/workspace/workspace-switcher'
@@ -49,6 +49,24 @@ export default function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
           label="Pipelines"
           onClick={() => setActiveTab('pipelines')}
           active={activeTab === 'pipelines'}
+        />
+        <NavItem
+          icon={<Scale className="w-5 h-5" />}
+          label="Business Rules"
+          onClick={() => setActiveTab('rules')}
+          active={activeTab === 'rules'}
+        />
+        <NavItem
+          icon={<ShieldCheck className="w-5 h-5" />}
+          label="Data Quality"
+          onClick={() => setActiveTab('quality')}
+          active={activeTab === 'quality'}
+        />
+        <NavItem
+          icon={<BookOpen className="w-5 h-5" />}
+          label="Data Catalog"
+          onClick={() => setActiveTab('catalog')}
+          active={activeTab === 'catalog'}
         />
         <NavItem
           icon={<Activity className="w-5 h-5" />}

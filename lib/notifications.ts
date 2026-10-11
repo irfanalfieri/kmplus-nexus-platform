@@ -1,6 +1,6 @@
-import { eq } from 'drizzle-orm'
+import { and, eq, inArray } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { notifications, user } from '@/lib/db/schema'
+import { notifications, user, workspaceMembers } from '@/lib/db/schema'
 import { newId } from '@/lib/auth/session'
 import { appUrl, sendEmail as deliver, smtpConfigured } from '@/lib/email'
 
@@ -55,4 +55,31 @@ export async function notify(opts: {
     emailStatus,
   })
   return { emailStatus }
+}
+
+/**
+ * Business rule "notify" action: a bell notification for the workspace's
+ * admins and data stewards, and one email to the rule's recipients (or to
+ * those members when the rule lists none).
+ */
+export async function notifyRule(opts: { scope: { workspaceId: string; actorId: string }; pipelineId: string; runId: string; title: string; message: string; emails: string[] }) {
+  const members = await db
+    .select({ userId: workspaceMembers.userId, email: user.email })
+    .from(workspaceMembers)
+    .innerJoin(user, eq(user.id, workspaceMembers.userId))
+    .where(and(eq(workspaceMembers.workspaceId, opts.scope.workspaceId), inArray(workspaceMembers.role, ['admin', 'steward'])))
+  const to = opts.emails.length ? opts.emails : members.map((m) => m.email)
+  const lines = [opts.message, `Pipeline run ${opts.runId}`]
+  for (const [i, m] of members.entries()) {
+    await notify({
+      userId: m.userId,
+      workspaceId: opts.scope.workspaceId,
+      level: 'info',
+      title: opts.title,
+      lines,
+      pipelineId: opts.pipelineId,
+      runId: opts.runId,
+      email: i === 0 && to.length ? { to } : undefined,
+    })
+  }
 }

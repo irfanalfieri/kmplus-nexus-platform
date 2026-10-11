@@ -11,6 +11,9 @@ import PipelineDesignerLayer from './layers/pipeline-designer-layer'
 import SchedulerMonitoringLayer from './layers/scheduler-monitoring-layer'
 import AnalyticsDashboardLayer from './layers/analytics-dashboard-layer'
 import GovernanceLayer from './layers/governance-layer'
+import BusinessRulesLayer from './layers/business-rules-layer'
+import DataQualityLayer from './layers/data-quality-layer'
+import CatalogLayer from './layers/catalog-layer'
 import WorkspaceSettingsLayer from './layers/workspace-settings-layer'
 import { WorkspaceProvider, type WorkspaceInfo } from '@/components/workspace/workspace-context'
 
@@ -28,11 +31,14 @@ export default function DashboardLayout({ workspace }: { workspace: WorkspaceInf
           <div className="flex-1 overflow-auto">
             <div className="p-6">
               <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-                <TabsList className="mb-6 grid w-full grid-cols-4 bg-muted md:grid-cols-8">
+                <TabsList className="mb-6 flex h-auto w-full flex-wrap justify-start bg-muted">
                   <TabsTrigger value="overview">Overview</TabsTrigger>
                   <TabsTrigger value="sources">Data Sources</TabsTrigger>
                   <TabsTrigger value="connectors">Connectors</TabsTrigger>
                   <TabsTrigger value="pipelines">Pipelines</TabsTrigger>
+                  <TabsTrigger value="rules">Rules</TabsTrigger>
+                  <TabsTrigger value="quality">Data Quality</TabsTrigger>
+                  <TabsTrigger value="catalog">Catalog</TabsTrigger>
                   <TabsTrigger value="monitoring">Monitoring</TabsTrigger>
                   <TabsTrigger value="analytics">Analytics</TabsTrigger>
                   <TabsTrigger value="governance">Governance</TabsTrigger>
@@ -53,6 +59,18 @@ export default function DashboardLayout({ workspace }: { workspace: WorkspaceInf
 
                 <TabsContent value="pipelines" className="space-y-6">
                   <PipelineDesignerLayer />
+                </TabsContent>
+
+                <TabsContent value="rules" className="space-y-6">
+                  <BusinessRulesLayer />
+                </TabsContent>
+
+                <TabsContent value="quality" className="space-y-6">
+                  <DataQualityLayer />
+                </TabsContent>
+
+                <TabsContent value="catalog" className="space-y-6">
+                  <CatalogLayer />
                 </TabsContent>
 
                 <TabsContent value="monitoring" className="space-y-6">

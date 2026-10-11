@@ -1,5 +1,6 @@
 'use client'
 
+import { freshness } from '@/lib/catalog/definition'
 import { useCallback, useEffect, useState } from 'react'
 import { ArrowDown, ArrowUp, BarChart3, Database, Loader2, Pencil, Plus, RefreshCw, Save, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -252,6 +253,7 @@ export default function AnalyticsDashboardLayer({ onNavigate }: { onNavigate: (t
                             <p className="truncate text-xs text-muted-foreground">
                               {w.dataset}
                               {w.filters.length ? ` · ${w.filters.length} filter${w.filters.length === 1 ? '' : 's'}` : ''}
+                              {r?.ok && r.result.lastLoadedAt ? ` · loaded ${freshness(r.result.lastLoadedAt)}` : ''}
                             </p>
                           </div>
                           {list.canEdit && (

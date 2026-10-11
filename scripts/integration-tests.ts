@@ -13,11 +13,18 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { and, eq, inArray, like } from 'drizzle-orm'
 import { db, pool } from '@/lib/db'
-import { auditLogs, connectorInstalls, dashboards, dataSources, datasetPolicies, executionLogs, nexusDatasets, pipelineJobs, pipelineRunRejects, pipelines, pipelineVersions, session, user, verification, workspaceInvites, workspaceMembers, workspaces } from '@/lib/db/schema'
+import { apiKeys, auditLogs, businessRuleVersions, businessRules, catalogEntries, connectorInstalls, dashboards, dataSources, datasetPolicies, domainMappings, executionLogs, nexusDatasets, pipelineJobs, pipelineRunRejects, pipelines, pipelineVersions, session, user, verification, workspaceInvites, workspaceMembers, workspaces } from '@/lib/db/schema'
 import { acceptInvite, changeMemberRole, createInvite, getWorkspaceContext, listMembers, resetMemberTwoFactor, switchWorkspace } from '@/lib/actions/workspaces'
 import { installConnector } from '@/lib/actions/connectors'
-import { createDataSource, getDataSources, setDataSourceRole } from '@/lib/actions/data-sources'
-import { cancelPipelineRun, getDatasetPreview, getRunStatus, listPipelines, listRuns, retryPipelineRun, runPipelineNow, savePipeline } from '@/lib/actions/pipelines'
+import { createDataSource, deleteDataSource, getDataSources, setDataSourceRole, testConnection } from '@/lib/actions/data-sources'
+import { cancelPipelineRun, discardDraft, getDatasetPreview, getRunStatus, listPipelines, listRuns, publishPipeline, retryPipelineRun, runPipelineNow, savePipeline } from '@/lib/actions/pipelines'
+import { deleteRule, listRuleVersions, listRules, saveRule, testRule } from '@/lib/actions/rules'
+import { approveRows, dismissRows, fixRow, getQualityOverview, listQuarantine, replayRows } from '@/lib/actions/quality'
+import { getCatalogSample, listCatalog, saveCatalogEntry, saveDomainMapping } from '@/lib/actions/catalog'
+import { createApiKey, revokeApiKey } from '@/lib/actions/api-keys'
+import { uploadFilePart } from '@/lib/actions/files'
+import { GET as getDataset } from '@/app/api/v1/datasets/[name]/route'
+import { GET as getDomain } from '@/app/api/v1/domains/[entity]/route'
 import { eraseRecords, findErasureMatches, getGovernanceOverview, saveDatasetPolicy } from '@/lib/actions/governance'
 import { getDashboardData, listDashboards, previewWidget, saveDashboard } from '@/lib/actions/analytics'
 import { listAuditLogs } from '@/lib/actions/audit'
@@ -120,7 +127,7 @@ async function main() {
       assert.ok(mine, 'source listed')
       assert.equal('credentials' in mine!, false, 'credentials are never sent to the client')
       const [stored] = await db.select({ credentials: dataSources.credentials }).from(dataSources).where(eq(dataSources.id, sourceId))
-      assert.equal((stored.credentials as { __enc?: string }).__enc, 'v1', 'stored encrypted')
+      assert.equal((stored.credentials as { __enc?: string }).__enc, 'v2', 'stored encrypted with the workspace key')
       assert.ok(!JSON.stringify(stored.credentials).includes(FIXTURE_SCHEMA), 'no plaintext in the stored envelope')
     })
 
@@ -137,6 +144,7 @@ async function main() {
       setTestUser(admin)
       await switchWorkspace(adminWs)
       const saved = await savePipeline({
+        publish: true,
         name: `${RUN} employees`,
         definition: {
           steps: [
@@ -350,6 +358,224 @@ async function main() {
       assert.equal((await getRunStatus(retry.runId)).status, 'partial')
     })
 
+    await test('drafts: saving without publishing keeps the published version running', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const current = (await listPipelines()).find((p) => p.id === pipelineId)!
+      const published = current.version
+      await savePipeline({ id: pipelineId, name: current.name, definition: current.config as never, schedule: { type: 'manual' } as never, changeNote: 'draft only' })
+      const afterDraft = (await listPipelines()).find((p) => p.id === pipelineId)!
+      assert.equal(afterDraft.version, published, 'published version unchanged')
+      assert.ok(afterDraft.draftVersion && afterDraft.draftVersion > published!, 'draft recorded')
+      await discardDraft(pipelineId)
+      assert.equal((await listPipelines()).find((p) => p.id === pipelineId)!.draftVersion, null)
+      const fresh = await savePipeline({
+        name: `${RUN} never published`,
+        definition: { steps: [{ id: 's', type: 'source', dataSourceId: sourceId, table: 'employees', maxRows: 10 }, { id: 'd', type: 'destination', kind: 'dataset', datasetName: `${RUN}_np`, mode: 'replace' }] },
+        schedule: { type: 'manual' } as never,
+      })
+      await rejectsWith(() => runPipelineNow(fresh.id), /Publish the pipeline/)
+      await publishPipeline(fresh.id)
+      const run = await runPipelineNow(fresh.id)
+      assert.equal(run.status, 'queued')
+      takeAfterCallbacks()
+      await processJobs({})
+      assert.equal((await getRunStatus(run.runId)).status, 'success')
+    })
+
+    let ruleId = ''
+    let rulePipelineId = ''
+    await test('business rules: versions, tester, reuse guard, approval hold → approve → replay', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const body = {
+        when: { match: 'all' as const, conditions: [{ field: 'id', operator: 'less_or_equal' as const, value: '5', valueField: '' }], groups: [] },
+        then: [{ type: 'require_approval' as const, reason: 'first hires' }, { type: 'set_field' as const, field: 'label', value: 'early {code}' }],
+        otherwise: [{ type: 'set_field' as const, field: 'label', value: 'regular' }],
+      }
+      ruleId = (await saveRule({ name: `${RUN} early hires`, body })).id
+      await saveRule({ id: ruleId, name: `${RUN} early hires`, body, changeNote: 'v2' })
+      assert.equal((await listRuleVersions(ruleId)).length, 2)
+      const tested = await testRule({ body, rows: [{ id: 3, code: 'E3' }, { id: 9, code: 'E9' }] })
+      assert.deepEqual(tested.map((t) => [t.matched, t.result, t.output.label]), [[true, 'held for approval', 'early E3'], [false, 'kept', 'regular']])
+      setTestUser(viewer)
+      await switchWorkspace(adminWs)
+      await rejectsWith(() => saveRule({ name: 'x', body }), /Your role/)
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+
+      const saved = await savePipeline({
+        publish: true,
+        name: `${RUN} ruled`,
+        definition: {
+          schemaVersion: 2,
+          nodes: [
+            { id: 's', type: 'source', position: { x: 0, y: 0 }, dataSourceId: sourceId, table: 'employees', maxRows: 20 },
+            { id: 'r', type: 'rules', position: { x: 1, y: 0 }, ruleIds: [ruleId] },
+            { id: 'd', type: 'destination', position: { x: 2, y: 0 }, kind: 'dataset', datasetName: `${RUN}_ruled`, mode: 'append' },
+          ],
+          edges: [{ id: 'e1', from: 's', to: 'r' }, { id: 'e2', from: 'r', to: 'd' }],
+          settings: { retries: 0 },
+        },
+        schedule: { type: 'manual' } as never,
+      })
+      rulePipelineId = saved.id
+      await rejectsWith(() => deleteRule(ruleId), /is used by/)
+      assert.equal((await listRules()).find((r) => r.id === ruleId)?.usedBy[0]?.id, rulePipelineId)
+
+      const run = await runPipelineNow(rulePipelineId)
+      takeAfterCallbacks()
+      await processJobs({})
+      const done = await getRunStatus(run.runId)
+      assert.equal(done.status, 'partial', 'held rows make the run partial')
+      assert.equal(done.recordsSuccess, 15)
+      const inbox = await listQuarantine({ pipelineId: rulePipelineId, kind: 'approval' })
+      assert.equal(inbox.total, 5)
+      await approveRows(inbox.rows.map((r) => r.id))
+      const outcomes = await replayRows(inbox.rows.map((r) => r.id))
+      assert.equal(outcomes[0].status, 'queued')
+      takeAfterCallbacks()
+      await processJobs({})
+      const replay = await getRunStatus(outcomes[0].runId)
+      assert.equal(replay.status, 'success', replay.errorMessage ?? '')
+      assert.equal(replay.recordsSuccess, 5, 'approved rows are written by the replay')
+      const [ds] = await db.select().from(nexusDatasets).where(and(eq(nexusDatasets.workspaceId, adminWs), eq(nexusDatasets.name, `${RUN}_ruled`)))
+      const { rows } = await pool.query<{ n: number; early: number }>(`SELECT count(*)::int AS n, count(*) FILTER (WHERE label LIKE 'early %')::int AS early FROM "nexus_data"."${ds.tableName}"`)
+      assert.deepEqual(rows[0], { n: 20, early: 5 })
+      assert.equal((await listQuarantine({ pipelineId: rulePipelineId, status: 'replayed' })).total, 5)
+    })
+
+    await test('data quality: stewards fix an invalid row and replay it; analysts cannot', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const inbox = await listQuarantine({ pipelineId, kind: 'invalid' })
+      const broken = inbox.rows.find((r) => r.row.email === 'broken')!
+      assert.ok(broken, 'invalid email quarantined')
+      const overview = await getQualityOverview()
+      assert.ok(overview.open.invalid >= 1)
+      assert.ok(overview.pipelines.some((p) => p.pipelineId === pipelineId && p.score !== null && p.score < 100))
+      await fixRow({ id: broken.id, row: { ...broken.row, email: `fixed-${broken.row.id}@kmplus.test` } })
+      const [outcome] = await replayRows([broken.id])
+      takeAfterCallbacks()
+      await processJobs({})
+      assert.equal((await getRunStatus(outcome.runId)).recordsSuccess, 1)
+      const [ds] = await db.select().from(nexusDatasets).where(and(eq(nexusDatasets.workspaceId, adminWs), eq(nexusDatasets.name, DATASET)))
+      const { rows } = await pool.query(`SELECT 1 FROM "nexus_data"."${ds.tableName}" WHERE email = $1`, [`fixed-${broken.row.id}@kmplus.test`])
+      assert.equal(rows.length, 1, 'fixed row written to the dataset')
+      setTestUser(viewer)
+      await switchWorkspace(adminWs)
+      const masked = await listQuarantine({ pipelineId, kind: 'invalid' })
+      assert.ok(masked.rows.every((r) => !r.editable), 'masked rows are not editable')
+      await rejectsWith(() => dismissRows([masked.rows[0].id]), /Your role/)
+    })
+
+    await test('row-level access: analysts only see rows their filter allows', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      await saveDatasetPolicy({ datasetName: DATASET, columns: {}, retentionDays: null, rowFilters: [{ roles: ['analyst'], column: 'id', operator: 'in_list', value: '1, 2, 3' }] })
+      await rejectsWith(() => saveDatasetPolicy({ datasetName: DATASET, columns: {}, retentionDays: null, rowFilters: [{ roles: ['analyst'], column: 'nope', operator: 'equals', value: 'x' }] }), /not in dataset/)
+      assert.ok((await getDatasetPreview(DATASET)).rows.length > 3, 'admins are not filtered')
+      setTestUser(viewer)
+      await switchWorkspace(adminWs)
+      const preview = await getDatasetPreview(DATASET)
+      assert.ok(preview.rows.length <= 3 && preview.rows.every((r) => ['1', '2', '3'].includes(String(r.id))))
+      const kpi = await previewWidget({ id: 'k', title: '', dataset: DATASET, type: 'kpi', measure: { agg: 'count', column: '' }, filters: [], sort: 'value_desc', limit: 5, size: 'small' })
+      assert.ok(kpi.ok && (kpi.result.rows[0].value ?? 99) <= 3, 'Analytics counts only allowed rows')
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      await saveDatasetPolicy({ datasetName: DATASET, columns: { email: { classification: 'personal', mask: 'partial' } }, retentionDays: null, rowFilters: [] })
+    })
+
+    await test('catalog: auto-registered items, documentation, live sample, cached copy', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      // Re-test scans the source, which is how its tables reach the catalog.
+      await testConnection(sourceId)
+      const cat = await listCatalog()
+      const dsKey = `dataset:${DATASET}`
+      const srcKey = `source:${sourceId}:employees`
+      assert.ok(cat.items.some((i) => i.key === dsKey), 'datasets are listed')
+      assert.ok(cat.items.some((i) => i.key === srcKey), 'source tables are listed')
+      // The UI sends a dataset's own access fields (cached, no alias); they are ignored for datasets.
+      await saveCatalogEntry({ key: dsKey, description: 'Employees from the fixture', ownerId: admin.id, tags: ['HR', 'hr'], classification: 'pii', columnDocs: { email: 'Work email' }, accessMode: 'cached', alias: null })
+      await rejectsWith(() => saveCatalogEntry({ key: dsKey, ownerId: outsider.id }), /members of this workspace/)
+      const item = (await listCatalog()).items.find((i) => i.key === dsKey)!
+      assert.deepEqual([item.owner, item.tags, item.classification, item.columns.find((c) => c.name === 'email')?.doc], [admin.email, ['hr'], 'pii', 'Work email'])
+      const live = await getCatalogSample(srcKey)
+      assert.equal(live.mode, 'live')
+      assert.ok(live.rows.length > 0 && live.rows.length <= 20)
+      setTestUser(viewer)
+      await switchWorkspace(adminWs)
+      const masked = await getCatalogSample(srcKey)
+      assert.ok(masked.masked.includes('email') && masked.rows.every((r) => String(r.email).startsWith('••••')), 'live samples mask personal columns for analysts')
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      await saveCatalogEntry({ key: srcKey, accessMode: 'cached', alias: `${RUN}_cache`, refresh: 'manual' })
+      takeAfterCallbacks()
+      await processJobs({})
+      const cached = (await listCatalog()).items.find((i) => i.key === srcKey)!
+      assert.equal(cached.accessMode, 'cached')
+      assert.equal(cached.rowCount, ROWS, 'first copy made right away')
+      assert.ok(cached.lastLoadedAt, 'freshness shown')
+      await rejectsWith(() => saveCatalogEntry({ key: srcKey, accessMode: 'cached', alias: DATASET, refresh: 'manual' }), /written by another pipeline/)
+    })
+
+    await test('Data API: scoped keys, pages, filters, masking, entities, revocation', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const { id: keyId, key } = await createApiKey({ name: `${RUN} key`, role: 'analyst', scopes: ['datasets:read', 'domains:read'] })
+      const call = async (handler: (req: Request, ctx: { params: Promise<Record<string, string>> }) => Promise<Response>, path: string, params: Record<string, string>, auth = `Bearer ${key}`) => {
+        const res = await handler(new Request(`http://localhost${path}`, { headers: auth ? { authorization: auth } : {} }), { params: Promise.resolve(params) })
+        return { status: res.status, body: (await res.json()) as { data: Record<string, unknown>[]; next_cursor: string | null; meta: Record<string, unknown>; error?: { message: string } } }
+      }
+      const p1 = await call(getDataset as never, `/api/v1/datasets/${DATASET}?limit=2&fields=id,email`, { name: DATASET })
+      assert.equal(p1.status, 200, p1.body.error?.message)
+      assert.equal(p1.body.data.length, 2)
+      assert.deepEqual(Object.keys(p1.body.data[0]).sort(), ['email', 'id'])
+      assert.ok(p1.body.data.every((r) => String(r.email).startsWith('••••')), 'analyst keys get masked values')
+      const p2 = await call(getDataset as never, `/api/v1/datasets/${DATASET}?limit=2&fields=id&cursor=${p1.body.next_cursor}`, { name: DATASET })
+      assert.ok(p2.body.data.every((r) => !p1.body.data.some((x) => x.id === r.id)), 'cursor pages do not overlap')
+      const one = await call(getDataset as never, `/api/v1/datasets/${DATASET}?filter[code]=E00002`, { name: DATASET })
+      assert.deepEqual(one.body.data.map((r) => r.code), ['E00002'])
+      assert.equal((await call(getDataset as never, `/api/v1/datasets/${DATASET}?filter[email]=x`, { name: DATASET })).status, 400, 'masked fields cannot be filtered')
+      assert.equal((await call(getDataset as never, `/api/v1/datasets/nope`, { name: 'nope' })).status, 404)
+      assert.equal((await call(getDataset as never, `/api/v1/datasets/${DATASET}`, { name: DATASET }, '')).status, 401)
+
+      await saveDomainMapping({ entity: 'employee', datasetName: DATASET, fields: { employee_code: 'code', email: 'email' } })
+      const people = await call(getDomain as never, `/api/v1/domains/employee?limit=3`, { entity: 'employee' })
+      assert.equal(people.status, 200, people.body.error?.message)
+      assert.deepEqual(Object.keys(people.body.data[0]).sort(), ['email', 'employee_code'])
+      assert.deepEqual(people.body.meta.masked_fields, ['email'])
+
+      await revokeApiKey(keyId)
+      assert.equal((await call(getDataset as never, `/api/v1/datasets/${DATASET}`, { name: DATASET })).status, 401, 'revoked keys stop working')
+      const audit = await db.select().from(auditLogs).where(and(eq(auditLogs.workspaceId, adminWs), eq(auditLogs.action, 'API_READ')))
+      assert.ok(audit.length >= 4, 'API reads are audited')
+    })
+
+    await test('file upload source: uploaded sheets become tables pipelines and the catalog read', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      await installConnector('file')
+      const fileSourceId = await createDataSource({ name: `${RUN} files`, type: 'files', sourceType: 'file', config: { role: 'source' }, credentials: { storageKey: 'someone-elses' } })
+      const columns = [{ name: 'employee_code', type: 'text' as const }, { name: 'joined', type: 'date' as const }]
+      await uploadFilePart({ dataSourceId: fileSourceId, table: 'org_chart', fileName: 'Org Chart.xlsx', columns, rows: [['E1', '2024-01-02']], part: 0, final: false, mode: 'replace', sent: 1 })
+      await uploadFilePart({ dataSourceId: fileSourceId, table: 'org_chart', fileName: 'Org Chart.xlsx', columns, rows: [['E2', null]], part: 1, final: true, mode: 'replace', sent: 2 })
+      const src = (await getDataSources()).find((s) => s.id === fileSourceId)!
+      const config = src.config as { files: { table: string; rowCount: number }[]; schemaScan: { tables: { name: string; columns: { name: string; type: string }[] }[] } }
+      assert.deepEqual(config.files.map((f) => [f.table, f.rowCount]), [['org_chart', 2]])
+      assert.equal(config.schemaScan.tables[0].columns.find((c) => c.name === 'joined')?.type, 'date', 'detected types reach pipelines')
+      const [stored] = await db.select({ credentials: dataSources.credentials }).from(dataSources).where(eq(dataSources.id, fileSourceId))
+      const { decryptCredentials } = await import('@/lib/security/credentials')
+      assert.equal(decryptCredentials(fileSourceId, stored.credentials).storageKey, fileSourceId, 'storage key is assigned by the server, not the browser')
+      const sample = await getCatalogSample(`source:${fileSourceId}:org_chart`)
+      assert.deepEqual(sample.rows.map((r) => r.employee_code), ['E1', 'E2'])
+      await rejectsWith(() => uploadFilePart({ dataSourceId: sourceId, table: 'x', fileName: 'x.csv', columns, rows: [], part: 0, final: true, mode: 'replace', sent: 0 }), /File Upload data source/)
+      await deleteDataSource(fileSourceId)
+      const left = await pool.query(`SELECT 1 FROM information_schema.tables WHERE table_schema = 'nexus_raw' AND table_name LIKE '%org_chart%'`)
+      assert.equal(left.rowCount, 0, 'deleting the source drops its uploads')
+    })
+
     await test('admins reset a member\'s 2FA (lost phone); members cannot', async () => {
       await db.insert(session).values({ id: `${RUN}_sess`, userId: viewer.id, token: `${RUN}_tok`, expiresAt: new Date(Date.now() + 86_400_000) })
       await db.insert(verification).values({ id: `${RUN}_trust`, identifier: `trust-device-${RUN}`, value: viewer.id, expiresAt: new Date(Date.now() + 86_400_000) })
@@ -385,7 +611,7 @@ async function cleanup(userIds: string[]) {
   for (const d of datasets) await pool.query(`DROP TABLE IF EXISTS "nexus_data"."${d.tableName}"`)
   await db.delete(session).where(inArray(session.userId, userIds))
   await db.delete(verification).where(inArray(verification.value, userIds))
-  for (const t of [datasetPolicies, dashboards, nexusDatasets, pipelineRunRejects, executionLogs, pipelineJobs, pipelineVersions, pipelines, dataSources, connectorInstalls, workspaceInvites, auditLogs, workspaceMembers]) {
+  for (const t of [apiKeys, catalogEntries, domainMappings, businessRuleVersions, businessRules, datasetPolicies, dashboards, nexusDatasets, pipelineRunRejects, executionLogs, pipelineJobs, pipelineVersions, pipelines, dataSources, connectorInstalls, workspaceInvites, auditLogs, workspaceMembers]) {
     await db.delete(t).where(inArray(t.workspaceId, ws))
   }
   await db.delete(auditLogs).where(inArray(auditLogs.userId, userIds))

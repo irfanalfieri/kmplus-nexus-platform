@@ -135,10 +135,15 @@ export const pipelines = pgTable('pipelines', {
   status: text('status').default('draft'),
   sourceId: text('sourceId'),
   destinationId: text('destinationId'),
+  /** The published definition: what scheduled and manual runs execute (VC-2). */
   config: jsonb('config').notNull(),
   schedule: jsonb('schedule'),
   enabled: boolean('enabled').default(false),
+  /** Published version number. */
   version: integer('version').default(1),
+  /** Unpublished edits (latest draft version); null when the draft equals the published version. */
+  draftConfig: jsonb('draftConfig'),
+  draftVersion: integer('draftVersion'),
   lastRunAt: timestamp('lastRunAt', { withTimezone: true }),
   lastRunStatus: text('lastRunStatus'),
   /** Next scheduled run (UTC); null when manual or disabled. Indexed for the scheduler tick. */
@@ -216,10 +221,66 @@ export const pipelineRunRejects = pgTable('pipeline_run_rejects', {
   userId: text('userId').notNull(),
   /** Owning workspace; every query is scoped by this. userId = who created / acted. */
   workspaceId: text('workspaceId').notNull(),
+  /** The row as it entered the node that quarantined it. */
   row: jsonb('row').notNull(),
   errors: jsonb('errors').notNull(),
+  /** Node that quarantined, flagged or held the row (replays start there). */
+  nodeId: text('nodeId'),
+  /** error | warning | info */
+  severity: text('severity').notNull().default('error'),
+  /** invalid (not written) | approval (held for approval) | flag (written with a warning) */
+  kind: text('kind').notNull().default('invalid'),
+  /** open | fixed | approved | replayed | dismissed */
+  status: text('status').notNull().default('open'),
+  /** Steward's corrected row (DQ-3 edit inline / bulk-fix). */
+  fixedRow: jsonb('fixedRow'),
+  updatedBy: text('updatedBy'),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }),
+  /** Run that replayed this row. */
+  replayRunId: text('replayRunId'),
   createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
-}, (t) => [index('pipeline_run_rejects_run_idx').on(t.runId)])
+}, (t) => [
+  index('pipeline_run_rejects_run_idx').on(t.runId),
+  index('pipeline_run_rejects_inbox_idx').on(t.workspaceId, t.status, t.createdAt),
+])
+
+// Manager checks (HR rule pack): (employee, manager) pairs collected during a run, checked at the end.
+export const pipelineJobPairs = pgTable('pipeline_job_pairs', {
+  jobId: text('jobId').notNull(),
+  nodeId: text('nodeId').notNull(),
+  field: text('field').notNull(),
+  keyField: text('keyField').notNull(),
+  key: text('key').notNull(),
+  manager: text('manager').notNull(),
+}, (t) => [index('pipeline_job_pairs_job_idx').on(t.jobId)])
+
+// Business rules (PRD Layer 11): reusable IF/THEN rules referenced by pipeline nodes.
+export const businessRules = pgTable('business_rules', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  name: text('name').notNull(),
+  description: text('description'),
+  /** { when, then, otherwise } — lib/rules/definition.ts */
+  body: jsonb('body').notNull(),
+  version: integer('version').notNull().default(1),
+  createdBy: text('createdBy').notNull(),
+  updatedBy: text('updatedBy'),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('business_rules_workspace_idx').on(t.workspaceId)])
+
+// Every save of a rule is an immutable version (VC-1).
+export const businessRuleVersions = pgTable('business_rule_versions', {
+  id: text('id').primaryKey(),
+  ruleId: text('ruleId').notNull(),
+  workspaceId: text('workspaceId').notNull(),
+  version: integer('version').notNull(),
+  name: text('name').notNull(),
+  body: jsonb('body').notNull(),
+  changes: text('changes'),
+  createdBy: text('createdBy').notNull(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('business_rule_versions_rule_idx').on(t.ruleId, t.version)])
 
 // In-app alerts (bell icon); email delivery status is tracked per row.
 export const notifications = pgTable('notifications', {
@@ -267,6 +328,8 @@ export const datasetPolicies = pgTable('dataset_policies', {
   /** Keep rows loaded in the last N days; null keeps everything. */
   retentionDays: integer('retentionDays'),
   retentionAppliedAt: timestamp('retentionAppliedAt', { withTimezone: true }),
+  /** Row-level access (DB-6): [{ roles, column, operator, value }]; those roles only see matching rows. */
+  rowFilters: jsonb('rowFilters').notNull().default([]),
   updatedBy: text('updatedBy').notNull(),
   createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
@@ -285,6 +348,80 @@ export const dashboards = pgTable('dashboards', {
   updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [index('dashboards_workspace_idx').on(t.workspaceId)])
 
+// Data Catalog (PRD Layer 8) + Virtualization (Layer 9). Datasets and source
+// tables are listed automatically; a row exists once someone documents one.
+export const catalogEntries = pgTable('catalog_entries', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  /** "dataset:<name>" or "source:<dataSourceId>:<table>" */
+  key: text('key').notNull(),
+  /** dataset | source_table */
+  kind: text('kind').notNull(),
+  datasetName: text('datasetName'),
+  dataSourceId: text('dataSourceId'),
+  tableName: text('tableName'),
+  description: text('description'),
+  ownerId: text('ownerId'),
+  stewardId: text('stewardId'),
+  tags: jsonb('tags').notNull().default([]),
+  /** public | internal | confidential | pii */
+  classification: text('classification').notNull().default('internal'),
+  /** { [column]: business description } */
+  columnDocs: jsonb('columnDocs').notNull().default({}),
+  /** Source tables (DV-1): live (query the source) or cached (a managed pipeline copies it into dataset `alias`). */
+  accessMode: text('accessMode').notNull().default('live'),
+  /** Name the table is published under (Data API, Analytics when cached). */
+  alias: text('alias'),
+  /** manual | 5m | 15m | hourly | daily | after_pipeline (DV-2) */
+  refresh: text('refresh').notNull().default('daily'),
+  refreshAfterPipelineId: text('refreshAfterPipelineId'),
+  /** The managed pipeline that refreshes a cached copy. */
+  cachePipelineId: text('cachePipelineId'),
+  /** Live query guardrails (DV-3). */
+  liveRowLimit: integer('liveRowLimit').notNull().default(1000),
+  liveTimeoutSeconds: integer('liveTimeoutSeconds').notNull().default(30),
+  updatedBy: text('updatedBy').notNull(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex('catalog_entries_workspace_key_idx').on(t.workspaceId, t.key),
+  uniqueIndex('catalog_entries_workspace_alias_idx').on(t.workspaceId, t.alias),
+])
+
+// Data API keys (API-1). Only a SHA-256 hash of the key is stored; it is shown once.
+export const apiKeys = pgTable('api_keys', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  name: text('name').notNull(),
+  /** First characters of the key, to recognize it in lists. */
+  prefix: text('prefix').notNull(),
+  hash: text('hash').notNull().unique(),
+  /** Role whose masking and row filters apply to reads (analyst = masked, steward = unmasked). */
+  role: text('role').notNull().default('analyst'),
+  /** ["datasets:read", "domains:read"] */
+  scopes: jsonb('scopes').notNull().default([]),
+  createdBy: text('createdBy').notNull(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  lastUsedAt: timestamp('lastUsedAt', { withTimezone: true }),
+  expiresAt: timestamp('expiresAt', { withTimezone: true }),
+  revokedAt: timestamp('revokedAt', { withTimezone: true }),
+  revokedBy: text('revokedBy'),
+}, (t) => [index('api_keys_workspace_idx').on(t.workspaceId)])
+
+// Unified Enterprise Data Model (§8, API-3): which dataset publishes an entity, and how its columns map.
+export const domainMappings = pgTable('domain_mappings', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  /** employee | organization | position | … (lib/domain/model.ts) */
+  entity: text('entity').notNull(),
+  datasetName: text('datasetName').notNull(),
+  /** { [canonical field]: dataset column } */
+  fields: jsonb('fields').notNull().default({}),
+  updatedBy: text('updatedBy').notNull(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex('domain_mappings_workspace_entity_idx').on(t.workspaceId, t.entity)])
+
 // Layer 11: Version Control
 export const pipelineVersions = pgTable('pipeline_versions', {
   id: text('id').primaryKey(),
@@ -296,8 +433,11 @@ export const pipelineVersions = pgTable('pipeline_versions', {
   config: jsonb('config').notNull(),
   changes: text('changes'),
   createdBy: text('createdBy'),
+  /** Set when this version was published (it is what runs). Versions are immutable otherwise. */
+  publishedAt: timestamp('publishedAt', { withTimezone: true }),
+  publishedBy: text('publishedBy'),
   createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
-})
+}, (t) => [index('pipeline_versions_pipeline_idx').on(t.pipelineId, t.version)])
 
 // Layer 12: Governance & Compliance
 export const auditLogs = pgTable('audit_logs', {

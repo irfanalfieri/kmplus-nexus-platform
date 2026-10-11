@@ -134,7 +134,7 @@ async function updateSupabaseSourceCredentialsImpl(
   await db
     .update(dataSources)
     .set({
-      credentials: encryptCredentials(sourceId, credentials as unknown as Record<string, unknown>),
+      credentials: encryptCredentials(sourceId, credentials as unknown as Record<string, unknown>, workspaceId),
       config: { schemaScan: scan },
       status: 'connected',
       lastConnected: new Date(),

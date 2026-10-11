@@ -6,6 +6,7 @@ import { notify } from '@/lib/notifications'
 import { definitionSchema, describeDefinitionError, type PipelineDefinition, type SourceStep } from './definition'
 import { runEngine, type EngineIO, type EngineResult } from './engine'
 import { NonRetryableError, datasetTableName, readSourceRows, type StoredDataSource } from './io'
+import { loadRunContext } from './context'
 
 /** Who a run belongs to: the workspace, and the user who triggered or owns it. */
 export interface RunScope {
@@ -30,8 +31,8 @@ export function watermarkKey(step: SourceStep) {
 
 /** The stored watermark if it still matches the pipeline's source, else null (full read). */
 export function currentWatermark(def: PipelineDefinition, state: unknown): string | null {
-  const source = def.steps[0]
-  if (source.type !== 'source' || source.mode !== 'incremental') return null
+  const source = def.nodes.find((n) => n.type === 'source')
+  if (source?.type !== 'source' || source.mode !== 'incremental') return null
   const wm = (state as PipelineState | null)?.watermark
   return wm && wm.sourceKey === watermarkKey(source) ? wm.value : null
 }
@@ -85,7 +86,15 @@ export async function testRunDefinition(scope: RunScope, config: unknown, sample
       return readSourceRows(source, step.table, Math.min(step.maxRows, Math.max(sampleSize, 200)), { watermark })
     },
   }
-  return runEngine(def, io, { sampleSize })
+  // Same business rules and lookups as a real run, so the preview matches.
+  let context: Awaited<ReturnType<typeof loadRunContext>>
+  try {
+    context = await loadRunContext(scope.workspaceId, def)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return { status: 'failed', steps: [], rejects: [], rejectedCount: 0, rowsRead: 0, rowsWritten: 0, columns: [], error: message, retryable: false }
+  }
+  return runEngine(def, io, { sampleSize, context })
 }
 
 export function summarize(result: EngineResult) {

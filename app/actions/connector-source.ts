@@ -2,7 +2,7 @@
 
 import { z } from 'zod'
 import { db } from '@/lib/db'
-import { dataSources } from '@/lib/db/schema'
+import { catalogEntries, dataSources } from '@/lib/db/schema'
 import { assertConnectorInstalled } from '@/lib/connectors/install-check'
 import { isConnectorSlug } from '@/lib/connectors/catalog'
 import type { ConnectorCredentials, ConnectorSlug } from '@/lib/connectors/types'
@@ -21,6 +21,8 @@ import { restoreSecrets } from '@/lib/connectors/secret-mask'
 import type { Permission } from '@/lib/auth/permissions'
 import { revalidatePath } from 'next/cache'
 import { guard } from '@/lib/server-action'
+import { sourceKey } from '@/lib/catalog/definition'
+import { applyMasks, liveTableAccess } from '@/lib/governance/masking'
 
 const slugSchema = z.string().trim().min(1).max(60)
 const idSchema = z.string().trim().min(1).max(100)
@@ -31,6 +33,15 @@ const credentialsSchema = z
   .record(z.string().max(100), z.union([z.string().max(20000), z.number(), z.boolean(), z.null()]))
   .refine((v) => Object.keys(v).length <= 100, 'Too many credential fields')
   .transform((v) => Object.fromEntries(Object.entries(v).map(([k, x]) => [k, x == null ? '' : String(x)])) as ConnectorCredentials)
+
+/**
+ * Credentials typed in the browser. File sources have none: their storage key
+ * is assigned by the server, so a key sent from the browser (which could name
+ * another source's uploads) is dropped.
+ */
+function userCredentials(slug: ConnectorSlug, raw: unknown): ConnectorCredentials {
+  return slug === 'file' ? {} : credentialsSchema.parse(raw)
+}
 
 function parseSlug(raw: string): ConnectorSlug {
   const slug = slugSchema.parse(raw)
@@ -64,7 +75,7 @@ async function getOwnedSource(sourceId: string, workspaceId: string) {
 async function testConnectorConnectionActionImpl(rawSlug: string, rawCredentials: ConnectorCredentials) {
   await workspaceFor('sources:manage')
   const slug = parseSlug(rawSlug)
-  const credentials = credentialsSchema.parse(rawCredentials)
+  const credentials = userCredentials(slug, rawCredentials)
   await assertConnectorInstalled(slug)
   return testConnectorConnection(slug, credentials)
 }
@@ -72,7 +83,7 @@ async function testConnectorConnectionActionImpl(rawSlug: string, rawCredentials
 async function scanConnectorSchemaActionImpl(rawSlug: string, rawCredentials: ConnectorCredentials) {
   await workspaceFor('sources:manage')
   const slug = parseSlug(rawSlug)
-  const credentials = credentialsSchema.parse(rawCredentials)
+  const credentials = userCredentials(slug, rawCredentials)
   await assertConnectorInstalled(slug)
   return scanConnectorSchema(slug, credentials)
 }
@@ -97,7 +108,7 @@ async function scanDataSourceSchemaImpl(rawSourceId: string) {
     .update(dataSources)
     .set({
       config: { ...(source.config as Record<string, unknown>), schemaScan: scan },
-      credentials: encryptCredentials(sourceId, credentials),
+      credentials: encryptCredentials(sourceId, credentials, workspaceId),
       status: 'connected',
       lastConnected: new Date(),
       updatedAt: new Date(),
@@ -120,7 +131,12 @@ async function getDataSourceTableSampleImpl(rawSourceId: string, rawTableName: s
   await assertConnectorInstalled(source.sourceType)
   const credentials = parseCredentials(source.id, source.credentials)
   await recordAudit(ctx, { action: 'VIEW_DATA', resource: 'data_source', resourceId: sourceId, changes: { what: 'source_sample', table: tableName } })
-  return sampleConnectorTable(source.sourceType as ConnectorSlug, credentials, tableName, limit)
+  const sample = await sampleConnectorTable(source.sourceType as ConnectorSlug, credentials, tableName, limit)
+  // Personal columns are masked for roles without unmasked access, like catalog live samples (TD-21).
+  const [entry] = await db.select({ alias: catalogEntries.alias }).from(catalogEntries).where(and(eq(catalogEntries.workspaceId, workspaceId), eq(catalogEntries.key, sourceKey(sourceId, tableName)))).limit(1)
+  const rows = sample.rows as Record<string, unknown>[]
+  const { masks } = await liveTableAccess(workspaceId, entry?.alias ?? null, ctx.role, Array.from(new Set(rows.flatMap((r) => Object.keys(r)))))
+  return { ...sample, rows: applyMasks(rows, masks), masked: Object.keys(masks) }
 }
 
 /** Live REST request preview. With sourceId (edit form), masked secrets are filled from that source. */
@@ -141,7 +157,7 @@ async function testAndScanDataSourceImpl(
 ) {
   await workspaceFor('sources:manage')
   const slug = parseSlug(rawSlug)
-  const credentials = credentialsSchema.parse(rawCredentials)
+  const credentials = userCredentials(slug, rawCredentials)
   await assertConnectorInstalled(slug)
 
   const test = await testConnectorConnection(slug, credentials)

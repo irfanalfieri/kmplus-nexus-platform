@@ -3,7 +3,8 @@ import { and, eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { datasetPolicies } from '@/lib/db/schema'
 import { can, type Role } from '@/lib/auth/permissions'
-import { columnPolicySchema, type ColumnPolicy, type Mask } from './definition'
+import { columnPolicySchema, suggestColumnPolicy, type ColumnPolicy, type Mask } from './definition'
+import { filtersFor, rowFiltersSchema, type RowFilter } from './row-filters'
 
 /**
  * Applies dataset policies (GV-5). Server-only. Roles with data:unmasked
@@ -37,7 +38,22 @@ export async function loadPolicy(workspaceId: string, datasetName: string) {
     const parsed = columnPolicySchema.safeParse(raw)
     if (parsed.success) columns[name] = parsed.data
   }
-  return { ...row, columns }
+  const rowFilters = rowFiltersSchema.safeParse(row.rowFilters ?? [])
+  return { ...row, columns, rowFilters: rowFilters.success ? rowFilters.data : [] }
+}
+
+/** Row-level filters for this role (every role, admins included, when the policy lists it). */
+export async function rowFiltersFor(workspaceId: string, datasetName: string, role: Role): Promise<RowFilter[]> {
+  const policy = await loadPolicy(workspaceId, datasetName)
+  return filtersFor(policy?.rowFilters, role)
+}
+
+/** Masks and row filters together: what this role may see of a dataset. */
+export async function accessFor(workspaceId: string, datasetName: string, role: Role) {
+  const policy = await loadPolicy(workspaceId, datasetName)
+  const masks: Record<string, Mask> = {}
+  if (!can(role, 'data:unmasked')) for (const [name, p] of Object.entries(policy?.columns ?? {})) if (p.mask !== 'none') masks[name] = p.mask
+  return { masks, rowFilters: filtersFor(policy?.rowFilters, role) }
 }
 
 /** Masks for this role: column → mask, empty when the role may see real values. */
@@ -57,4 +73,24 @@ export function applyMasks<T extends Record<string, unknown>>(rows: T[], masks: 
     for (const c of cols) if (c in out) out[c] = maskValue(out[c], masks[c])
     return out as T
   })
+}
+
+/**
+ * What a role may see of a live source table: the policy saved under its
+ * published name, else masks suggested from the column names (roles without
+ * unmasked access never see raw personal columns from a source).
+ */
+export async function liveTableAccess(workspaceId: string, alias: string | null, role: Role, columns: string[]) {
+  if (alias) {
+    const access = await accessFor(workspaceId, alias, role)
+    const policy = await loadPolicy(workspaceId, alias)
+    if (policy || can(role, 'data:unmasked')) return access
+  }
+  if (can(role, 'data:unmasked')) return { masks: {} as Record<string, Mask>, rowFilters: [] as RowFilter[] }
+  const masks: Record<string, Mask> = {}
+  for (const c of columns) {
+    const p = suggestColumnPolicy(c)
+    if (p.mask !== 'none') masks[c] = p.mask
+  }
+  return { masks, rowFilters: [] as RowFilter[] }
 }
