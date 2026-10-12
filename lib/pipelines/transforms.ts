@@ -12,7 +12,8 @@ const pad = (n: number, len = 2) => String(n).padStart(len, '0')
 /** Parses common enterprise date shapes: ISO, yyyyMMdd (SAP), dd/MM/yyyy, dd-MM-yyyy, epoch ms, Date. */
 export function parseDate(value: unknown, inputFormat = ''): Date | null {
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value
-  if (typeof value === 'number') return new Date(value)
+  // 8-digit integers are yyyyMMdd (SAP dates in a numeric column); as epoch ms they'd all be 1 Jan 1970.
+  if (typeof value === 'number') return Number.isInteger(value) && value >= 18000101 && value <= 99991231 ? parseDate(String(value), 'yyyyMMdd') : new Date(value)
   const s = asString(value).trim()
   if (!s) return null
   const fmt = inputFormat.trim()

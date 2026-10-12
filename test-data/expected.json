@@ -1,0 +1,74 @@
+{
+  "employees_sap_pa0001": {
+    "rows": 152,
+    "uniqueEmployees": 150,
+    "issues": {
+      "invalidEmail": [
+        "00001061",
+        "00001074",
+        "00001032"
+      ],
+      "missingName": [
+        "00001150"
+      ],
+      "duplicate": [
+        "00001047",
+        "00001028"
+      ],
+      "endBeforeHire": [
+        "00001022"
+      ],
+      "unknownOrg": [
+        "00001131"
+      ],
+      "futureHire": [
+        "00001128"
+      ],
+      "unknownManager": [
+        "00001048"
+      ],
+      "managerCycle": [
+        "00001059",
+        "00001105"
+      ]
+    }
+  },
+  "karyawan_kmi": {
+    "rows": 90,
+    "issues": {
+      "invalidNik": [
+        "KMI-2023",
+        "KMI-2061",
+        "KMI-2022"
+      ],
+      "invalidPhone": [
+        "KMI-2020",
+        "KMI-2008"
+      ],
+      "invalidBirthDate": [
+        "KMI-2077"
+      ],
+      "missingEmail": [
+        "KMI-2087",
+        "KMI-2088"
+      ]
+    }
+  },
+  "organizations": 14,
+  "positions": 44,
+  "training_history": {
+    "rows": 400,
+    "unknownTrainees": [
+      "00008001",
+      "00008002",
+      "KMI-9001",
+      "KMI-9002",
+      "EXT-0001"
+    ]
+  },
+  "ad_users": {
+    "rows": 144,
+    "disabled": 10,
+    "serviceAccounts": 5
+  }
+}

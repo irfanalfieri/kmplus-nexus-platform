@@ -21,7 +21,10 @@ const outDir = join('node_modules', '.cache', 'nexus-harness')
 mkdirSync(outDir, { recursive: true })
 const args = process.argv.slice(2)
 const stubs = args.includes('--stubs')
-const entry = args.find((a) => !a.startsWith('--'))
+const entryIndex = args.findIndex((a) => !a.startsWith('--'))
+const entry = args[entryIndex]
+// Arguments after the script are passed to it.
+const scriptArgs = entryIndex >= 0 ? args.slice(entryIndex + 1) : []
 if (!entry) {
   console.error('Usage: node scripts/run-ts.mjs <file.ts>')
   process.exit(1)
@@ -49,7 +52,7 @@ try {
     plugins: stubs ? [stubPlugin] : [],
   })
   // Run from the project root so external packages resolve from node_modules.
-  const { status } = spawnSync(process.execPath, ['--no-warnings', outfile], { stdio: 'inherit' })
+  const { status } = spawnSync(process.execPath, ['--no-warnings', outfile, ...scriptArgs], { stdio: 'inherit' })
   process.exitCode = status ?? 1
 } finally {
   rmSync(outfile, { force: true })

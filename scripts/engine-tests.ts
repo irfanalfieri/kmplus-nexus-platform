@@ -144,6 +144,8 @@ async function main() {
     assert.equal(parseDate('2026-10-08 16:14:00.250')!.toISOString(), '2026-10-08T16:14:00.250Z')
     assert.equal(formatDate(parseDate('20210315')!), '2021-03-15')
     assert.equal(parseDate('31/02/2021'), null, 'impossible dates are rejected')
+    assert.equal(formatDate(parseDate(20210315)!), '2021-03-15', 'yyyyMMdd read from a numeric column')
+    assert.equal(parseDate(1_700_000_000_000)!.toISOString(), '2023-11-14T22:13:20.000Z', 'other numbers stay epoch ms')
   })
 
   await test('schedules in WIB', () => {

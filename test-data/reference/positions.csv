@@ -1,0 +1,45 @@
+position_code,title,job_family,job_level,org_code,is_vacant
+60000001,President Director,Board of Directors,L1-Head,50000001,false
+60000002,Director,Board of Directors,L2-Senior,50000001,false
+60000003,Executive Assistant,Board of Directors,L3-Staff,50000001,false
+60000004,Head of Finance,Finance,L1-Head,50000010,false
+60000005,Senior Finance Analyst,Finance,L2-Senior,50000010,false
+60000006,Finance Staff,Finance,L3-Staff,50000010,false
+60000007,Accounting Manager,Accounting & Tax,L1-Head,50000011,false
+60000008,Senior Accountant,Accounting & Tax,L2-Senior,50000011,false
+60000009,Tax Officer,Accounting & Tax,L3-Staff,50000011,false
+60000010,Head of Human Capital,Human Capital,L1-Head,50000020,false
+60000011,HR Business Partner,Human Capital,L2-Senior,50000020,false
+60000012,HR Generalist,Human Capital,L3-Staff,50000020,false
+60000013,L&D Manager,Learning & Development,L1-Head,50000021,false
+60000014,Instructional Designer,Learning & Development,L2-Senior,50000021,false
+60000015,Training Coordinator,Learning & Development,L3-Staff,50000021,false
+60000016,Head of IT,Information Technology,L1-Head,50000030,false
+60000017,Senior Software Engineer,Information Technology,L2-Senior,50000030,false
+60000018,Software Engineer,Information Technology,L3-Staff,50000030,false
+60000019,Data Manager,Data & Integration,L1-Head,50000031,false
+60000020,Data Engineer,Data & Integration,L2-Senior,50000031,false
+60000021,Integration Analyst,Data & Integration,L3-Staff,50000031,false
+60000022,Head of Sales,Sales,L1-Head,50000040,false
+60000023,Key Account Manager,Sales,L2-Senior,50000040,false
+60000024,Sales Executive,Sales,L3-Staff,50000040,false
+60000025,Branch Manager Jakarta,Sales,L1-Head,50000041,false
+60000026,Account Manager,Sales,L2-Senior,50000041,false
+60000027,Sales Executive,Sales,L3-Staff,50000041,false
+60000028,Branch Manager Surabaya,Sales,L1-Head,50000042,false
+60000029,Account Manager,Sales,L2-Senior,50000042,false
+60000030,Sales Executive,Sales,L3-Staff,50000042,false
+60000031,Head of Operations,Operations,L1-Head,50000050,false
+60000032,Operations Supervisor,Operations,L2-Senior,50000050,false
+60000033,Operations Staff,Operations,L3-Staff,50000050,false
+60000034,KMI Director,KMI Management,L1-Head,50000060,false
+60000035,Business Analyst,KMI Management,L2-Senior,50000060,false
+60000036,Office Manager,KMI Management,L3-Staff,50000060,false
+60000037,Head of Product,KMI Product,L1-Head,50000061,false
+60000038,Product Manager,KMI Product,L2-Senior,50000061,false
+60000039,UX Designer,KMI Product,L3-Staff,50000061,false
+60000040,Head of Customer Success,KMI Customer Success,L1-Head,50000062,false
+60000041,Customer Success Manager,KMI Customer Success,L2-Senior,50000062,false
+60000042,Support Specialist,KMI Customer Success,L3-Staff,50000062,false
+60000043,Data Governance Lead,Information Technology,L2-Senior,50000031,true
+60000044,Payroll Specialist,Human Capital,L3-Staff,50000020,true

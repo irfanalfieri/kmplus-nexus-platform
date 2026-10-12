@@ -1,0 +1,145 @@
+sAMAccountName,employeeID,displayName,mail,department,title,telephoneNumber,manager,userAccountControl,whenChanged
+ssiregar,00001001,Siti Siregar,siti.siregar@kmplus-demo.co.id,Board of Directors,President Director,+62 21 5556503,,512,20250521233700.0Z
+fharahap,00001002,Fikri Harahap,fikri.harahap@kmplus-demo.co.id,Finance,Head of Finance,+62 21 5554939,"CN=Siti Siregar,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250208113800.0Z
+ywijaya,00001003,Yuni Wijaya,yuni.wijaya@kmplus-demo.co.id,Accounting & Tax,Accounting Manager,+62 21 5550018,"CN=Fikri Harahap,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20251016004000.0Z
+nsyahputra,00001004,Nurul Syahputra,nurul.syahputra@kmplus-demo.co.id,Human Capital,Head of Human Capital,+62 21 5551360,"CN=Siti Siregar,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250104105900.0Z
+akusuma,00001005,Ayu Kusuma,ayu.kusuma@kmplus-demo.co.id,Learning & Development,L&D Manager,+62 21 5552150,"CN=Nurul Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250114112100.0Z
+dsiregar,00001006,Dedi Siregar,dedi.siregar@kmplus-demo.co.id,Information Technology,Head of IT,+62 21 5559225,"CN=Siti Siregar,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260721105700.0Z
+ssantoso,00001007,Siti Santoso,siti.santoso@kmplus-demo.co.id,Data & Integration,Data Manager,+62 21 5559173,"CN=Dedi Siregar,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250904022900.0Z
+wpratama,00001009,Wulan Pratama,wulan.pratama@kmplus-demo.co.id,Sales Jakarta,Branch Manager Jakarta,+62 21 5553918,"CN=Anisa Hidayat,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250319042300.0Z
+isyahputra,00001010,Intan Syahputra,intan.syahputra@kmplus-demo.co.id,Sales Surabaya,Branch Manager Surabaya,+62 21 5556949,"CN=Anisa Hidayat,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250909145300.0Z
+csyahputra,00001011,Citra Syahputra,citra.syahputra@kmplus-demo.co.id,Operations,Head of Operations,+62 21 5553359,"CN=Siti Siregar,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250528054000.0Z
+fwijaya,00001012,Fikri Wijaya,fikri.wijaya@kmplus-demo.co.id,Finance,Finance Staff,+62 21 5553560,"CN=Fikri Harahap,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",514,20261125140800.0Z
+ysyahputra,00001013,Yoga Syahputra,yoga.syahputra@kmplus-demo.co.id,Sales Jakarta,Sales Executive,+62 21 5557049,"CN=Wulan Pratama,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",514,20260211104900.0Z
+mhidayat,00001014,Mega Hidayat,mega.hidayat@kmplus-demo.co.id,Sales Surabaya,Sales Executive,+62 21 5554610,"CN=Intan Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",514,20261212153400.0Z
+yhalim,00001015,Yuni Halim,yuni.halim@kmplus-demo.co.id,Sales Surabaya,Sales Executive,+62 21 5554502,"CN=Intan Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",514,20260213222100.0Z
+csetiawan,00001016,Citra Setiawan,citra.setiawan@kmplus-demo.co.id,Accounting & Tax,Tax Officer,+62 21 5557722,"CN=Yuni Wijaya,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",514,20261020005200.0Z
+ehalim,00001017,Eko Halim,eko.halim@kmplus-demo.co.id,Data & Integration,Integration Analyst,+62 21 5553862,"CN=Siti Santoso,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",514,20260722033000.0Z
+dsetiawan,00001018,Dewi Setiawan,dewi.setiawan@kmplus-demo.co.id,Sales,Sales Executive,+62 21 5553159,"CN=Anisa Hidayat,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",514,20251118180200.0Z
+gpermana,00001019,Gilang Permana,gilang.permana@kmplus-demo.co.id,Finance,Finance Staff,+62 21 5553081,"CN=Fikri Harahap,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",514,20250613191300.0Z
+klubis,00001020,Kartika Lubis,kartika.lubis@kmplus-demo.co.id,Sales,Sales Executive,+62 21 5558680,"CN=Anisa Hidayat,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",514,20260616230400.0Z
+ylubis,00001021,Yuni Lubis,yuni.lubis@kmplus-demo.co.id,Accounting & Tax,Tax Officer,+62 21 5553950,"CN=Yuni Wijaya,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",514,20261214224300.0Z
+ihidayat,00001022,Intan Hidayat,intan.hidayat@kmplus-demo.co.id,Human Capital,HR Generalist,+62 21 5550700,"CN=Nurul Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260204231300.0Z
+hnasution,00001024,Hendra Nasution,hendra.nasution@kmplus-demo.co.id,Sales Surabaya,Account Manager,+62 21 5558386,"CN=Intan Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20261121182600.0Z
+ylubis2,00001025,Yuni Lubis,yuni.lubis2@kmplus-demo.co.id,Operations,Operations Staff,+62 21 5557229,"CN=Citra Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250107095500.0Z
+fwijaya2,00001026,Fikri Wijaya,fikri.wijaya2@kmplus-demo.co.id,Sales Surabaya,Sales Executive,+62 21 5556309,"CN=Intan Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250602141500.0Z
+lsusanto,00001027,Lestari Susanto,lestari.susanto@kmplus-demo.co.id,Sales,Key Account Manager,+62 21 5550515,"CN=Anisa Hidayat,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250507095900.0Z
+ywibowo,00001028,Yuni Wibowo,yuni.wibowo@kmplus-demo.co.id,Learning & Development,Training Coordinator,+62 21 5556661,"CN=Ayu Kusuma,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260202165000.0Z
+nnugroho,00001029,Nadia Nugroho,nadia.nugroho@kmplus-demo.co.id,Sales Jakarta,Sales Executive,+62 21 5553108,"CN=Wulan Pratama,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20251115213500.0Z
+dpurnomo,00001030,Dewi Purnomo,dewi.purnomo@kmplus-demo.co.id,Accounting & Tax,Tax Officer,+62 21 5556919,"CN=Yuni Wijaya,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260215073000.0Z
+wsiregar,00001031,Wulan Siregar,wulan.siregar@kmplus-demo.co.id,Sales Jakarta,Sales Executive,+62 21 5553888,"CN=Wulan Pratama,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20261216074900.0Z
+msiregar,00001032,Maya Siregar,agus santoso@kmplus-demo.co.id,Human Capital,HR Generalist,+62 21 5550657,"CN=Nurul Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260926121100.0Z
+ahakim,00001033,Anisa Hakim,anisa.hakim@kmplus-demo.co.id,Learning & Development,Training Coordinator,+62 21 5553649,"CN=Ayu Kusuma,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20251113105800.0Z
+msinaga,00001034,Mega Sinaga,mega.sinaga@kmplus-demo.co.id,Information Technology,Software Engineer,+62 21 5550248,"CN=Dedi Siregar,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250901001600.0Z
+fgunawan,00001035,Fitri Gunawan,fitri.gunawan@kmplus-demo.co.id,Sales Surabaya,Account Manager,+62 21 5556253,"CN=Intan Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260306005500.0Z
+rsimanjuntak,00001036,Rina Simanjuntak,rina.simanjuntak@kmplus-demo.co.id,Human Capital,HR Generalist,+62 21 5557223,"CN=Nurul Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250827042100.0Z
+fsimanjuntak,00001037,Fajar Simanjuntak,fajar.simanjuntak@kmplus-demo.co.id,Data & Integration,Integration Analyst,+62 21 5557836,"CN=Siti Santoso,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20251004083100.0Z
+wgunawan,00001039,Wulan Gunawan,wulan.gunawan@kmplus-demo.co.id,Sales Surabaya,Account Manager,+62 21 5556153,"CN=Intan Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260123222600.0Z
+ngunawan,00001040,Nadia Gunawan,nadia.gunawan@kmplus-demo.co.id,Learning & Development,Training Coordinator,+62 21 5557661,"CN=Ayu Kusuma,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250513132400.0Z
+rsyahputra,00001041,Rina Syahputra,rina.syahputra@kmplus-demo.co.id,Learning & Development,Training Coordinator,+62 21 5554660,"CN=Ayu Kusuma,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260613063400.0Z
+bhidayat,00001042,Budi Hidayat,budi.hidayat@kmplus-demo.co.id,Sales Jakarta,Account Manager,+62 21 5557219,"CN=Wulan Pratama,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250705143200.0Z
+mlubis,00001043,Mega Lubis,mega.lubis@kmplus-demo.co.id,Finance,Finance Staff,+62 21 5553032,"CN=Fikri Harahap,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20251006083000.0Z
+aharahap,00001044,Arif Harahap,arif.harahap@kmplus-demo.co.id,Sales Surabaya,Account Manager,+62 21 5551758,"CN=Intan Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250505230800.0Z
+yhakim,00001045,Yoga Hakim,yoga.hakim@kmplus-demo.co.id,Data & Integration,Data Engineer,+62 21 5553361,"CN=Siti Santoso,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250107114400.0Z
+msinaga2,00001046,Maya Sinaga,maya.sinaga@kmplus-demo.co.id,Information Technology,Software Engineer,+62 21 5555129,"CN=Dedi Siregar,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250902132800.0Z
+apermana,00001047,Anisa Permana,anisa.permana@kmplus-demo.co.id,Data & Integration,Integration Analyst,+62 21 5550764,"CN=Siti Santoso,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260316213600.0Z
+ksiregar,00001048,Kurniawan Siregar,kurniawan.siregar@kmplus-demo.co.id,Human Capital,HR Generalist,+62 21 5559942,,512,20251007173000.0Z
+asusanto,00001049,Arif Susanto,arif.susanto@kmplus-demo.co.id,Human Capital,HR Generalist,+62 21 5552019,"CN=Nurul Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20251110023000.0Z
+csantoso,00001050,Citra Santoso,citra.santoso@kmplus-demo.co.id,Finance,Senior Finance Analyst,+62 21 5550451,"CN=Fikri Harahap,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20251021110700.0Z
+asyahputra,00001051,Arif Syahputra,arif.syahputra@kmplus-demo.co.id,Human Capital,HR Business Partner,+62 21 5554168,"CN=Nurul Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250920041300.0Z
+thidayat,00001052,Teguh Hidayat,teguh.hidayat@kmplus-demo.co.id,Information Technology,Software Engineer,+62 21 5551396,"CN=Dedi Siregar,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250410055300.0Z
+dhakim,00001054,Dimas Hakim,dimas.hakim@kmplus-demo.co.id,Sales Surabaya,Sales Executive,+62 21 5558549,"CN=Intan Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260219070700.0Z
+ilubis,00001055,Intan Lubis,intan.lubis@kmplus-demo.co.id,Sales Jakarta,Sales Executive,+62 21 5558280,"CN=Wulan Pratama,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250525194300.0Z
+hsantoso,00001056,Hendra Santoso,hendra.santoso@kmplus-demo.co.id,Information Technology,Software Engineer,+62 21 5559958,"CN=Dedi Siregar,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260109113600.0Z
+ehidayat,00001057,Eko Hidayat,eko.hidayat@kmplus-demo.co.id,Learning & Development,Instructional Designer,+62 21 5550552,"CN=Ayu Kusuma,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260805222400.0Z
+ewibowo,00001058,Eko Wibowo,eko.wibowo@kmplus-demo.co.id,Finance,Finance Staff,+62 21 5558670,"CN=Fikri Harahap,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250625204500.0Z
+dsantoso,00001059,Dimas Santoso,dimas.santoso@kmplus-demo.co.id,Finance,Finance Staff,+62 21 5554415,"CN=Nurul Permana,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250106141200.0Z
+awibowo,00001060,Andi Wibowo,andi.wibowo@kmplus-demo.co.id,Information Technology,Software Engineer,+62 21 5554127,"CN=Dedi Siregar,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20251220151800.0Z
+bpermana,00001061,Budi Permana,,Finance,Finance Staff,+62 21 5558531,"CN=Fikri Harahap,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250508212500.0Z
+nhidayat,00001062,Nurul Hidayat,nurul.hidayat@kmplus-demo.co.id,Human Capital,HR Business Partner,+62 21 5553002,"CN=Nurul Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250228131600.0Z
+rpratama,00001063,Rina Pratama,rina.pratama@kmplus-demo.co.id,Finance,Finance Staff,+62 21 5556829,"CN=Fikri Harahap,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20251126161600.0Z
+drahman,00001064,Dedi Rahman,dedi.rahman@kmplus-demo.co.id,Data & Integration,Data Engineer,+62 21 5551660,"CN=Siti Santoso,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260205122600.0Z
+wharahap,00001065,Wahyu Harahap,wahyu.harahap@kmplus-demo.co.id,Finance,Finance Staff,+62 21 5552391,"CN=Fikri Harahap,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260924054500.0Z
+psiregar,00001066,Putri Siregar,putri.siregar@kmplus-demo.co.id,Finance,Finance Staff,+62 21 5552941,"CN=Fikri Harahap,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250307103100.0Z
+alubis,00001067,Agus Lubis,agus.lubis@kmplus-demo.co.id,Finance,Finance Staff,+62 21 5558189,"CN=Fikri Harahap,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250609033500.0Z
+msusanto,00001069,Mega Susanto,mega.susanto@kmplus-demo.co.id,Operations,Operations Staff,+62 21 5559758,"CN=Citra Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20261111202100.0Z
+jsetiawan,00001070,Joko Setiawan,joko.setiawan@kmplus-demo.co.id,Data & Integration,Data Engineer,+62 21 5558822,"CN=Siti Santoso,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20261213130400.0Z
+lsiregar,00001071,Lestari Siregar,lestari.siregar@kmplus-demo.co.id,Sales Jakarta,Account Manager,+62 21 5554505,"CN=Wulan Pratama,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250310104200.0Z
+esetiawan,00001072,Eko Setiawan,eko.setiawan@kmplus-demo.co.id,Learning & Development,Training Coordinator,+62 21 5553919,"CN=Ayu Kusuma,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260818193700.0Z
+knugroho,00001073,Kurniawan Nugroho,kurniawan.nugroho@kmplus-demo.co.id,Sales Jakarta,Account Manager,+62 21 5555606,"CN=Wulan Pratama,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250818222800.0Z
+asantoso,00001074,Andi Santoso,,Finance,Finance Staff,+62 21 5557130,"CN=Fikri Harahap,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260514021200.0Z
+igunawan,00001075,Irfan Gunawan,irfan.gunawan@kmplus-demo.co.id,Human Capital,HR Generalist,+62 21 5554683,"CN=Nurul Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20251203112400.0Z
+dwibowo,00001076,Dedi Wibowo,dedi.wibowo@kmplus-demo.co.id,Sales,Key Account Manager,+62 21 5557030,"CN=Anisa Hidayat,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250224001000.0Z
+esantoso,00001077,Eko Santoso,eko.santoso@kmplus-demo.co.id,Data & Integration,Data Engineer,+62 21 5551065,"CN=Siti Santoso,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250303005800.0Z
+dsimanjuntak,00001078,Dedi Simanjuntak,dedi.simanjuntak@kmplus-demo.co.id,Accounting & Tax,Senior Accountant,+62 21 5554728,"CN=Yuni Wijaya,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250810205700.0Z
+rrahman,00001079,Rizky Rahman,rizky.rahman@kmplus-demo.co.id,Sales Surabaya,Sales Executive,+62 21 5552838,"CN=Intan Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20261121072900.0Z
+lnasution,00001080,Lestari Nasution,lestari.nasution@kmplus-demo.co.id,Sales Jakarta,Sales Executive,+62 21 5552464,"CN=Wulan Pratama,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20251127193900.0Z
+hsusanto,00001081,Hendra Susanto,hendra.susanto@kmplus-demo.co.id,Learning & Development,Instructional Designer,+62 21 5558928,"CN=Ayu Kusuma,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260323025300.0Z
+npurnomo,00001082,Nadia Purnomo,nadia.purnomo@kmplus-demo.co.id,Accounting & Tax,Tax Officer,+62 21 5550477,"CN=Yuni Wijaya,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20251205053800.0Z
+alubis2,00001084,Arif Lubis,arif.lubis@kmplus-demo.co.id,Data & Integration,Integration Analyst,+62 21 5552712,"CN=Siti Santoso,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20261115084100.0Z
+fsantoso,00001085,Fitri Santoso,fitri.santoso@kmplus-demo.co.id,Finance,Senior Finance Analyst,+62 21 5555133,"CN=Fikri Harahap,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250421000000.0Z
+dsimanjuntak2,00001086,Dimas Simanjuntak,dimas.simanjuntak@kmplus-demo.co.id,Sales,Sales Executive,+62 21 5554914,"CN=Anisa Hidayat,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250713153000.0Z
+yhidayat,00001087,Yoga Hidayat,yoga.hidayat@kmplus-demo.co.id,Sales Surabaya,Sales Executive,+62 21 5558465,"CN=Intan Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250219125400.0Z
+bsyahputra,00001088,Bayu Syahputra,bayu.syahputra@kmplus-demo.co.id,Human Capital,HR Generalist,+62 21 5553444,"CN=Nurul Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20251209074900.0Z
+hsusanto2,00001089,Hendra Susanto,hendra.susanto2@kmplus-demo.co.id,Sales Jakarta,Sales Executive,+62 21 5552520,"CN=Wulan Pratama,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260111031500.0Z
+jhakim,00001090,Joko Hakim,joko.hakim@kmplus-demo.co.id,Data & Integration,Data Engineer,+62 21 5559194,"CN=Siti Santoso,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260704204300.0Z
+ylubis3,00001091,Yoga Lubis,yoga.lubis@kmplus-demo.co.id,Human Capital,HR Generalist,+62 21 5559895,"CN=Nurul Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250814231600.0Z
+asyahputra2,00001092,Ayu Syahputra,ayu.syahputra@kmplus-demo.co.id,Information Technology,Software Engineer,+62 21 5551572,"CN=Dedi Siregar,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260301120300.0Z
+ssyahputra,00001093,Siti Syahputra,siti.syahputra@kmplus-demo.co.id,Human Capital,HR Business Partner,+62 21 5557344,"CN=Nurul Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20251116131300.0Z
+asantoso2,00001094,Arif Santoso,arif.santoso@kmplus-demo.co.id,Accounting & Tax,Senior Accountant,+62 21 5552882,"CN=Yuni Wijaya,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20261103021900.0Z
+fsiregar,00001095,Fikri Siregar,fikri.siregar@kmplus-demo.co.id,Human Capital,HR Generalist,+62 21 5558003,"CN=Nurul Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250919163000.0Z
+lhidayat,00001096,Lestari Hidayat,lestari.hidayat@kmplus-demo.co.id,Sales Jakarta,Sales Executive,+62 21 5557437,"CN=Wulan Pratama,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250109072600.0Z
+ehalim2,00001097,Eko Halim,eko.halim2@kmplus-demo.co.id,Sales Jakarta,Account Manager,+62 21 5554331,"CN=Wulan Pratama,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260714150600.0Z
+mrahman,00001099,Maya Rahman,maya.rahman@kmplus-demo.co.id,Operations,Operations Staff,+62 21 5558087,"CN=Citra Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260113113100.0Z
+mutomo,00001100,Maya Utomo,maya.utomo@kmplus-demo.co.id,Finance,Finance Staff,+62 21 5550219,"CN=Fikri Harahap,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260723094400.0Z
+ipurnomo,00001101,Intan Purnomo,intan.purnomo@kmplus-demo.co.id,Learning & Development,Training Coordinator,+62 21 5552558,"CN=Ayu Kusuma,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260801191200.0Z
+apratama,00001102,Anisa Pratama,anisa.pratama@kmplus-demo.co.id,Sales,Key Account Manager,+62 21 5552408,"CN=Anisa Hidayat,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20251114055100.0Z
+jwibowo,00001103,Joko Wibowo,joko.wibowo@kmplus-demo.co.id,Operations,Operations Staff,+62 21 5556886,"CN=Citra Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260905201300.0Z
+tsusanto,00001104,Teguh Susanto,teguh.susanto@kmplus-demo.co.id,Sales Surabaya,Account Manager,+62 21 5553707,"CN=Intan Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260910012600.0Z
+npermana,00001105,Nurul Permana,nurul.permana@kmplus-demo.co.id,Sales,Sales Executive,+62 21 5555677,"CN=Dimas Santoso,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250920202400.0Z
+dharahap,00001106,Dimas Harahap,dimas.harahap@kmplus-demo.co.id,Operations,Operations Supervisor,+62 21 5557680,"CN=Citra Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260421130600.0Z
+erahman,00001107,Eko Rahman,eko.rahman@kmplus-demo.co.id,Sales,Sales Executive,+62 21 5552030,"CN=Anisa Hidayat,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260511183500.0Z
+rlubis,00001108,Rizky Lubis,rizky.lubis@kmplus-demo.co.id,Operations,Operations Staff,+62 21 5554347,"CN=Citra Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260318230700.0Z
+ypurnomo,00001109,Yuni Purnomo,yuni.purnomo@kmplus-demo.co.id,Learning & Development,Instructional Designer,+62 21 5550496,"CN=Ayu Kusuma,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250826234300.0Z
+bnasution,00001110,Budi Nasution,budi.nasution@kmplus-demo.co.id,Learning & Development,Instructional Designer,+62 21 5556881,"CN=Ayu Kusuma,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20251213072000.0Z
+yrahman,00001111,Yuni Rahman,yuni.rahman@kmplus-demo.co.id,Information Technology,Senior Software Engineer,+62 21 5554204,"CN=Dedi Siregar,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20261119124100.0Z
+isinaga,00001112,Irfan Sinaga,irfan.sinaga@kmplus-demo.co.id,Human Capital,HR Generalist,+62 21 5551446,"CN=Nurul Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250114061700.0Z
+pwijaya,00001114,Putri Wijaya,putri.wijaya@kmplus-demo.co.id,Sales Jakarta,Sales Executive,+62 21 5556523,"CN=Wulan Pratama,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260708103900.0Z
+ywibowo2,00001115,Yuni Wibowo,yuni.wibowo2@kmplus-demo.co.id,Human Capital,HR Generalist,+62 21 5552127,"CN=Nurul Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250128085700.0Z
+dnasution,00001116,Dedi Nasution,dedi.nasution@kmplus-demo.co.id,Sales,Sales Executive,+62 21 5555139,"CN=Anisa Hidayat,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260802215300.0Z
+lwibowo,00001117,Lestari Wibowo,lestari.wibowo@kmplus-demo.co.id,Human Capital,HR Business Partner,+62 21 5553822,"CN=Nurul Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260306062500.0Z
+npratama,00001118,Nurul Pratama,nurul.pratama@kmplus-demo.co.id,Sales Jakarta,Sales Executive,+62 21 5550857,"CN=Wulan Pratama,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250418080400.0Z
+hrahman,00001119,Hendra Rahman,hendra.rahman@kmplus-demo.co.id,Sales Jakarta,Sales Executive,+62 21 5559976,"CN=Wulan Pratama,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250916071400.0Z
+rpratama2,00001120,Rina Pratama,rina.pratama2@kmplus-demo.co.id,Finance,Finance Staff,+62 21 5557693,"CN=Fikri Harahap,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20261024074800.0Z
+iwibowo,00001121,Indah Wibowo,indah.wibowo@kmplus-demo.co.id,Operations,Operations Supervisor,+62 21 5557360,"CN=Citra Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260924130000.0Z
+mlubis2,00001122,Mega Lubis,mega.lubis2@kmplus-demo.co.id,Data & Integration,Integration Analyst,+62 21 5551417,"CN=Siti Santoso,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260623001500.0Z
+plubis,00001123,Putri Lubis,putri.lubis@kmplus-demo.co.id,Accounting & Tax,Tax Officer,+62 21 5558702,"CN=Yuni Wijaya,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260923172400.0Z
+psetiawan,00001124,Putri Setiawan,putri.setiawan@kmplus-demo.co.id,Operations,Operations Staff,+62 21 5550229,"CN=Citra Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20251225203600.0Z
+rhalim,00001125,Rizky Halim,rizky.halim@kmplus-demo.co.id,Information Technology,Senior Software Engineer,+62 21 5550127,"CN=Dedi Siregar,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260409051100.0Z
+jhakim2,00001126,Joko Hakim,joko.hakim2@kmplus-demo.co.id,Information Technology,Software Engineer,+62 21 5555087,"CN=Dedi Siregar,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250420163200.0Z
+npermana2,00001127,Nadia Permana,nadia.permana@kmplus-demo.co.id,Human Capital,HR Business Partner,+62 21 5558592,"CN=Nurul Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20251105203500.0Z
+rsyahputra2,00001129,Rina Syahputra,rina.syahputra2@kmplus-demo.co.id,Finance,Finance Staff,+62 21 5555309,"CN=Fikri Harahap,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20261211181400.0Z
+asyahputra3,00001130,Agus Syahputra,agus.syahputra@kmplus-demo.co.id,Finance,Senior Finance Analyst,+62 21 5550839,"CN=Fikri Harahap,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250713194900.0Z
+bnasution2,00001131,Bayu Nasution,bayu.nasution@kmplus-demo.co.id,,Integration Analyst,+62 21 5557413,"CN=Siti Santoso,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260128131000.0Z
+fsimanjuntak2,00001132,Fajar Simanjuntak,fajar.simanjuntak2@kmplus-demo.co.id,Learning & Development,Training Coordinator,+62 21 5553721,"CN=Ayu Kusuma,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260608003500.0Z
+kpratama,00001133,Kartika Pratama,kartika.pratama@kmplus-demo.co.id,Sales Surabaya,Account Manager,+62 21 5559503,"CN=Intan Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250303233000.0Z
+csusanto,00001134,Citra Susanto,citra.susanto@kmplus-demo.co.id,Operations,Operations Staff,+62 21 5551252,"CN=Citra Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250320095100.0Z
+bsusanto,00001135,Budi Susanto,budi.susanto@kmplus-demo.co.id,Learning & Development,Training Coordinator,+62 21 5557063,"CN=Ayu Kusuma,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260512043800.0Z
+llubis,00001136,Lestari Lubis,lestari.lubis@kmplus-demo.co.id,Learning & Development,Training Coordinator,+62 21 5556040,"CN=Ayu Kusuma,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250116113900.0Z
+lpermana,00001137,Lestari Permana,lestari.permana@kmplus-demo.co.id,Accounting & Tax,Senior Accountant,+62 21 5550210,"CN=Yuni Wijaya,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20251003043200.0Z
+eutomo,00001138,Eko Utomo,eko.utomo@kmplus-demo.co.id,Data & Integration,Integration Analyst,+62 21 5553703,"CN=Siti Santoso,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250610071100.0Z
+msimanjuntak,00001139,Maya Simanjuntak,maya.simanjuntak@kmplus-demo.co.id,Sales Surabaya,Sales Executive,+62 21 5550797,"CN=Intan Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250418053300.0Z
+dwijaya,00001140,Dewi Wijaya,dewi.wijaya@kmplus-demo.co.id,Operations,Operations Supervisor,+62 21 5553921,"CN=Citra Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260717005400.0Z
+asyahputra4,00001141,Arif Syahputra,arif.syahputra2@kmplus-demo.co.id,Operations,Operations Staff,+62 21 5552843,"CN=Citra Syahputra,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20260619181000.0Z
+isusanto,00001142,Indah Susanto,indah.susanto@kmplus-demo.co.id,Learning & Development,Training Coordinator,+62 21 5559721,"CN=Ayu Kusuma,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20251113165300.0Z
+apermana2,00001144,Ayu Permana,ayu.permana@kmplus-demo.co.id,Data & Integration,Data Engineer,+62 21 5555323,"CN=Siti Santoso,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20261116151200.0Z
+gpratama,00001145,Gilang Pratama,gilang.pratama@kmplus-demo.co.id,Data & Integration,Data Engineer,+62 21 5559345,"CN=Siti Santoso,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20251018144400.0Z
+dnasution2,00001146,Dewi Nasution,dewi.nasution@kmplus-demo.co.id,Data & Integration,Data Engineer,+62 21 5555797,"CN=Siti Santoso,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250527092800.0Z
+wsinaga,00001147,Wulan Sinaga,wulan.sinaga@kmplus-demo.co.id,Learning & Development,Instructional Designer,+62 21 5554785,"CN=Ayu Kusuma,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250608030400.0Z
+kpratama2,00001148,Kurniawan Pratama,kurniawan.pratama@kmplus-demo.co.id,Information Technology,Software Engineer,+62 21 5551212,"CN=Dedi Siregar,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20261012003900.0Z
+hnugroho,00001149,Hendra Nugroho,hendra.nugroho@kmplus-demo.co.id,Information Technology,Senior Software Engineer,+62 21 5555400,"CN=Dedi Siregar,OU=Management,OU=KMPlus,DC=kmplus-demo,DC=co,DC=id",512,20250106210900.0Z
+svc-backup,,Service backup,,Information Technology,Service Account,,,66048,20260901080000.0Z
+svc-nexus,,Service nexus,,Information Technology,Service Account,,,66048,20260901080000.0Z
+svc-printer,,Service printer,,Information Technology,Service Account,,,66048,20260901080000.0Z
+svc-scanner,,Service scanner,,Information Technology,Service Account,,,66048,20260901080000.0Z
+svc-sql,,Service sql,,Information Technology,Service Account,,,66048,20260901080000.0Z

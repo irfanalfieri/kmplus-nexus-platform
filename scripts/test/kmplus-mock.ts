@@ -7,7 +7,7 @@ import type { AddressInfo } from 'node:net'
  * by the entity key; records without an email are rejected (to exercise the
  * quarantine path).
  */
-export async function startKmplusMock(token = 'mock-token') {
+export async function startKmplusMock(token = 'mock-token', port = 0) {
   const store = new Map<string, Map<string, Record<string, unknown>>>()
   const batches = new Set<string>()
   const entities = [
@@ -47,7 +47,7 @@ export async function startKmplusMock(token = 'mock-token') {
     }
     send(404, { error: 'not found' })
   })
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-  const { port } = server.address() as AddressInfo
-  return { baseUrl: `http://127.0.0.1:${port}`, token, store, batches, stop: () => new Promise<void>((r) => server.close(() => r())) }
+  await new Promise<void>((resolve) => server.listen(port, '127.0.0.1', resolve))
+  const bound = (server.address() as AddressInfo).port
+  return { baseUrl: `http://127.0.0.1:${bound}`, token, store, batches, stop: () => new Promise<void>((r) => server.close(() => r())) }
 }

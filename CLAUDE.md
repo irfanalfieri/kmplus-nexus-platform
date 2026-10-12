@@ -21,6 +21,9 @@ node --env-file=.env.local scripts/run-ts.mjs scripts/connector-harness.ts      
 node --env-file=.env.local scripts/run-ts.mjs --stubs scripts/integration-tests.ts    # server actions, permissions, worker (nexus_dev/nexus_test only)
 node --env-file=.env.local --experimental-strip-types scripts/reencrypt-credentials.mjs [--apply]   # after an encryption key rotation
 node --env-file=.env.local scripts/reset-2fa.mjs --email <address> [--apply]           # break-glass 2FA reset (no admin left to do it in Settings)
+node scripts/generate-test-data.mjs                                                   # fictional HR test files in test-data/ (scenarios + expected results in test-data/README.md)
+node scripts/run-ts.mjs scripts/mock-kmplus.ts [port] [token]                         # local KMPlus product (Ingest Contract) on :4010; needs NEXUS_ALLOW_PRIVATE_URLS=true
+node scripts/webhook-receiver.mjs <signing-secret> [port]                             # local outbound-webhook receiver on :4020 that verifies signatures
 ```
 **Databases:** Production uses the `postgres` database; Preview and Development (and therefore `.env.local`) use the separate `nexus_dev` database on the same Supabase server, with their own `NEXUS_ENCRYPTION_KEY`. To migrate production, run `db-migrate` with `DATABASE_URL` set to the production URL (same as dev with `/postgres` instead of `/nexus_dev`). Production `DATABASE_URL` is a sensitive Vercel variable and can't be pulled. Dev and preview have no scheduler.
 
