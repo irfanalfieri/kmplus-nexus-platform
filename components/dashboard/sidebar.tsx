@@ -1,139 +1,86 @@
 'use client'
 
 import Link from 'next/link'
-import { Activity, BarChart3, BookOpen, Database, LayoutDashboard, LogOut, Scale, Settings, Shield, ShieldCheck, Workflow, Zap } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { authClient } from '@/lib/auth-client'
+import { usePathname } from 'next/navigation'
+import { Activity, BarChart3, BookOpen, Database, LayoutDashboard, Plug, Scale, Settings, Shield, ShieldCheck, Workflow, type LucideIcon } from 'lucide-react'
+import { cn } from '@/lib/utils'
+import { NAV_GROUPS, sectionHref, type Section } from '@/lib/navigation'
+import { KmWordmark } from '@/components/brand/km-wordmark'
 import WorkspaceSwitcher from '@/components/workspace/workspace-switcher'
+import { useT } from '@/components/i18n/i18n-provider'
 
-interface SidebarProps {
-  activeTab: string
-  setActiveTab: (tab: string) => void
+export const SECTION_ICONS: Record<Section, LucideIcon> = {
+  overview: LayoutDashboard,
+  sources: Database,
+  connectors: Plug,
+  pipelines: Workflow,
+  rules: Scale,
+  quality: ShieldCheck,
+  catalog: BookOpen,
+  monitoring: Activity,
+  analytics: BarChart3,
+  governance: Shield,
+  settings: Settings,
 }
 
-export default function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
+export function currentSection(pathname: string): Section | null {
+  const slug = pathname.split('/')[2]
+  return (NAV_GROUPS.flatMap((g) => g.items) as readonly string[]).includes(slug) ? (slug as Section) : null
+}
+
+/** The rail: wordmark, workspace, and the screens grouped by job. */
+export default function Sidebar({ attention, onNavigate }: { attention: { quality: number }; onNavigate?: () => void }) {
+  const t = useT()
+  const active = currentSection(usePathname())
+
   return (
-    <div className="w-64 bg-card border-r border-border flex flex-col">
-      <div className="p-6 border-b border-border">
-        <div className="flex items-center gap-2">
-          <Workflow className="w-6 h-6 text-primary" />
-          <h1 className="text-xl font-bold">KMPlus Nexus</h1>
-        </div>
-        <p className="text-xs text-muted-foreground mt-1">Enterprise Integration</p>
-        <div className="mt-4">
-          <WorkspaceSwitcher />
-        </div>
+    <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
+      <div className="flex items-center gap-2.5 px-5 pt-5 pb-4">
+        <KmWordmark className="h-[22px] text-sidebar-accent-foreground" />
+        <span className="text-[15px] font-light tracking-wide text-sidebar-accent-foreground">{t('shell.product')}</span>
+      </div>
+      <div className="px-3 pb-3">
+        <WorkspaceSwitcher />
       </div>
 
-      <nav className="flex-1 p-4 space-y-2 overflow-auto">
-        <NavItem
-          icon={<LayoutDashboard className="w-5 h-5" />}
-          label="Dashboard"
-          onClick={() => setActiveTab('overview')}
-          active={activeTab === 'overview'}
-        />
-        <NavItem
-          icon={<Database className="w-5 h-5" />}
-          label="Data Sources"
-          onClick={() => setActiveTab('sources')}
-          active={activeTab === 'sources'}
-        />
-        <NavItem
-          icon={<Zap className="w-5 h-5" />}
-          label="Connectors"
-          onClick={() => setActiveTab('connectors')}
-          active={activeTab === 'connectors'}
-        />
-        <NavItem
-          icon={<Workflow className="w-5 h-5" />}
-          label="Pipelines"
-          onClick={() => setActiveTab('pipelines')}
-          active={activeTab === 'pipelines'}
-        />
-        <NavItem
-          icon={<Scale className="w-5 h-5" />}
-          label="Business Rules"
-          onClick={() => setActiveTab('rules')}
-          active={activeTab === 'rules'}
-        />
-        <NavItem
-          icon={<ShieldCheck className="w-5 h-5" />}
-          label="Data Quality"
-          onClick={() => setActiveTab('quality')}
-          active={activeTab === 'quality'}
-        />
-        <NavItem
-          icon={<BookOpen className="w-5 h-5" />}
-          label="Data Catalog"
-          onClick={() => setActiveTab('catalog')}
-          active={activeTab === 'catalog'}
-        />
-        <NavItem
-          icon={<Activity className="w-5 h-5" />}
-          label="Monitoring"
-          onClick={() => setActiveTab('monitoring')}
-          active={activeTab === 'monitoring'}
-        />
-        <NavItem
-          icon={<BarChart3 className="w-5 h-5" />}
-          label="Analytics"
-          onClick={() => setActiveTab('analytics')}
-          active={activeTab === 'analytics'}
-        />
-        <NavItem
-          icon={<Shield className="w-5 h-5" />}
-          label="Governance"
-          onClick={() => setActiveTab('governance')}
-          active={activeTab === 'governance'}
-        />
+      <nav aria-label={t('nav.primary')} className="flex-1 overflow-y-auto px-3 pb-4">
+        {NAV_GROUPS.map(({ group, items }) => (
+          <div key={group} className="mt-3 first:mt-1">
+            {group !== 'home' && (
+              <h2 className="px-2.5 pb-1 font-mono text-[11px] font-medium tracking-[0.08em] text-sidebar-muted uppercase">{t(`nav.groups.${group}`)}</h2>
+            )}
+            <ul className="space-y-px">
+              {items.map((item) => {
+                const Icon = SECTION_ICONS[item]
+                const current = item === active
+                const count = item === 'quality' ? attention.quality : 0
+                return (
+                  <li key={item}>
+                    <Link
+                      href={sectionHref(item)}
+                      onClick={onNavigate}
+                      aria-current={current ? 'page' : undefined}
+                      className={cn(
+                        'relative flex h-9 items-center gap-2.5 rounded-sm px-2.5 text-sm transition-colors outline-none hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-sidebar-ring',
+                        current && 'bg-sidebar-accent font-medium text-sidebar-accent-foreground before:absolute before:inset-y-1.5 before:left-0 before:w-[3px] before:rounded-r-sm before:bg-sidebar-primary',
+                      )}
+                    >
+                      <Icon className={cn('size-4 shrink-0', current ? 'text-sidebar-primary' : 'text-sidebar-muted')} aria-hidden />
+                      <span className="flex-1 truncate">{t(`nav.${item}`)}</span>
+                      {count > 0 && (
+                        <span className="rounded-sm bg-sidebar-alert px-1.5 font-mono text-[11px] leading-[18px] font-medium text-sidebar-primary-foreground">
+                          <span aria-hidden>{count > 999 ? '999+' : count}</span>
+                          <span className="sr-only">{t('nav.qualityBadge', { count })}</span>
+                        </span>
+                      )}
+                    </Link>
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        ))}
       </nav>
-
-      <div className="p-4 border-t border-border space-y-2">
-        <Button
-          variant={activeTab === 'settings' ? 'default' : 'outline'}
-          className="w-full justify-start"
-          size="sm"
-          onClick={() => setActiveTab('settings')}
-        >
-          <Settings className="w-4 h-4 mr-2" />
-          Workspace settings
-        </Button>
-        <Button
-          variant="ghost"
-          className="w-full justify-start text-destructive hover:text-destructive"
-          size="sm"
-          onClick={async () => {
-            await authClient.signOut()
-            window.location.href = '/'
-          }}
-        >
-          <LogOut className="w-4 h-4 mr-2" />
-          Sign Out
-        </Button>
-      </div>
     </div>
-  )
-}
-
-interface NavItemProps {
-  icon: React.ReactNode
-  label: string
-  onClick: () => void
-  active: boolean
-}
-
-function NavItem({ icon, label, onClick, active }: NavItemProps) {
-  return (
-    <button
-      onClick={onClick}
-      className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
-        active
-          ? 'bg-primary text-primary-foreground'
-          : 'hover:bg-muted text-foreground'
-      }`}
-    >
-      {icon}
-      <span className="text-sm font-medium">{label}</span>
-    </button>
   )
 }

@@ -1,19 +1,30 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowUpRight, Clock, Database, Edit, Eye, History, Lock, Loader2, Play, Plus, Rocket, RotateCcw, Trash2, Undo2, Workflow } from 'lucide-react'
+import Link from 'next/link'
+import { ArrowUpRight, ClipboardCheck, Edit, Eye, History, Loader2, Lock, MoreHorizontal, Pause, Play, Plus, Rocket, RotateCcw, Search, Trash2, Undo2, Workflow } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
+import { Notice, type NoticeTone } from '@/components/ui/notice'
+import { EmptyState } from '@/components/ui/empty-state'
+import { ConfirmDialog, Modal, useConfirm } from '@/components/ui/dialog'
+import { Table, TBody, Td, Th, THead, Tr } from '@/components/ui/data-table'
+import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from '@/components/ui/menu'
+import { FlowLine, StateMark, type FlowState } from '@/components/ui/flow-line'
+import { useToast } from '@/components/ui/toast'
 import { deletePipeline, discardDraft, getBuilderOptions, publishPipeline, getDatasetPreview, getRunStatus, listPipelines, resetSyncPosition, runPipelineNow, setPipelineEnabled } from '@/lib/actions/pipelines'
-import { DEFAULT_SCHEDULE, DEFAULT_SETTINGS, definitionSchema, scheduleSchema, stepTitle, topoOrder, type PipelineDefinition } from '@/lib/pipelines/definition'
+import { DEFAULT_SCHEDULE, DEFAULT_SETTINGS, definitionSchema, scheduleSchema, topoOrder, type PipelineDefinition } from '@/lib/pipelines/definition'
 import { describeSchedule } from '@/lib/pipelines/schedule'
 import PipelineEditor, { blankPipeline, SampleTable, type EditablePipeline } from '@/components/pipelines/pipeline-editor'
 import TemplatePicker from '@/components/pipelines/template-picker'
-import RunHistory, { formatWhen, statusBadge } from '@/components/pipelines/run-history'
+import RunHistory from '@/components/pipelines/run-history'
 import type { BuilderOptions } from '@/components/pipelines/step-editors'
 import { NOTIFICATIONS_CHANGED } from '@/components/dashboard/notification-bell'
+import { PageHeader } from '@/components/dashboard/page-header'
 import { useCan, useWorkspace } from '@/components/workspace/workspace-context'
 import { EnvironmentBadge } from '@/components/workspace/environment-badge'
+import { usePrefs } from '@/components/i18n/i18n-provider'
+import type { Translate } from '@/lib/i18n/translate'
 import ApprovalsPanel from '@/components/pipelines/approvals-panel'
 import PromoteDialog from '@/components/pipelines/promote-dialog'
 import { listPromotionStatus } from '@/lib/actions/environments'
@@ -41,29 +52,51 @@ function toEditable(p: PipelineRow): EditablePipeline {
   }
 }
 
-/** One-line description of a graph: source → steps → destinations. */
-function summarize(def: PipelineDefinition, sourceName: (id: string) => string) {
+/** The two ends of the line: source table → destination(s). */
+function ends(def: PipelineDefinition | null, sourceName: (id: string) => string, t: Translate) {
+  if (!def) return { from: t('pipelines.noSource'), table: '', to: t('pipelines.noDestination') }
   const order = topoOrder(def.nodes, def.edges) ?? def.nodes
   const src = order.find((n) => n.type === 'source')
-  const middle = order.filter((n) => n.type !== 'source' && n.type !== 'destination')
-  const dests = order.filter((n) => n.type === 'destination')
-  const from = src?.type === 'source' ? `${sourceName(src.dataSourceId)} · ${src.table}` : 'No source'
-  const to = dests.map((d) => (d.type === 'destination' ? (d.kind === 'dataset' ? `dataset ${d.datasetName}` : `${sourceName(d.dataSourceId)} · ${d.table}`) : '')).join(', ') || 'No destination'
-  return `${from} → ${middle.map(stepTitle).join(' → ') || 'no transforms'} → ${to}`
+  const dests = order.flatMap((d) => (d.type !== 'destination' ? [] : d.kind === 'dataset' ? [d.datasetName] : [`${sourceName(d.dataSourceId)} · ${d.table}`]))
+  return {
+    // The source bus names the system and table; the destination bus the dataset, product or table it feeds.
+    from: src?.type === 'source' ? sourceName(src.dataSourceId) : t('pipelines.noSource'),
+    table: src?.type === 'source' ? src.table : '',
+    to: dests.length ? (dests.length > 1 ? `${dests[0]} +${dests.length - 1}` : dests[0]) : t('pipelines.noDestination'),
+  }
+}
+
+/** A pipeline reads like a breaker: what state is its line in? */
+function lineState(p: PipelineRow, running: boolean, t: Translate): { state: FlowState; label: string } {
+  const schedule = scheduleSchema.safeParse(p.schedule ?? {}).data ?? DEFAULT_SCHEDULE
+  if (running || p.lastRunStatus === 'running' || p.lastRunStatus === 'queued') return { state: 'running', label: t('state.running') }
+  if (p.pendingApproval) return { state: 'held', label: t('state.awaitingApproval') }
+  if (p.lastRunStatus === 'failed') return { state: 'tripped', label: t('state.failed') }
+  if (p.heldRows > 0) return { state: 'tripped', label: t('state.held', { count: p.heldRows }) }
+  if (!(p.version ?? 0)) return { state: 'idle', label: t('state.draft') }
+  if (schedule.type !== 'manual' && !p.enabled) return { state: 'paused', label: t('state.paused') }
+  if (!p.lastRunStatus) return { state: 'idle', label: t('state.neverRun') }
+  if (p.lastRunStatus === 'cancelled') return { state: 'paused', label: t('state.cancelled') }
+  return { state: 'live', label: t('state.succeeded') }
 }
 
 export default function PipelineDesignerLayer() {
+  const { t, formatDateTime, formatNumber } = usePrefs()
+  const toast = useToast()
+  const [confirm, confirmEl] = useConfirm()
   const [items, setItems] = useState<PipelineRow[]>([])
   const [options, setOptions] = useState<BuilderOptions>({ dataSources: [], datasets: [], rules: [], pipelines: [], mappingTemplates: [] })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [notice, setNotice] = useState<{ id: string; kind: 'ok' | 'warn' | 'err'; text: string } | null>(null)
+  const [notice, setNotice] = useState<{ id: string; tone: NoticeTone; text: string } | null>(null)
   const [editing, setEditing] = useState<EditablePipeline | null>(null)
   const [picking, setPicking] = useState(false)
   const [historyFor, setHistoryFor] = useState<PipelineRow | null>(null)
   const [running, setRunning] = useState<string | null>(null)
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState<PipelineRow | null>(null)
+  const [busyDelete, setBusyDelete] = useState(false)
   const [preview, setPreview] = useState<{ name: string; rows: Record<string, unknown>[] } | null>(null)
+  const [query, setQuery] = useState('')
   const canEdit = useCan('pipelines:edit')
   const { workspace } = useWorkspace()
   // Locked environments (Production) change only by promotion (GV-7).
@@ -71,8 +104,19 @@ export default function PipelineDesignerLayer() {
   const [promoting, setPromoting] = useState<string | null>(null)
   const [deployed, setDeployed] = useState<Record<string, { environment: string | null; version: number | null }[]>>({})
   const [approvalsKey, setApprovalsKey] = useState(0)
+  const [approvalHistory, setApprovalHistory] = useState(false)
   const canRun = useCan('pipelines:run')
   const canPreview = useCan('data:preview')
+
+  const when = useCallback(
+    (value: Date | string | null | undefined) => (value ? `${formatDateTime(value, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', dateStyle: undefined, timeStyle: undefined })} WIB` : '—'),
+    [formatDateTime],
+  )
+  // execution_logs.duration is whole seconds.
+  const duration = (s: number | null | undefined) => {
+    if (s == null) return ''
+    return s < 60 ? t('pipelines.dur', { value: s < 1 ? '<1' : s }) : t('pipelines.durMin', { min: Math.floor(s / 60), sec: s % 60 })
+  }
 
   const load = useCallback(async () => {
     try {
@@ -83,27 +127,37 @@ export default function PipelineDesignerLayer() {
       setApprovalsKey((k) => k + 1)
       setError('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load pipelines')
+      setError(err instanceof Error ? err.message : t('pipelines.loadFailed'))
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [workspace.environment, t])
 
   useEffect(() => {
     void load()
   }, [load])
 
-  const sourceName = useCallback((id: string) => options.dataSources.find((d) => d.id === id)?.name ?? 'missing source', [options])
+  const sourceName = useCallback((id: string) => options.dataSources.find((d) => d.id === id)?.name ?? '—', [options])
 
-  const stats = useMemo(() => {
-    const ran = items.filter((p) => p.lastRunStatus)
-    return {
-      total: items.length,
-      scheduled: items.filter((p) => p.enabled && p.nextRunAt).length,
-      healthy: ran.filter((p) => p.lastRunStatus === 'success').length,
-      failing: ran.filter((p) => p.lastRunStatus === 'failed').length,
-    }
-  }, [items])
+  const rows = useMemo(
+    () =>
+      items.map((p) => {
+        const def = definitionSchema.safeParse(p.config)
+        return { p, def: def.success ? def.data : null, ...ends(def.success ? def.data : null, sourceName, t), line: lineState(p, running === p.id, t) }
+      }),
+    [items, sourceName, running, t],
+  )
+  const q = query.trim().toLowerCase()
+  const visible = q ? rows.filter((r) => [r.p.name, r.p.description ?? '', r.from, r.to].some((s) => s.toLowerCase().includes(q))) : rows
+
+  const summary = useMemo(() => {
+    const scheduled = items.filter((p) => p.enabled && p.nextRunAt).length
+    const attention = rows.filter((r) => r.line.state === 'tripped' || r.line.state === 'held').length
+    const last = items.map((p) => p.lastRunAt).filter(Boolean).sort().at(-1)
+    return [t('pipelines.summary', { count: items.length }), t('pipelines.statScheduled', { count: scheduled }), attention ? t('pipelines.statAttention', { count: attention }) : null, last ? t('pipelines.lastRunAt', { when: when(last) }) : null]
+      .filter(Boolean)
+      .join(' · ')
+  }, [items, rows, t, when])
 
   /** Runs execute in the background worker; poll the run until it finishes. */
   const run = async (p: PipelineRow) => {
@@ -112,81 +166,84 @@ export default function PipelineDesignerLayer() {
     try {
       const outcome = await runPipelineNow(p.id)
       if (outcome.status === 'skipped') {
-        setNotice({ id: p.id, kind: 'warn', text: outcome.message })
+        setNotice({ id: p.id, tone: 'warning', text: outcome.message })
         return
       }
-      setNotice({ id: p.id, kind: 'ok', text: 'Queued…' })
+      setNotice({ id: p.id, tone: 'info', text: t('pipelines.runQueued') })
       for (;;) {
         await new Promise((r) => setTimeout(r, 3000))
         const s = await getRunStatus(outcome.runId)
         if (s.active) {
-          const progress = s.recordsProcessed ? `${s.recordsProcessed.toLocaleString()} rows read, ${(s.recordsSuccess ?? 0).toLocaleString()} written` : 'starting'
-          setNotice({ id: p.id, kind: 'ok', text: `${s.status === 'queued' ? 'Queued' : 'Running'} in the background: ${progress}${s.errorMessage ? ` · ${s.errorMessage}` : ''}` })
+          const progress = s.recordsProcessed ? t('pipelines.progressRows', { read: formatNumber(s.recordsProcessed), written: formatNumber(s.recordsSuccess ?? 0) }) : t('pipelines.starting')
+          setNotice({ id: p.id, tone: 'info', text: `${t('pipelines.runProgress', { status: s.status === 'queued' ? t('state.queued') : t('state.running'), progress })}${s.errorMessage ? ` · ${s.errorMessage}` : ''}` })
           continue
         }
-        const summary = `${(s.recordsSuccess ?? 0).toLocaleString()} of ${(s.recordsProcessed ?? 0).toLocaleString()} rows written${s.recordsError ? `, ${s.recordsError.toLocaleString()} rejected` : ''}.`
+        const vars = { written: formatNumber(s.recordsSuccess ?? 0), read: formatNumber(s.recordsProcessed ?? 0), rejected: formatNumber(s.recordsError ?? 0) }
+        const result = s.recordsError ? t('pipelines.runSummaryRejected', vars) : t('pipelines.runSummary', vars)
         setNotice({
           id: p.id,
-          kind: s.status === 'success' ? 'ok' : s.status === 'failed' ? 'err' : 'warn',
-          text: s.status === 'failed' ? `Run failed: ${s.errorMessage ?? 'unknown error'}` : s.status === 'cancelled' ? `Run cancelled: ${summary}` : `Run finished: ${summary}`,
+          tone: s.status === 'success' ? 'success' : s.status === 'failed' ? 'danger' : 'warning',
+          text:
+            s.status === 'failed'
+              ? t('pipelines.runFailed', { error: s.errorMessage ?? t('pipelines.unknownError') })
+              : s.status === 'cancelled'
+                ? t('pipelines.runCancelled', { summary: result })
+                : t('pipelines.runFinished', { summary: result }),
         })
         break
       }
       await load()
     } catch (err) {
-      setNotice({ id: p.id, kind: 'err', text: err instanceof Error ? err.message : 'Run failed' })
+      setNotice({ id: p.id, tone: 'danger', text: err instanceof Error ? err.message : t('common.somethingWrong') })
     } finally {
       setRunning(null)
       window.dispatchEvent(new Event(NOTIFICATIONS_CHANGED))
     }
   }
 
-  const toggle = async (p: PipelineRow) => {
+  const attempt = async (p: PipelineRow, action: () => Promise<unknown>, done?: string) => {
     try {
-      await setPipelineEnabled(p.id, !p.enabled)
+      await action()
+      if (done) toast({ message: done })
       await load()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Update failed')
+      setNotice({ id: p.id, tone: 'danger', text: err instanceof Error ? err.message : t('common.somethingWrong') })
     }
   }
+
+  const toggle = (p: PipelineRow) => attempt(p, () => setPipelineEnabled(p.id, !p.enabled), p.enabled ? t('pipelines.paused') : t('pipelines.resumed'))
 
   const resetSync = async (p: PipelineRow) => {
-    try {
-      await resetSyncPosition(p.id)
-      setNotice({ id: p.id, kind: 'ok', text: 'Sync position reset. The next run reads every row again.' })
-      await load()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Reset failed')
-    }
-  }
-
-  const remove = async (id: string) => {
-    try {
-      await deletePipeline(id)
-      setConfirmDelete(null)
-      await load()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Delete failed')
-    }
+    if (await confirm({ title: t('pipelines.resetTitle', { name: p.name }), description: t('pipelines.resetBody'), confirmLabel: t('pipelines.resetSync') }))
+      await attempt(p, () => resetSyncPosition(p.id), t('pipelines.resetDone'))
   }
 
   const publish = async (p: PipelineRow) => {
-    try {
+    if (!(await confirm({ title: t('pipelines.publishTitle', { version: p.draftVersion ?? '', name: p.name }), description: t('pipelines.publishBody'), confirmLabel: t('pipelines.publishDraft') }))) return
+    await attempt(p, async () => {
       const res = await publishPipeline(p.id)
-      setNotice(res.published ? { id: p.id, kind: 'ok', text: `Published v${res.version}. Scheduled and manual runs now use it.` } : { id: p.id, kind: 'warn', text: `v${res.version} is waiting for approval by an admin or data steward (see Approvals). The current version keeps running.` })
-      await load()
-    } catch (err) {
-      setNotice({ id: p.id, kind: 'err', text: err instanceof Error ? err.message : 'Publish failed' })
-    }
+      setNotice(res.published ? { id: p.id, tone: 'success', text: t('pipelines.published', { version: res.version }) } : { id: p.id, tone: 'held', text: t('pipelines.awaitingApprovalNotice', { version: res.version }) })
+    })
   }
 
   const discard = async (p: PipelineRow) => {
+    if (await confirm({ title: t('pipelines.discardTitle', { version: p.draftVersion ?? '' }), description: t('pipelines.discardBody'), confirmLabel: t('pipelines.discardDraft'), tone: 'danger' }))
+      await attempt(p, () => discardDraft(p.id), t('pipelines.discarded'))
+  }
+
+  const remove = async () => {
+    if (!deleting) return
+    setBusyDelete(true)
     try {
-      await discardDraft(p.id)
-      setNotice({ id: p.id, kind: 'ok', text: 'Draft discarded. The draft stays in History.' })
+      await deletePipeline(deleting.id)
+      toast({ message: t('pipelines.deleted') })
+      setDeleting(null)
       await load()
     } catch (err) {
-      setNotice({ id: p.id, kind: 'err', text: err instanceof Error ? err.message : 'Discard failed' })
+      setError(err instanceof Error ? err.message : t('common.somethingWrong'))
+      setDeleting(null)
+    } finally {
+      setBusyDelete(false)
     }
   }
 
@@ -195,12 +252,18 @@ export default function PipelineDesignerLayer() {
       const res = await getDatasetPreview(name)
       setPreview({ name, rows: res.rows })
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Preview failed')
+      setError(err instanceof Error ? err.message : t('common.somethingWrong'))
     }
   }
 
+  const newButton = editable && (
+    <Button onClick={() => setPicking(true)} disabled={loading}>
+      <Plus /> {t('pipelines.new')}
+    </Button>
+  )
+
   return (
-    <div className="space-y-6">
+    <div>
       {editing && (
         <PipelineEditor
           initial={editing}
@@ -208,8 +271,8 @@ export default function PipelineDesignerLayer() {
           onClose={() => setEditing(null)}
           onSaved={async (id, res) => {
             setEditing(null)
-            if (res.approvalId) setNotice({ id, kind: 'warn', text: `v${res.version} is waiting for approval by an admin or data steward (see Approvals). The current version keeps running.` })
-            else if (res.published) setNotice({ id, kind: 'ok', text: `Published v${res.version}.` })
+            if (res.approvalId) setNotice({ id, tone: 'held', text: t('pipelines.awaitingApprovalNotice', { version: res.version }) })
+            else if (res.published) setNotice({ id, tone: 'success', text: t('pipelines.published', { version: res.version }) })
             await load()
           }}
         />
@@ -231,7 +294,7 @@ export default function PipelineDesignerLayer() {
           onDone={async (text) => {
             const id = promoting
             setPromoting(null)
-            setNotice({ id, kind: 'ok', text })
+            setNotice({ id, tone: 'success', text })
             await load()
           }}
         />
@@ -245,218 +308,286 @@ export default function PipelineDesignerLayer() {
           onRestored={load}
         />
       )}
+      {confirmEl}
+      <ConfirmDialog
+        open={deleting !== null}
+        onOpenChange={(open) => !open && setDeleting(null)}
+        title={t('pipelines.deleteTitle', { name: deleting?.name ?? '' })}
+        description={t('pipelines.deleteBody')}
+        confirmLabel={t('pipelines.delete')}
+        tone="danger"
+        busy={busyDelete}
+        onConfirm={remove}
+      />
 
-      <div className="rounded-xl border border-border bg-card p-6">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <div className="mb-2 flex items-center gap-2">
-              <Workflow className="h-5 w-5 text-primary" />
-              <Badge variant="outline">Layer 4</Badge>
-            </div>
-            <h2 className="flex items-center gap-2 text-2xl font-bold">
-              Pipelines <EnvironmentBadge environment={workspace.environment} className="text-xs" />
-            </h2>
-            <p className="mt-1 text-muted-foreground">Read from a data source, filter, map, validate and route rows through business rules, then write to one or more Nexus datasets or databases. Edits are saved as drafts; runs use the published version.</p>
-          </div>
-          {editable && (
-            <Button onClick={() => setPicking(true)} disabled={loading}>
-              <Plus className="mr-2 h-4 w-4" /> New pipeline
+      <PageHeader
+        title={
+          <span className="inline-flex items-center gap-2.5">
+            {t('pages.pipelines.title')} <EnvironmentBadge environment={workspace.environment} />
+          </span>
+        }
+        description={t('pages.pipelines.description')}
+        meta={!loading && items.length > 0 ? summary : undefined}
+        actions={
+          <>
+            <Button variant="outline" aria-pressed={approvalHistory} onClick={() => setApprovalHistory((v) => !v)}>
+              <ClipboardCheck /> {t('approvals.history')}
             </Button>
+            {newButton}
+          </>
+        }
+      />
+
+      <div className="space-y-4">
+        {error && <Notice tone="danger">{error}</Notice>}
+        {workspace.locked && (
+          <Notice tone="warning" live={false}>
+            <span className="inline-flex items-start gap-1.5">
+              <Lock className="mt-0.5 size-3.5 shrink-0" aria-hidden /> {t('pipelines.locked')}
+            </span>
+          </Notice>
+        )}
+
+        <ApprovalsPanel refreshKey={approvalsKey} onDecided={() => void load()} history={approvalHistory} onHistoryChange={setApprovalHistory} />
+
+        <section aria-labelledby="pipelines-board" className="rounded-lg border border-border bg-card">
+          <h2 id="pipelines-board" className="sr-only">
+            {t('pages.pipelines.title')}
+          </h2>
+          {items.length > 0 && (
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-border px-4 py-3">
+              <label className="relative w-full max-w-sm">
+                <span className="sr-only">{t('pipelines.searchLabel')}</span>
+                <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
+                <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('pipelines.searchPlaceholder')} className="pl-8" />
+              </label>
+              <ul aria-label={t('pipelines.legend')} className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground lg:ml-auto">
+                {(
+                  [
+                    ['live', 'state.live'],
+                    ['paused', 'state.paused'],
+                    ['tripped', 'state.tripped'],
+                    ['held', 'state.awaitingApproval'],
+                  ] as const
+                ).map(([s, key]) => (
+                  <li key={s}>
+                    <StateMark state={s} className="text-xs font-normal">
+                      {t(key)}
+                    </StateMark>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
-        </div>
-      </div>
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        {[
-          ['Pipelines', stats.total],
-          ['Scheduled', stats.scheduled],
-          ['Last run OK', stats.healthy],
-          ['Last run failed', stats.failing],
-        ].map(([label, value]) => (
-          <div key={label} className="rounded-xl border border-border bg-card p-4">
-            <div className="text-sm text-muted-foreground">{label}</div>
-            <div className="mt-1 text-2xl font-bold">{value}</div>
-          </div>
-        ))}
-      </div>
-
-      {error && <p className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
-
-      {workspace.locked && (
-        <p className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 p-3 text-sm">
-          <Lock className="h-4 w-4 shrink-0 text-red-600" />
-          This environment is locked: pipelines change only by promotion from the previous environment. Runs, schedules and approvals work as usual.
-        </p>
-      )}
-
-      <ApprovalsPanel refreshKey={approvalsKey} onDecided={() => void load()} />
-
-      <div className="space-y-3">
-        {loading ? (
-          <div className="flex items-center justify-center rounded-xl border border-border bg-card p-10 text-muted-foreground">
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading pipelines…
-          </div>
-        ) : items.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-border bg-card p-10 text-center">
-            <Workflow className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
-            <p className="font-medium">No pipelines yet</p>
-            <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
-              {options.dataSources.length
-                ? 'Create your first pipeline to move data from a connected source into a Nexus dataset or another database.'
-                : 'Connect a data source first (Data Sources tab), then create a pipeline that reads from it.'}
+          {loading ? (
+            <p className="flex items-center justify-center gap-2 p-10 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" aria-hidden /> {t('common.loading')}
             </p>
-            {editable ? (
-              <Button className="mt-4" onClick={() => setPicking(true)}>
-                <Plus className="mr-2 h-4 w-4" /> New pipeline
-              </Button>
-            ) : (
-              <p className="mt-3 text-xs text-muted-foreground">Admins and data stewards create pipelines.</p>
-            )}
-          </div>
-        ) : (
-          items.map((p) => {
-            const def = definitionSchema.safeParse(p.config)
-            const srcNode = def.success ? def.data.nodes.find((n) => n.type === 'source') : undefined
-            const src = srcNode?.type === 'source' ? srcNode : null
-            const published = (p.version ?? 0) > 0
-            const schedule = scheduleSchema.safeParse(p.schedule ?? {}).data ?? DEFAULT_SCHEDULE
-            return (
-              <div key={p.id} className="rounded-xl border border-border bg-card p-4">
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-semibold">{p.name}</span>
-                      {statusBadge(p.lastRunStatus)}
-                      {published ? <Badge variant="outline">v{p.version}</Badge> : <Badge variant="secondary">never published</Badge>}
-                      {p.draftVersion && <Badge variant="secondary">draft v{p.draftVersion}</Badge>}
-                      {p.pendingApproval && (
-                        <Badge variant="outline" className="border-amber-500/50 text-amber-700 dark:text-amber-300">
-                          <Clock className="mr-1 h-3 w-3" /> v{p.pendingApproval.version} awaiting approval
-                        </Badge>
-                      )}
-                      {(deployed[p.id] ?? []).map((d) =>
-                        isEnvironment(d.environment) ? (
-                          <span key={d.environment} className="text-xs text-muted-foreground" title={`Version in ${ENVIRONMENT_INFO[d.environment].label}`}>
-                            {ENVIRONMENT_INFO[d.environment].short}: {d.version === null ? 'not promoted' : d.version ? `v${d.version}` : 'not published'}
+          ) : items.length === 0 ? (
+            <EmptyState icon={<Workflow />} title={t('pipelines.emptyTitle')} action={newButton || undefined}>
+              <p>{options.dataSources.length ? t('pipelines.emptyBody') : t('pipelines.needSourceFirst')}</p>
+              {!editable && <p className="mt-2 text-xs">{t('pipelines.adminsCreate')}</p>}
+            </EmptyState>
+          ) : visible.length === 0 ? (
+            <EmptyState compact title={t('pipelines.noMatch', { query })} />
+          ) : (
+            <Table label={t('pages.pipelines.title')} className="min-w-[760px]">
+              <THead>
+                <tr>
+                  <Th className="min-w-56">{t('pipelines.colPipeline')}</Th>
+                  <Th className="hidden xl:table-cell">{t('pipelines.colLine')}</Th>
+                  <Th>{t('pipelines.colState')}</Th>
+                  <Th>{t('pipelines.colLastRun')}</Th>
+                  <Th className="text-right">{t('pipelines.colRows')}</Th>
+                  <Th className="text-right">
+                    <span className="sr-only">{t('common.edit')}</span>
+                  </Th>
+                </tr>
+              </THead>
+              <TBody>
+                {visible.map(({ p, def, from, table, to, line }) => {
+                  const published = (p.version ?? 0) > 0
+                  const schedule = scheduleSchema.safeParse(p.schedule ?? {}).data ?? DEFAULT_SCHEDULE
+                  const src = def?.nodes.find((n) => n.type === 'source')
+                  const incremental = src?.type === 'source' && src.mode === 'incremental' ? src : null
+                  const meta = [
+                    describeSchedule(schedule) + (schedule.type === 'after' ? ` (${items.find((x) => x.id === schedule.afterPipelineId)?.name ?? '—'})` : ''),
+                    schedule.type !== 'manual' && p.enabled && p.nextRunAt ? t('pipelines.next', { when: when(p.nextRunAt) }) : null,
+                    p.webhookTrigger ? t('pipelines.webhook') : null,
+                  ].filter(Boolean)
+                  return [
+                    <Tr key={p.id} selected={notice?.id === p.id}>
+                      <Td>
+                        <div className="font-semibold text-pretty">{p.name}</div>
+                        <div className="mt-0.5 text-xs text-muted-foreground">
+                          <span className="font-mono">
+                            {published ? `v${p.version}` : t('pipelines.neverPublished')}
+                            {p.draftVersion ? ` · ${t('pipelines.draftVersion', { version: p.draftVersion })}` : ''}
+                            {(deployed[p.id] ?? []).map((d) =>
+                              isEnvironment(d.environment) ? ` · ${ENVIRONMENT_INFO[d.environment].short}: ${d.version === null ? t('pipelines.notPromoted') : d.version ? `v${d.version}` : t('pipelines.neverPublished')}` : '',
+                            )}
                           </span>
-                        ) : null
-                      )}
-                    </div>
-                    {p.description && <p className="mt-1 text-sm text-muted-foreground">{p.description}</p>}
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      {def.success ? summarize(def.data, sourceName) : 'Invalid definition'}
-                    </p>
-                    {src?.mode === 'incremental' && (
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        Incremental on <span className="font-mono">{src.watermarkColumn}</span> ·{' '}
-                        {p.syncPosition ? <>synced up to <span className="font-mono">{p.syncPosition}</span></> : 'first run will read everything'}
-                      </p>
-                    )}
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {describeSchedule(schedule)}
-                      {schedule.type === 'after' && ` (${items.find((x) => x.id === schedule.afterPipelineId)?.name ?? 'missing pipeline'})`}
-                      {p.webhookTrigger && ' · webhook trigger on'}
-                      {schedule.type !== 'manual' && (p.enabled ? ` · next ${formatWhen(p.nextRunAt)}` : ' · paused')} · last run {formatWhen(p.lastRunAt)}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    {p.draftVersion && editable && (
-                      <>
-                        <Button size="sm" variant="outline" onClick={() => void publish(p)} title={`Make draft v${p.draftVersion} the version that runs`}>
-                          <Rocket className="mr-1 h-4 w-4" /> Publish draft
-                        </Button>
-                        {published && (
-                          <Button size="sm" variant="ghost" onClick={() => void discard(p)} title="Drop unpublished changes">
-                            <Undo2 className="mr-1 h-4 w-4" /> Discard draft
-                          </Button>
+                          {' · '}
+                          {meta.join(' · ')}
+                        </div>
+                        {incremental && (
+                          <div className="mt-0.5 text-xs text-muted-foreground">
+                            {t('pipelines.incremental', { column: incremental.watermarkColumn ?? '' })} · {p.syncPosition ? t('pipelines.syncedTo', { position: p.syncPosition }) : t('pipelines.firstRunAll')}
+                          </div>
                         )}
-                      </>
-                    )}
-                    {schedule.type !== 'manual' && canRun && published && (
-                      <label className="flex items-center gap-2 rounded-md border border-border px-2 py-1 text-xs">
-                        <input type="checkbox" checked={p.enabled ?? false} onChange={() => toggle(p)} />
-                        Scheduled
-                      </label>
-                    )}
-                    {canRun && <Button size="sm" onClick={() => run(p)} disabled={running !== null || !published} title={published ? undefined : 'Publish the pipeline before running it'}>
-                      {running === p.id ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Play className="mr-1 h-4 w-4" />}
-                      {running === p.id ? 'Running…' : 'Run now'}
-                    </Button>}
-                    {canEdit && (
-                      <Button size="sm" variant="outline" onClick={() => setEditing(toEditable(p))}>
-                        {editable ? <Edit className="mr-1 h-4 w-4" /> : <Eye className="mr-1 h-4 w-4" />} {editable ? 'Edit' : 'View'}
+                        <FlowLine className="mt-1.5 max-w-sm xl:hidden" from={from} to={to} state={line.state} srLabel={t('pipelines.flowLabel', { from: table ? `${from} · ${table}` : from, to })} />
+                      </Td>
+                      <Td className="hidden xl:table-cell">
+                        <FlowLine className="max-w-md" from={from} to={to} state={line.state} srLabel={t('pipelines.flowLabel', { from: table ? `${from} · ${table}` : from, to })} />
+                      </Td>
+                      <Td>
+                        {line.state === 'tripped' && p.heldRows > 0 && p.lastRunStatus !== 'failed' ? (
+                          <Link href="/dashboard/quality" className="rounded-sm hover:underline">
+                            <StateMark state="tripped">{line.label}</StateMark>
+                          </Link>
+                        ) : (
+                          <StateMark state={line.state}>{line.label}</StateMark>
+                        )}
+                      </Td>
+                      <Td className="font-mono text-xs whitespace-nowrap text-muted-foreground">
+                        {when(p.lastRunAt)}
+                        {p.lastRun?.duration != null && <div>{duration(p.lastRun.duration)}</div>}
+                      </Td>
+                      <Td className="text-right font-mono text-xs whitespace-nowrap">
+                        {p.lastRun ? (
+                          <>
+                            {formatNumber(p.lastRun.written ?? 0)} / {formatNumber(p.lastRun.read ?? 0)}
+                            {p.heldRows > 0 && <div className="text-danger-text">{t('pipelines.heldLink', { count: formatNumber(p.heldRows) })}</div>}
+                          </>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </Td>
+                      <Td className="text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          {p.draftVersion && editable && (
+                            <Button size="sm" variant="outline" onClick={() => void publish(p)}>
+                              <Rocket /> {t('pipelines.publishDraft')}
+                            </Button>
+                          )}
+                          {canRun && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => void run(p)}
+                              disabled={running !== null || !published}
+                              title={published ? undefined : t('pipelines.publishFirst')}
+                              aria-label={t('pipelines.runFor', { name: p.name })}
+                            >
+                              {running === p.id ? <Loader2 className="animate-spin" /> : <Play />}
+                              {running === p.id ? t('pipelines.running') : t('pipelines.run')}
+                            </Button>
+                          )}
+                          <Menu>
+                            <MenuTrigger render={<Button size="icon-sm" variant="ghost" aria-label={t('pipelines.more', { name: p.name })} />}>
+                              <MoreHorizontal />
+                            </MenuTrigger>
+                            <MenuContent>
+                              {canEdit && (
+                                <MenuItem onClick={() => setEditing(toEditable(p))}>
+                                  {editable ? <Edit aria-hidden /> : <Eye aria-hidden />} {editable ? t('pipelines.edit') : t('pipelines.view')}
+                                </MenuItem>
+                              )}
+                              <MenuItem onClick={() => setHistoryFor(p)}>
+                                <History aria-hidden /> {t('pipelines.history')}
+                              </MenuItem>
+                              {canRun && published && schedule.type !== 'manual' && (
+                                <MenuItem onClick={() => void toggle(p)}>
+                                  {p.enabled ? <Pause aria-hidden /> : <Play aria-hidden />} {p.enabled ? t('pipelines.pauseSchedule') : t('pipelines.resumeSchedule')}
+                                </MenuItem>
+                              )}
+                              {canEdit && published && workspace.environment && workspace.environment !== 'prod' && (
+                                <MenuItem onClick={() => setPromoting(p.id)}>
+                                  <ArrowUpRight aria-hidden /> {t('pipelines.promote')}
+                                </MenuItem>
+                              )}
+                              {p.draftVersion && editable && published && (
+                                <MenuItem onClick={() => void discard(p)}>
+                                  <Undo2 aria-hidden /> {t('pipelines.discardDraft')}
+                                </MenuItem>
+                              )}
+                              {incremental && p.syncPosition && canEdit && (
+                                <MenuItem onClick={() => void resetSync(p)}>
+                                  <RotateCcw aria-hidden /> {t('pipelines.resetSync')}
+                                </MenuItem>
+                              )}
+                              {editable && (
+                                <>
+                                  <MenuSeparator />
+                                  <MenuItem onClick={() => setDeleting(p)} className="text-danger-text [&_svg]:text-danger-text!">
+                                    <Trash2 aria-hidden /> {t('pipelines.delete')}
+                                  </MenuItem>
+                                </>
+                              )}
+                            </MenuContent>
+                          </Menu>
+                        </div>
+                      </Td>
+                    </Tr>,
+                    notice?.id === p.id ? (
+                      <tr key={`${p.id}-notice`}>
+                        <td colSpan={6} className="px-4 pb-3">
+                          <Notice tone={notice.tone}>{notice.text}</Notice>
+                        </td>
+                      </tr>
+                    ) : null,
+                  ]
+                })}
+              </TBody>
+            </Table>
+          )}
+        </section>
+
+        {options.datasets.length > 0 && (
+          <section aria-labelledby="datasets-title" className="rounded-lg border border-border bg-card">
+            <div className="border-b border-border px-4 py-3">
+              <h2 id="datasets-title" className="text-base font-semibold">
+                {t('pipelines.datasetsTitle')}
+              </h2>
+              <p className="text-sm text-muted-foreground">{t('pipelines.datasetsBody')}</p>
+            </div>
+            <Table label={t('pipelines.datasetsTitle')}>
+              <THead>
+                <tr>
+                  <Th>{t('pipelines.colDataset')}</Th>
+                  <Th className="text-right">{t('pipelines.colRows')}</Th>
+                  <Th className="hidden text-right sm:table-cell">{t('pipelines.colColumns')}</Th>
+                  <Th className="hidden md:table-cell">{t('pipelines.colLoaded')}</Th>
+                  <Th className="text-right">
+                    <span className="sr-only">{t('sources.preview')}</span>
+                  </Th>
+                </tr>
+              </THead>
+              <TBody>
+                {options.datasets.map((d) => (
+                  <Tr key={d.name}>
+                    <Td className="font-mono text-sm font-medium">{d.name}</Td>
+                    <Td className="text-right font-mono text-xs">{formatNumber(d.rowCount ?? 0)}</Td>
+                    <Td className="hidden text-right font-mono text-xs sm:table-cell">{d.columns.length}</Td>
+                    <Td className="hidden font-mono text-xs text-muted-foreground md:table-cell">{when(d.lastLoadedAt)}</Td>
+                    <Td className="text-right">
+                      <Button size="sm" variant="outline" disabled={!canPreview} title={canPreview ? undefined : t('pipelines.noPreview')} aria-label={t('pipelines.previewDataset', { name: d.name })} onClick={() => void openPreview(d.name)}>
+                        <Eye /> {t('sources.preview')}
                       </Button>
-                    )}
-                    {canEdit && published && workspace.environment && workspace.environment !== 'prod' && (
-                      <Button size="sm" variant="outline" onClick={() => setPromoting(p.id)} title="Copy the published version to the next environment">
-                        <ArrowUpRight className="mr-1 h-4 w-4" /> Promote
-                      </Button>
-                    )}
-                    <Button size="sm" variant="outline" onClick={() => setHistoryFor(p)}>
-                      <History className="mr-1 h-4 w-4" /> History
-                    </Button>
-                    {src?.mode === 'incremental' && p.syncPosition && canEdit && (
-                      <Button size="sm" variant="ghost" onClick={() => void resetSync(p)} title="Forget the sync position so the next run reads every row">
-                        <RotateCcw className="mr-1 h-4 w-4" /> Reset sync
-                      </Button>
-                    )}
-                    {!editable ? null : confirmDelete === p.id ? (
-                      <span className="flex items-center gap-1 text-xs">
-                        Delete &ldquo;{p.name}&rdquo; and its run history?
-                        <Button size="sm" variant="destructive" onClick={() => remove(p.id)}>Delete</Button>
-                        <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(null)}>Cancel</Button>
-                      </span>
-                    ) : (
-                      <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(p.id)} aria-label={`Delete ${p.name}`}>
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    )}
-                  </div>
-                </div>
-                {notice?.id === p.id && (
-                  <p
-                    className={`mt-3 rounded-md p-2 text-sm ${
-                      notice.kind === 'ok' ? 'bg-green-500/10 text-green-700 dark:text-green-400' : notice.kind === 'warn' ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300' : 'bg-destructive/10 text-destructive'
-                    }`}
-                  >
-                    {notice.text}
-                  </p>
-                )}
-              </div>
-            )
-          })
+                    </Td>
+                  </Tr>
+                ))}
+              </TBody>
+            </Table>
+          </section>
         )}
       </div>
 
-      {options.datasets.length > 0 && (
-        <div className="rounded-xl border border-border bg-card p-5">
-          <div className="mb-3 flex items-center gap-2">
-            <Database className="h-4 w-4 text-primary" />
-            <h3 className="font-semibold">Nexus datasets</h3>
-            <span className="text-xs text-muted-foreground">Outputs written by your pipelines</span>
-          </div>
-          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-            {options.datasets.map((d) => (
-              <button key={d.name} disabled={!canPreview} title={canPreview ? undefined : 'Your role cannot view dataset contents'} onClick={() => openPreview(d.name)} className={`rounded-lg border p-3 text-left text-sm hover:bg-muted/40 disabled:cursor-default disabled:hover:bg-transparent ${preview?.name === d.name ? 'border-primary' : 'border-border'}`}>
-                <div className="font-mono font-medium">{d.name}</div>
-                <div className="mt-1 text-xs text-muted-foreground">
-                  {(d.rowCount ?? 0).toLocaleString()} rows · {d.columns.length} columns · loaded {formatWhen(d.lastLoadedAt)}
-                </div>
-              </button>
-            ))}
-          </div>
-          {preview && (
-            <div className="mt-3">
-              <div className="flex items-center justify-between text-sm">
-                <span>
-                  Latest rows in <span className="font-mono">{preview.name}</span>
-                </span>
-                <Button size="sm" variant="ghost" onClick={() => setPreview(null)}>Close</Button>
-              </div>
-              {preview.rows.length ? <SampleTable rows={preview.rows} /> : <p className="text-sm text-muted-foreground">The dataset is empty.</p>}
-            </div>
-          )}
-        </div>
+      {preview && (
+        <Modal onClose={() => setPreview(null)} title={t('pipelines.latestRows', { name: preview.name })} size="xl">
+          {preview.rows.length ? <SampleTable rows={preview.rows} /> : <p className="text-sm text-muted-foreground">{t('pipelines.datasetEmpty')}</p>}
+        </Modal>
       )}
     </div>
   )

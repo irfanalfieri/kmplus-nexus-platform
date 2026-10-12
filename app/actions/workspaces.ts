@@ -76,7 +76,7 @@ async function switchWorkspaceImpl(rawId: string) {
   const workspaceId = idSchema.parse(rawId)
   if (!(await getMembership(userId, workspaceId))) throw new Error('You are not a member of that workspace.')
   await setActiveWorkspace(workspaceId)
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 async function createWorkspaceImpl(rawName: string) {
@@ -87,7 +87,7 @@ async function createWorkspaceImpl(rawName: string) {
   await db.insert(workspaceMembers).values({ workspaceId: id, userId, role: 'admin' })
   await recordAudit({ userId, workspaceId: id }, { action: 'CREATE', resource: 'workspace', resourceId: id, changes: { name } })
   await setActiveWorkspace(id)
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return { id }
 }
 
@@ -96,7 +96,7 @@ async function renameWorkspaceImpl(rawName: string) {
   const name = nameSchema.parse(rawName)
   await db.update(workspaces).set({ name, updatedAt: new Date() }).where(eq(workspaces.id, ctx.workspaceId))
   await audit(ctx, 'RENAME', ctx.workspaceId, { from: ctx.workspaceName, to: name })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 // ── Members ──────────────────────────────────────────────────────────────────
@@ -126,7 +126,7 @@ async function changeMemberRoleImpl(rawUserId: string, rawRole: string) {
     .set({ role, updatedAt: new Date() })
     .where(and(eq(workspaceMembers.workspaceId, ctx.workspaceId), eq(workspaceMembers.userId, userId)))
   await audit(ctx, 'CHANGE_ROLE', userId, { from: current, to: role })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 /**
@@ -160,7 +160,7 @@ async function resetMemberTwoFactorImpl(rawUserId: string) {
       action: { label: 'Sign in', url: `${appUrl()}/sign-in` },
     }).catch((err) => console.error('[2fa-reset] email failed:', err instanceof Error ? err.message : err))
   }
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 /** Removes a member (admins), or leaves the workspace (anyone, for themselves). */
@@ -177,7 +177,7 @@ async function removeMemberImpl(rawUserId: string) {
   await db.delete(workspaceMembers).where(and(eq(workspaceMembers.workspaceId, ctx.workspaceId), eq(workspaceMembers.userId, userId)))
   await audit(ctx, self ? 'LEAVE' : 'REMOVE_MEMBER', userId, { role: current })
   if (self) (await cookies()).delete(ACTIVE_WORKSPACE_COOKIE)
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 // ── Invites (one-time links, emailed when SMTP is configured) ───────────────
@@ -228,7 +228,7 @@ async function createInviteImpl(rawEmail: string, rawRole: string) {
     }
   }
   await audit(ctx, 'INVITE', id, { email, role, emailed })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return { path, email, role, emailed }
 }
 
@@ -256,7 +256,7 @@ async function revokeInviteImpl(rawId: string) {
     .set({ revokedAt: new Date() })
     .where(and(eq(workspaceInvites.id, id), eq(workspaceInvites.workspaceId, ctx.workspaceId)))
   await audit(ctx, 'REVOKE_INVITE', id)
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 async function findValidInvite(token: string) {
@@ -301,7 +301,7 @@ async function acceptInviteImpl(rawToken: string) {
   await db.update(workspaceInvites).set({ acceptedAt: new Date(), acceptedBy: userId }).where(eq(workspaceInvites.id, invite.id))
   await recordAudit({ userId, workspaceId: invite.workspaceId }, { action: 'ACCEPT_INVITE', resource: 'workspace', resourceId: invite.id, changes: { role } })
   await setActiveWorkspace(invite.workspaceId)
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return { workspaceName: invite.workspaceName }
 }
 

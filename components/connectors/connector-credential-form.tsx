@@ -1,5 +1,6 @@
 'use client'
 
+import { useId } from 'react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import type { CredentialField } from '@/lib/connectors/types'
@@ -25,6 +26,7 @@ export default function ConnectorCredentialForm({
   restSending,
   onRestSend,
 }: ConnectorCredentialFormProps) {
+  const uid = useId()
   if (connectorSlug === 'rest') {
     return (
       <RestConnectorForm
@@ -45,11 +47,12 @@ export default function ConnectorCredentialForm({
     <div className="space-y-3">
       {fields.map((field) => (
         <div key={field.key} className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">
+          <Label htmlFor={`${uid}-${field.key}`} className="text-xs text-muted-foreground">
             {field.label}
             {!field.required ? ' (optional)' : ''}
           </Label>
           <Input
+            id={`${uid}-${field.key}`}
             type={field.type === 'password' ? 'password' : field.type === 'number' ? 'number' : 'text'}
             placeholder={field.placeholder ?? field.label}
             value={values[field.key] ?? ''}

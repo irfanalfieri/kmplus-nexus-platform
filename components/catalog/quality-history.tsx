@@ -1,10 +1,12 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Loader2 } from 'lucide-react'
+import { Gauge, Loader2 } from 'lucide-react'
 import { getQualityHistory } from '@/lib/actions/catalog'
 import { WidgetView } from '@/components/analytics/charts'
 import { widgetSchema } from '@/lib/analytics/definition'
+import { Notice } from '@/components/ui/notice'
+import { EmptyState } from '@/components/ui/empty-state'
 
 type History = Awaited<ReturnType<typeof getQualityHistory>>
 
@@ -23,6 +25,7 @@ export function QualityHistory({ datasetName }: { datasetName: string }) {
   useEffect(() => {
     let cancelled = false
     setData(null)
+    setError('')
     getQualityHistory(datasetName)
       .then((h) => !cancelled && setData(h))
       .catch((err) => !cancelled && setError(err instanceof Error ? err.message : 'Failed to load quality history'))
@@ -31,32 +34,44 @@ export function QualityHistory({ datasetName }: { datasetName: string }) {
     }
   }, [datasetName])
 
-  if (error) return <p className="text-sm text-destructive">{error}</p>
-  if (!data) return <p className="flex items-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading quality…</p>
+  if (error) return <Notice tone="danger">{error}</Notice>
+  if (!data)
+    return (
+      <p className="flex items-center text-sm text-muted-foreground">
+        <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> Loading quality…
+      </p>
+    )
   const latest = data.days[data.days.length - 1]
-  if (!latest) return <p className="text-sm text-muted-foreground">Quality is measured after each pipeline run that writes this dataset. No measurements yet.</p>
+  if (!latest)
+    return (
+      <EmptyState compact icon={<Gauge />} title="No measurements yet">
+        Quality is measured after each pipeline run that writes this dataset.
+      </EmptyState>
+    )
 
   const widget = widgetSchema.parse({ id: 'quality', title: 'Quality score', type: 'line', dataset: datasetName, measure: { agg: 'avg', column: 'score' }, dimension: { column: 'day', grain: 'day' }, limit: 31 })
   const series = { rows: data.days.filter((d) => d.score !== null).map((d) => ({ label: d.day, value: d.score })), truncated: false }
 
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+      <dl className="grid grid-cols-2 gap-2 sm:grid-cols-5">
         {DIMENSIONS.map(([k, label, help]) => (
           <div key={k} className="rounded-md border border-border p-2" title={help}>
-            <div className="text-[11px] text-muted-foreground">{label}</div>
-            <div className="text-lg font-semibold tabular-nums">{latest[k] === null ? '—' : `${latest[k]}%`}</div>
+            <dt className="text-[11px] text-muted-foreground">{label}</dt>
+            <dd className="font-mono text-lg font-semibold tabular-nums">{latest[k] === null ? '—' : `${latest[k]}%`}</dd>
           </div>
         ))}
         <div className="rounded-md border border-border p-2" title="Hours since the dataset was last loaded">
-          <div className="text-[11px] text-muted-foreground">Freshness</div>
-          <div className="text-lg font-semibold tabular-nums">{data.freshnessHours === null ? '—' : data.freshnessHours < 1 ? '< 1 h' : `${data.freshnessHours} h`}</div>
+          <dt className="text-[11px] text-muted-foreground">Freshness</dt>
+          <dd className="font-mono text-lg font-semibold tabular-nums">{data.freshnessHours === null ? '—' : data.freshnessHours < 1 ? '< 1 h' : `${data.freshnessHours} h`}</dd>
         </div>
-      </div>
+      </dl>
       {series.rows.length > 1 ? (
         <WidgetView widget={widget} result={series} />
       ) : (
-        <p className="text-xs text-muted-foreground">One measurement so far ({latest.day}); the trend appears after runs on more days.</p>
+        <p className="text-xs text-muted-foreground">
+          One measurement so far (<span className="font-mono">{latest.day}</span>); the trend appears after runs on more days.
+        </p>
       )}
     </div>
   )

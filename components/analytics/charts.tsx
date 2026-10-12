@@ -4,14 +4,22 @@ import { useId, useMemo, useState } from 'react'
 import type { Widget, WidgetResult } from '@/lib/analytics/definition'
 import { describeMeasure } from '@/lib/analytics/definition'
 import { isTimeSeries } from '@/lib/analytics/query'
+import { Table, TBody, THead, Td, Th, Tr } from '@/components/ui/data-table'
 
 /**
- * Analytics widget renderers. Single-series charts in the data-viz palette's
- * slot-1 blue (light #2a78d6 / dark #3987e5); text uses text tokens, never the
- * series color. Every chart has a table view, so no value is hover-only.
+ * Analytics widget renderers (data-viz rules):
+ * - Series colours come only from the chart tokens `var(--chart-1)` … `var(--chart-5)`,
+ *   in that fixed order (defined for light and dark in globals.css). Never hard-coded,
+ *   and status colours (live / danger / warning / held) are never series colours.
+ * - Single-series charts use slot 1 (blue).
+ * - Axes and grid lines use `var(--border)`; labels `var(--muted-foreground)`; values
+ *   use text tokens, never the series colour.
+ * - Every chart has a table view, so no value is hover-only.
  */
 
-const SERIES = 'bg-[#2a78d6] dark:bg-[#3987e5]'
+/** Series colours in slot order. Index 0 is slot 1. */
+export const SERIES_COLORS = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)'] as const
+const SERIES = SERIES_COLORS[0]
 const fmt = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 })
 const compact = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 })
 export const formatValue = (v: number | null) => (v === null ? '—' : fmt.format(v))
@@ -25,13 +33,18 @@ export function WidgetView({ widget, result }: { widget: Widget; result: WidgetR
     <div className="space-y-2">
       {widget.type === 'table' || table ? <ResultTable widget={widget} result={result} /> : widget.type === 'line' ? <Line widget={widget} result={result} /> : <Bars widget={widget} result={result} />}
       <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span>
+        <span className="font-mono">
           {result.truncated
             ? isTimeSeries(widget) ? `Latest ${widget.limit} periods shown` : `Top ${widget.limit} groups shown`
             : `${result.rows.length} ${isTimeSeries(widget) ? 'period' : 'group'}${result.rows.length === 1 ? '' : 's'}`}
         </span>
         {widget.type !== 'table' && (
-          <button className="underline-offset-4 hover:underline" onClick={() => setTable((t) => !t)}>
+          <button
+            type="button"
+            aria-pressed={table}
+            className="rounded-sm font-medium text-info-text underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            onClick={() => setTable((t) => !t)}
+          >
             {table ? 'Show chart' : 'Show table'}
           </button>
         )}
@@ -44,7 +57,7 @@ function Kpi({ widget, value }: { widget: Widget; value: number | null }) {
   const big = value !== null && Math.abs(value) >= 1_000_000
   return (
     <div className="py-4">
-      <div className="text-4xl font-semibold tabular-nums tracking-tight" title={value === null ? undefined : fmt.format(value)}>
+      <div className="font-mono text-4xl font-semibold tracking-tight tabular-nums" title={value === null ? undefined : fmt.format(value)}>
         {value === null ? '—' : big ? compact.format(value) : fmt.format(value)}
       </div>
       <div className="mt-1 text-sm text-muted-foreground">{describeMeasure(widget)}</div>
@@ -64,8 +77,8 @@ function Bars({ widget, result }: { widget: Widget; result: WidgetResult }) {
             <span className="truncate text-muted-foreground" title={labelOf(r.label)}>{labelOf(r.label)}</span>
             <span className="flex min-w-0 items-center gap-2">
               {/* ≤24px thick, 4px rounded data end, square at the baseline */}
-              <span className={`h-5 shrink-0 rounded-r-[4px] ${SERIES}`} style={{ width: `calc(${pct}% * 0.82)`, minWidth: pct > 0 ? 2 : 0 }} aria-hidden />
-              <span className="shrink-0 tabular-nums">{formatValue(r.value)}</span>
+              <span className="h-5 shrink-0 rounded-r-[4px]" style={{ width: `calc(${pct}% * 0.82)`, minWidth: pct > 0 ? 2 : 0, background: SERIES }} aria-hidden />
+              <span className="shrink-0 font-mono text-xs tabular-nums">{formatValue(r.value)}</span>
             </span>
           </li>
         )
@@ -117,34 +130,34 @@ function Line({ widget, result }: { widget: Widget; result: WidgetResult }) {
       >
         <title id={`${id}-t`}>{`${describeMeasure(widget)} by ${widget.dimension?.column}`}</title>
         {grid.map((y) => (
-          <line key={y} x1={pad.l} x2={W - pad.r} y1={y} y2={y} className="stroke-border" strokeWidth={1} />
+          <line key={y} x1={pad.l} x2={W - pad.r} y1={y} y2={y} stroke="var(--border)" strokeWidth={1} />
         ))}
-        <polyline points={pts.map((p) => `${p.x},${p.y}`).join(' ')} fill="none" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" className="stroke-[#2a78d6] dark:stroke-[#3987e5]" />
-        {pts.length === 1 && <circle cx={pts[0].x} cy={pts[0].y} r={4} className="fill-[#2a78d6] dark:fill-[#3987e5]" />}
+        <polyline points={pts.map((p) => `${p.x},${p.y}`).join(' ')} fill="none" stroke={SERIES} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+        {pts.length === 1 && <circle cx={pts[0].x} cy={pts[0].y} r={4} fill={SERIES} />}
         {last && (
-          <text x={last.x} y={last.y - 8} textAnchor="end" className="fill-foreground text-[12px] tabular-nums">
+          <text x={last.x} y={last.y - 8} textAnchor="end" fill="var(--foreground)" className="font-mono text-[12px] tabular-nums">
             {formatValue(last.value)}
           </text>
         )}
         {[pts[0], pts[Math.floor((pts.length - 1) / 2)], last].filter((p, i, a) => p && a.indexOf(p) === i).map((p) => (
-          <text key={`x-${p!.x}`} x={p!.x} y={H - 8} textAnchor={p === pts[0] ? 'start' : p === last ? 'end' : 'middle'} className="fill-muted-foreground text-[11px]">
+          <text key={`x-${p!.x}`} x={p!.x} y={H - 8} textAnchor={p === pts[0] ? 'start' : p === last ? 'end' : 'middle'} fill="var(--muted-foreground)" className="font-mono text-[11px]">
             {labelOf(p!.label)}
           </text>
         ))}
         {active && (
           <>
-            <line x1={active.x} x2={active.x} y1={pad.t} y2={H - pad.b} className="stroke-muted-foreground" strokeWidth={1} strokeDasharray="3 3" />
-            <circle cx={active.x} cy={active.y} r={5} className="fill-[#2a78d6] stroke-background dark:fill-[#3987e5]" strokeWidth={2} />
+            <line x1={active.x} x2={active.x} y1={pad.t} y2={H - pad.b} stroke="var(--muted-foreground)" strokeWidth={1} strokeDasharray="3 3" />
+            <circle cx={active.x} cy={active.y} r={5} fill={SERIES} stroke="var(--background)" strokeWidth={2} />
           </>
         )}
       </svg>
       {active && (
         <div
-          className="pointer-events-none absolute top-0 rounded-md border border-border bg-popover px-2 py-1 text-xs shadow-sm"
+          className="pointer-events-none absolute top-0 rounded-md border border-border bg-popover px-2 py-1 text-xs shadow-raised"
           style={{ left: `${(active.x / W) * 100}%`, transform: active.x > W * 0.7 ? 'translateX(-105%)' : 'translateX(8px)' }}
           role="status"
         >
-          <div className="font-semibold tabular-nums">{formatValue(active.value)}</div>
+          <div className="font-mono font-semibold tabular-nums">{formatValue(active.value)}</div>
           <div className="text-muted-foreground">{labelOf(active.label)}</div>
         </div>
       )}
@@ -154,28 +167,31 @@ function Line({ widget, result }: { widget: Widget; result: WidgetResult }) {
 
 function ResultTable({ widget, result }: { widget: Widget; result: WidgetResult }) {
   return (
-    <div className="max-h-72 overflow-auto">
-      <table className="w-full text-sm">
-        <thead className="sticky top-0 bg-card">
-          <tr className="border-b border-border text-left text-xs uppercase text-muted-foreground">
-            <th className="px-2 py-1.5">{widget.dimension?.column ?? ''}{widget.dimension && widget.dimension.grain !== 'none' ? ` (${widget.dimension.grain})` : ''}</th>
-            <th className="px-2 py-1.5 text-right">{describeMeasure(widget)}</th>
+    <div className="max-h-72 overflow-auto rounded-md border border-border">
+      <Table label={describeMeasure(widget)}>
+        <THead className="sticky top-0 bg-muted">
+          <tr>
+            <Th>
+              {widget.dimension?.column ?? ''}
+              {widget.dimension && widget.dimension.grain !== 'none' ? ` (${widget.dimension.grain})` : ''}
+            </Th>
+            <Th className="text-right">{describeMeasure(widget)}</Th>
           </tr>
-        </thead>
-        <tbody>
+        </THead>
+        <TBody>
           {result.rows.map((r, i) => (
-            <tr key={`${r.label}-${i}`} className="border-b border-border/60">
-              <td className="px-2 py-1.5">{labelOf(r.label)}</td>
-              <td className="px-2 py-1.5 text-right tabular-nums">{formatValue(r.value)}</td>
-            </tr>
+            <Tr key={`${r.label}-${i}`}>
+              <Td className="py-1.5">{labelOf(r.label)}</Td>
+              <Td className="py-1.5 text-right font-mono text-xs tabular-nums">{formatValue(r.value)}</Td>
+            </Tr>
           ))}
-        </tbody>
-      </table>
+        </TBody>
+      </Table>
     </div>
   )
 }
 
 /** Small swatch for the legend-free single series (used in the editor). */
 export function SeriesSwatch() {
-  return <span className={`inline-block h-2 w-3 rounded-sm ${SERIES}`} aria-hidden />
+  return <span className="inline-block h-2 w-3 rounded-sm" style={{ background: SERIES }} aria-hidden />
 }

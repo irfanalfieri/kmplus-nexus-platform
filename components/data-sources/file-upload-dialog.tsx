@@ -1,10 +1,13 @@
 'use client'
 
 import { useState } from 'react'
-import { FileSpreadsheet, Loader2, Trash2, Upload, X } from 'lucide-react'
+import { FileSpreadsheet, Loader2, Trash2, Upload } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
+import { Modal, useConfirm } from '@/components/ui/dialog'
+import { Notice } from '@/components/ui/notice'
+import { Table, THead, TBody, Tr, Td } from '@/components/ui/data-table'
 import { deleteFileTable, uploadFilePart } from '@/lib/actions/files'
 import { cleanTableName as cleanName, toSheet, uploadParts, type Cell, type ParsedSheet } from '@/lib/files/parse'
 import { COLUMN_TYPES, type ColumnType } from '@/lib/pipelines/definition'
@@ -43,7 +46,7 @@ export default function FileUploadDialog({ sourceId, sourceName, files, onClose,
   const [progress, setProgress] = useState<{ sent: number; total: number } | null>(null)
   const [error, setError] = useState('')
   const [done, setDone] = useState('')
-  const [confirmDrop, setConfirmDrop] = useState<string | null>(null)
+  const [confirm, confirmEl] = useConfirm()
 
   const build = (l: Loaded, index: number, header: number) => {
     const data = l.sheets[index]?.data ?? []
@@ -113,9 +116,15 @@ export default function FileUploadDialog({ sourceId, sourceName, files, onClose,
   }
 
   const drop = async (t: string) => {
+    const ok = await confirm({
+      title: `Delete table "${t}"?`,
+      description: 'The table and its uploaded rows are removed from this data source.',
+      confirmLabel: 'Delete table',
+      tone: 'danger',
+    })
+    if (!ok) return
     try {
       await deleteFileTable(sourceId, t)
-      setConfirmDrop(null)
       onDone()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Delete failed')
@@ -125,166 +134,178 @@ export default function FileUploadDialog({ sourceId, sourceName, files, onClose,
   const setType = (i: number, type: ColumnType) => sheet && setSheet({ ...sheet, columns: sheet.columns.map((c, j) => (j === i ? { ...c, type } : c)) })
   const setName = (i: number, name: string) => sheet && setSheet({ ...sheet, columns: sheet.columns.map((c, j) => (j === i ? { ...c, name } : c)) })
 
+  const pct = progress ? Math.round((progress.sent / Math.max(1, progress.total)) * 100) : 0
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-0 sm:p-4" role="dialog" aria-modal="true" aria-label="Upload a file">
-      <div className="flex max-h-full w-full max-w-5xl flex-col overflow-hidden border border-border bg-card sm:max-h-[92vh] sm:rounded-xl">
-        <header className="flex items-center gap-2 border-b border-border p-4">
-          <FileSpreadsheet className="h-5 w-5 text-primary" />
-          <div className="flex-1">
-            <div className="font-semibold">Upload CSV or Excel</div>
-            <div className="text-xs text-muted-foreground">{sourceName} · each sheet becomes a table pipelines can read</div>
-          </div>
-          <Button size="sm" variant="ghost" onClick={onClose} aria-label="Close">
-            <X className="h-4 w-4" />
-          </Button>
-        </header>
-
-        <div className="space-y-4 overflow-y-auto p-4">
-          {files.length > 0 && (
-            <div>
-              <div className="mb-2 text-sm font-medium">Uploaded tables</div>
-              <ul className="divide-y divide-border rounded-md border border-border text-sm">
-                {files.map((f) => (
-                  <li key={f.table} className="flex flex-wrap items-center gap-2 p-2">
-                    <span className="font-mono">{f.table}</span>
-                    <Badge variant="outline">{f.rowCount.toLocaleString()} rows</Badge>
-                    <span className="flex-1 text-xs text-muted-foreground">
-                      {f.fileName}
-                      {f.sheet ? ` · ${f.sheet}` : ''} · {new Date(f.uploadedAt).toLocaleString()} · {f.uploadedBy}
-                    </span>
-                    {confirmDrop === f.table ? (
-                      <span className="flex items-center gap-1 text-xs">
-                        Delete this table?
-                        <Button size="sm" variant="destructive" onClick={() => void drop(f.table)}>Delete</Button>
-                        <Button size="sm" variant="ghost" onClick={() => setConfirmDrop(null)}>Cancel</Button>
-                      </span>
-                    ) : (
-                      <Button size="sm" variant="ghost" onClick={() => setConfirmDrop(f.table)} aria-label={`Delete ${f.table}`}>
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          <label className="flex cursor-pointer flex-col items-center gap-2 rounded-lg border-2 border-dashed border-border p-6 text-center hover:bg-muted/30">
-            {parsing ? <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /> : <Upload className="h-6 w-6 text-muted-foreground" />}
-            <span className="text-sm font-medium">{loaded ? loaded.fileName : 'Choose a .csv, .tsv or .xlsx file'}</span>
-            <span className="text-xs text-muted-foreground">Read in your browser; up to 50 MB and 500,000 rows. The first row should hold the column names.</span>
-            <input type="file" accept=".csv,.tsv,.txt,.xlsx" className="sr-only" onChange={(e) => void choose(e.target.files?.[0])} />
-          </label>
-
-          {loaded && sheet && (
-            <div className="space-y-3">
-              <div className="flex flex-wrap items-end gap-3 text-sm">
-                {loaded.sheets.length > 1 && (
-                  <label>
-                    <span className="mb-1 block text-xs text-muted-foreground">Sheet</span>
-                    <NativeSelect
-                      className="w-48"
-                      value={String(sheetIndex)}
-                      onChange={(v) => {
-                        const i = Number(v)
-                        setSheetIndex(i)
-                        build(loaded, i, headerRow)
-                        setTable(cleanName(`${loaded.fileName.replace(/\.[^.]+$/, '')}_${loaded.sheets[i].name}`))
-                      }}
-                    >
-                      {loaded.sheets.map((s, i) => (
-                        <option key={s.name} value={i}>
-                          {s.name}
-                        </option>
-                      ))}
-                    </NativeSelect>
-                  </label>
-                )}
-                <label>
-                  <span className="mb-1 block text-xs text-muted-foreground">Header row</span>
-                  <Input
-                    type="number"
-                    min={1}
-                    max={50}
-                    className="w-24"
-                    value={headerRow}
-                    onChange={(e) => {
-                      const n = Math.max(1, Math.min(50, Number(e.target.value) || 1))
-                      setHeaderRow(n)
-                      build(loaded, sheetIndex, n)
-                    }}
-                  />
-                </label>
-                <label>
-                  <span className="mb-1 block text-xs text-muted-foreground">Table name</span>
-                  <Input className="w-64 font-mono" value={table} onChange={(e) => setTable(e.target.value)} onBlur={() => setTable(cleanName(table))} />
-                </label>
-                <label>
-                  <span className="mb-1 block text-xs text-muted-foreground">If the table exists</span>
-                  <NativeSelect className="w-48" value={mode} onChange={(v) => setMode(v as 'replace' | 'append')}>
-                    <option value="replace">Replace its rows</option>
-                    <option value="append">Add these rows</option>
-                  </NativeSelect>
-                </label>
-                <span className="pb-2 text-xs text-muted-foreground">{sheet.rows.length.toLocaleString()} rows · {sheet.columns.length} columns</span>
-              </div>
-
-              <div className="max-h-80 overflow-auto rounded-md border border-border">
-                <table className="w-full text-xs">
-                  <thead className="sticky top-0 bg-muted">
-                    <tr>
-                      {sheet.columns.map((c, i) => (
-                        <th key={i} className="min-w-[140px] p-1 text-left align-top font-medium">
-                          <Input className="h-7 font-mono text-xs" value={c.name} onChange={(e) => setName(i, e.target.value)} aria-label={`Column ${i + 1} name`} />
-                          <NativeSelect className="mt-1 h-7 text-xs" value={c.type} onChange={(v) => setType(i, v as ColumnType)} aria-label={`Column ${i + 1} type`}>
-                            {COLUMN_TYPES.map((t) => (
-                              <option key={t} value={t}>
-                                {t}
-                              </option>
-                            ))}
-                          </NativeSelect>
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sheet.rows.slice(0, 20).map((r, i) => (
-                      <tr key={i} className="border-t border-border/60">
-                        {r.map((v, j) => (
-                          <td key={j} className="max-w-[220px] truncate whitespace-nowrap px-2 py-1 font-mono" title={v ?? ''}>
-                            {v ?? <span className="text-muted-foreground">∅</span>}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <p className="text-xs text-muted-foreground">Types are detected from the first 2,000 rows; codes with leading zeros stay text. Values are stored as written in the file; pipelines convert them using these types.</p>
-            </div>
-          )}
-          {done && <p className="rounded-md bg-green-500/10 p-2 text-sm text-green-700 dark:text-green-400">{done}</p>}
-          {error && <p className="rounded-md bg-destructive/10 p-2 text-sm text-destructive" role="alert">{error}</p>}
-        </div>
-
-        <footer className="flex items-center gap-2 border-t border-border p-4">
+    <Modal
+      onClose={onClose}
+      dirty={!!loaded || !!progress}
+      size="xl"
+      title={
+        <span className="flex items-center gap-2">
+          <FileSpreadsheet className="size-5 text-primary" aria-hidden />
+          Upload CSV or Excel
+        </span>
+      }
+      description={`${sourceName} · each sheet becomes a table pipelines can read`}
+      bodyClassName="space-y-4"
+      footer={
+        <>
           {progress ? (
             <div className="mr-auto flex flex-1 items-center gap-2 text-sm">
-              <div className="h-2 max-w-xs flex-1 overflow-hidden rounded-full bg-muted">
-                <div className="h-full bg-primary transition-all" style={{ width: `${Math.round((progress.sent / Math.max(1, progress.total)) * 100)}%` }} />
+              <div
+                role="progressbar"
+                aria-label="Upload progress"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={pct}
+                className="h-2 max-w-xs flex-1 overflow-hidden rounded-full bg-muted"
+              >
+                <div className="h-full bg-primary transition-all" style={{ width: `${pct}%` }} />
               </div>
-              {progress.sent.toLocaleString()} / {progress.total.toLocaleString()} rows
+              <span className="font-mono text-xs">
+                {progress.sent.toLocaleString()} / {progress.total.toLocaleString()} rows
+              </span>
             </div>
           ) : (
             <span className="mr-auto" />
           )}
-          <Button variant="outline" onClick={onClose}>Close</Button>
+          <Button variant="outline" onClick={onClose}>
+            Close
+          </Button>
           <Button onClick={() => void upload()} disabled={!sheet || !!progress || !table}>
-            {progress ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
+            {progress ? <Loader2 className="animate-spin" aria-hidden /> : <Upload aria-hidden />}
             Upload
           </Button>
-        </footer>
-      </div>
-    </div>
+        </>
+      }
+    >
+      {confirmEl}
+      {files.length > 0 && (
+        <section>
+          <h3 className="mb-2 text-sm font-medium">Uploaded tables</h3>
+          <ul className="divide-y divide-border rounded-md border border-border text-sm">
+            {files.map((f) => (
+              <li key={f.table} className="flex flex-wrap items-center gap-2 p-2">
+                <span className="font-mono">{f.table}</span>
+                <Badge variant="outline" className="font-mono">
+                  {f.rowCount.toLocaleString()} rows
+                </Badge>
+                <span className="flex-1 text-xs text-muted-foreground">
+                  {f.fileName}
+                  {f.sheet ? ` · ${f.sheet}` : ''} · <span className="font-mono">{new Date(f.uploadedAt).toLocaleString()}</span> · {f.uploadedBy}
+                </span>
+                <Button size="icon-sm" variant="ghost" onClick={() => void drop(f.table)} aria-label={`Delete ${f.table}`}>
+                  <Trash2 aria-hidden />
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      <label className="flex cursor-pointer flex-col items-center gap-2 rounded-lg border-2 border-dashed border-border p-6 text-center hover:bg-muted/50 has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-ring">
+        {parsing ? <Loader2 className="size-6 animate-spin text-muted-foreground" aria-hidden /> : <Upload className="size-6 text-muted-foreground" aria-hidden />}
+        <span className="text-sm font-medium">{loaded ? loaded.fileName : 'Choose a .csv, .tsv or .xlsx file'}</span>
+        <span className="text-xs text-muted-foreground">Read in your browser; up to 50 MB and 500,000 rows. The first row should hold the column names.</span>
+        <input type="file" accept=".csv,.tsv,.txt,.xlsx" className="sr-only" onChange={(e) => void choose(e.target.files?.[0])} />
+      </label>
+
+      {loaded && sheet && (
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-end gap-3 text-sm">
+            {loaded.sheets.length > 1 && (
+              <label>
+                <span className="mb-1 block text-xs text-muted-foreground">Sheet</span>
+                <NativeSelect
+                  className="w-48"
+                  value={String(sheetIndex)}
+                  onChange={(v) => {
+                    const i = Number(v)
+                    setSheetIndex(i)
+                    build(loaded, i, headerRow)
+                    setTable(cleanName(`${loaded.fileName.replace(/\.[^.]+$/, '')}_${loaded.sheets[i].name}`))
+                  }}
+                >
+                  {loaded.sheets.map((s, i) => (
+                    <option key={s.name} value={i}>
+                      {s.name}
+                    </option>
+                  ))}
+                </NativeSelect>
+              </label>
+            )}
+            <label>
+              <span className="mb-1 block text-xs text-muted-foreground">Header row</span>
+              <Input
+                type="number"
+                min={1}
+                max={50}
+                className="w-24 font-mono"
+                value={headerRow}
+                onChange={(e) => {
+                  const n = Math.max(1, Math.min(50, Number(e.target.value) || 1))
+                  setHeaderRow(n)
+                  build(loaded, sheetIndex, n)
+                }}
+              />
+            </label>
+            <label>
+              <span className="mb-1 block text-xs text-muted-foreground">Table name</span>
+              <Input className="w-64 font-mono" value={table} onChange={(e) => setTable(e.target.value)} onBlur={() => setTable(cleanName(table))} />
+            </label>
+            <label>
+              <span className="mb-1 block text-xs text-muted-foreground">If the table exists</span>
+              <NativeSelect className="w-48" value={mode} onChange={(v) => setMode(v as 'replace' | 'append')}>
+                <option value="replace">Replace its rows</option>
+                <option value="append">Add these rows</option>
+              </NativeSelect>
+            </label>
+            <span className="pb-2 font-mono text-xs text-muted-foreground">
+              {sheet.rows.length.toLocaleString()} rows · {sheet.columns.length} columns
+            </span>
+          </div>
+
+          <div className="max-h-80 overflow-auto rounded-md border border-border">
+            <Table label="File preview: first 20 rows" className="text-xs">
+              <THead className="sticky top-0 z-10 bg-muted">
+                <tr>
+                  {sheet.columns.map((c, i) => (
+                    <th key={i} scope="col" className="min-w-[140px] p-1 text-left align-top font-medium">
+                      <Input className="h-7 font-mono text-xs" value={c.name} onChange={(e) => setName(i, e.target.value)} aria-label={`Column ${i + 1} name`} />
+                      <NativeSelect className="mt-1 h-7 text-xs" value={c.type} onChange={(v) => setType(i, v as ColumnType)} aria-label={`Column ${i + 1} type`}>
+                        {COLUMN_TYPES.map((t) => (
+                          <option key={t} value={t}>
+                            {t}
+                          </option>
+                        ))}
+                      </NativeSelect>
+                    </th>
+                  ))}
+                </tr>
+              </THead>
+              <TBody>
+                {sheet.rows.slice(0, 20).map((r, i) => (
+                  <Tr key={i}>
+                    {r.map((v, j) => (
+                      <Td key={j} className="max-w-[220px] truncate px-2 py-1 font-mono whitespace-nowrap first:pl-2 last:pr-2" title={v ?? ''}>
+                        {v ?? (
+                          <span className="text-muted-foreground" aria-label="empty">
+                            ∅
+                          </span>
+                        )}
+                      </Td>
+                    ))}
+                  </Tr>
+                ))}
+              </TBody>
+            </Table>
+          </div>
+          <p className="text-xs text-muted-foreground">Types are detected from the first 2,000 rows; codes with leading zeros stay text. Values are stored as written in the file; pipelines convert them using these types.</p>
+        </div>
+      )}
+      {done && <Notice tone="success">{done}</Notice>}
+      {error && <Notice tone="danger">{error}</Notice>}
+    </Modal>
   )
 }

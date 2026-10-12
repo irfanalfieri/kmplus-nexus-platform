@@ -92,7 +92,7 @@ async function uploadFilePartImpl(input: z.input<typeof partInput>) {
     resourceId: source.id,
     changes: { table: data.table, fileName: data.fileName, sheet: data.sheet, mode: data.mode, rows: rowCount, columns: data.columns.length },
   })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return { rowCount }
 }
 
@@ -108,7 +108,7 @@ async function deleteFileTableImpl(rawId: string, rawTable: string) {
     .set({ config: { ...config, files: (config.files ?? []).filter((f) => f.table !== table), schemaScan: scan }, updatedAt: new Date() })
     .where(and(eq(dataSources.id, source.id), eq(dataSources.workspaceId, ctx.workspaceId)))
   await recordAudit(ctx, { action: 'DELETE', resource: 'data_source', resourceId: source.id, changes: { table } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 export async function uploadFilePart(...args: Parameters<typeof uploadFilePartImpl>) {

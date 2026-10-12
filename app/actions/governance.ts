@@ -142,7 +142,7 @@ async function saveDatasetPolicyImpl(input: z.input<typeof policyInputSchema>) {
       { columns, retentionDays: data.retentionDays, rowFilters }
     ),
   })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return { masked: masked.length, retentionDeleted: deleted }
 }
 
@@ -223,7 +223,7 @@ async function eraseRecordsImpl(input: z.input<typeof erasureInput>) {
     resourceId: column,
     changes: { column, valueSha256: createHash('sha256').update(value).digest('hex'), erased },
   })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return { erased, total: erased.reduce((s, e) => s + e.deleted, 0) }
 }
 

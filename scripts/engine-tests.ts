@@ -22,6 +22,8 @@ import { refreshSchedule } from '@/lib/catalog/refresh'
 import { createHmac, randomBytes } from 'node:crypto'
 import { diffObjects, diffPipelineDefinitions } from '@/lib/audit-diff'
 import { DOMAIN_ENTITIES, suggestCanonicalField } from '@/lib/domain/model'
+import { createTranslator, MESSAGES } from '@/lib/i18n/translate'
+import { landingSection, settingsHref } from '@/lib/navigation'
 import { BUILTIN_MAPPING_TEMPLATES, PIPELINE_TEMPLATES, applyMappingTemplate, buildPipelineTemplate, mapToEntity } from '@/lib/pipelines/templates'
 import { buildLineage } from '@/lib/catalog/lineage'
 import { signPayload } from '@/lib/webhooks/deliver'
@@ -786,6 +788,21 @@ async function main() {
     assert.throws(() => checkAsk({ widget: { dataset: 'employees', type: 'kpi', measure: { agg: 'sum', column: 'department' } } }, { datasets }), /needs a number column/)
     assert.throws(() => checkAsk({ widget: { dataset: 'employees', type: 'line', measure: { agg: 'count' }, dimension: { column: 'department', grain: 'month' } } }, { datasets }), /needs a date column/)
     assert.throws(() => checkAsk({ widget: { dataset: 'employees', type: 'bar', measure: { agg: 'count' }, dimension: { column: 'nope' } } }, { datasets }), /not in employees/)
+  })
+
+  await test('i18n: both languages, plurals, fallbacks; landing and settings URLs', () => {
+    const leaves = (o: object, p = ''): string[] => Object.entries(o).flatMap(([k, v]) => (typeof v === 'string' ? [p + k] : leaves(v, `${p}${k}.`)))
+    assert.deepEqual(leaves(MESSAGES.id).sort(), leaves(MESSAGES.en).sort(), 'Indonesian has every English key')
+    const en = createTranslator('en')
+    assert.equal(en('sources.summary', { count: 1 }), '1 source')
+    assert.equal(en('sources.summary', { count: 4 }), '4 sources')
+    assert.equal(en('quality.dismissTitle', { count: '1,200' }), 'Dismiss 1,200 rows?')
+    assert.equal(en('pipelines.runFor', { name: 'SAP' }), 'Run SAP now')
+    assert.equal(createTranslator('id')('nav.pipelines'), 'Pipeline')
+    assert.equal(landingSection('steward'), 'quality')
+    assert.equal(landingSection('admin'), 'overview')
+    assert.equal(settingsHref('general'), '/dashboard/settings')
+    assert.equal(settingsHref('audit'), '/dashboard/settings/audit')
   })
 
   console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`)

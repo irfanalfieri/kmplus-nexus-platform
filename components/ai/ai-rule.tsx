@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { Loader2, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Notice } from '@/components/ui/notice'
 import { draftRule } from '@/lib/actions/ai'
 import type { RuleBody } from '@/lib/rules/definition'
 import { useAiStatus } from './use-ai'
@@ -30,9 +31,9 @@ export function AiRuleDraft({ dataset, onDraft }: { dataset: string; onDraft: (d
   }
 
   return (
-    <div className="space-y-2 rounded-md border border-primary/30 bg-primary/5 p-2">
-      <label className="block text-xs font-medium" htmlFor="ai-rule-text">
-        <Sparkles className="mr-1 inline h-3.5 w-3.5 text-primary" /> Describe the rule (the AI fills in the editor)
+    <div className="space-y-2 rounded-md border border-border bg-muted/50 p-2">
+      <label className="flex items-center gap-1.5 text-xs font-medium" htmlFor="ai-rule-text">
+        <Sparkles className="size-3.5 text-primary" aria-hidden /> Describe the rule (the AI fills in the editor)
       </label>
       <textarea
         id="ai-rule-text"
@@ -40,15 +41,19 @@ export function AiRuleDraft({ dataset, onDraft }: { dataset: string; onDraft: (d
         value={text}
         onChange={(e) => setText(e.target.value)}
         placeholder="e.g. Contract employees hired after 1 January 2025 need HR approval; mark everyone else as regular"
-        className="w-full rounded-md border border-input bg-background p-2 text-sm"
+        className="w-full rounded-md border border-input bg-card p-2 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
       />
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Button size="sm" onClick={() => void run()} disabled={busy || text.trim().length < 5}>
-          {busy && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} {busy ? 'Drafting…' : 'Draft rule'}
+          {busy && <Loader2 className="animate-spin" aria-hidden />} {busy ? 'Drafting…' : 'Draft rule'}
         </Button>
         {!dataset && <span className="text-xs text-muted-foreground">Tip: pick the dataset above so it uses the right field names.</span>}
       </div>
-      {note && <p className={`text-xs ${note.kind === 'ok' ? 'text-green-700 dark:text-green-400' : 'text-destructive'}`}>{note.text}</p>}
+      {note && (
+        <Notice tone={note.kind === 'ok' ? 'success' : 'danger'} className="text-xs">
+          {note.text}
+        </Notice>
+      )}
     </div>
   )
 }

@@ -72,7 +72,7 @@ async function installConnectorImpl(rawSlug: string) {
     await db.insert(connectorInstalls).values({ id: newId('ci'), userId: ctx.userId, workspaceId: ctx.workspaceId, connectorSlug: slug, purchased: true, installedAt: now })
   }
   await audit(ctx, billingEnabled() && definition.premium ? 'PURCHASE' : 'INSTALL', slug)
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return { ok: true as const, slug }
 }
 
@@ -96,7 +96,7 @@ async function uninstallConnectorImpl(rawSlug: string) {
     .set({ installedAt: null, updatedAt: new Date() })
     .where(and(eq(connectorInstalls.workspaceId, ctx.workspaceId), eq(connectorInstalls.connectorSlug, slug)))
   await audit(ctx, 'UNINSTALL', slug)
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 // ── Server actions: thin wrappers that return errors as values so their messages

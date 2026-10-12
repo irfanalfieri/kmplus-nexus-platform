@@ -1,8 +1,14 @@
 'use client'
 
+import Link from 'next/link'
 import { useEffect, useState } from 'react'
-import { AlertTriangle, ArrowRight, CheckCircle2, Circle, Loader2, XCircle } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { AlertTriangle, ArrowRight, CheckCircle2, Loader2, XCircle } from 'lucide-react'
+import { cn } from '@/lib/utils'
+import { buttonVariants } from '@/components/ui/button'
+import { Notice } from '@/components/ui/notice'
+import { Breaker } from '@/components/ui/flow-line'
+import { PageHeader } from '@/components/dashboard/page-header'
+import { usePrefs } from '@/components/i18n/i18n-provider'
 import { getOverview } from '@/lib/actions/monitoring'
 import { useWorkspace } from '@/components/workspace/workspace-context'
 import { ROLE_INFO } from '@/lib/auth/permissions'
@@ -10,7 +16,10 @@ import { formatWhen } from '@/components/pipelines/run-history'
 
 type Overview = Awaited<ReturnType<typeof getOverview>>
 
-export default function OverviewLayer({ onNavigate }: { onNavigate: (tab: string) => void }) {
+const href = (tab: string) => `/dashboard/${tab}`
+
+export default function OverviewLayer() {
+  const { t } = usePrefs()
   const { workspace, role, user } = useWorkspace()
   const [data, setData] = useState<Overview | null>(null)
   const [error, setError] = useState('')
@@ -19,89 +28,122 @@ export default function OverviewLayer({ onNavigate }: { onNavigate: (tab: string
     getOverview().then(setData).catch((err) => setError(err instanceof Error ? err.message : 'Failed to load overview'))
   }, [])
 
-  if (error) return <p className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</p>
+  const header = (
+    <PageHeader
+      title={t('pages.overview.title')}
+      description={t('pages.overview.description')}
+      meta={`Welcome${user.name ? `, ${user.name.split(' ')[0]}` : ''} · ${workspace.name} · you are ${ROLE_INFO[role].label.toLowerCase()}`}
+    />
+  )
+
+  if (error) {
+    return (
+      <div>
+        {header}
+        <Notice tone="danger">{error}</Notice>
+      </div>
+    )
+  }
   if (!data) {
     return (
-      <div className="flex items-center justify-center rounded-xl border border-border bg-card p-10 text-muted-foreground">
-        <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading overview…
+      <div>
+        {header}
+        <div className="flex items-center justify-center rounded-lg border border-border bg-card p-10 text-sm text-muted-foreground" role="status">
+          <Loader2 className="mr-2 size-4 animate-spin" aria-hidden /> Loading overview…
+        </div>
       </div>
     )
   }
 
   const doneSteps = data.checklist.filter((s) => s.done).length
   const tiles = [
-    { label: 'Pipelines', value: data.pipelines.total, sub: `${data.pipelines.scheduled} scheduled`, tab: 'pipelines' },
-    { label: 'Data sources', value: data.sources.total, sub: `${data.sources.connected} connected`, tab: 'sources' },
-    { label: 'Runs · 24h', value: data.last24h.runs, sub: data.last24h.failed ? `${data.last24h.failed} failed` : 'none failed', tab: 'monitoring', alert: data.last24h.failed > 0 },
+    { label: 'Pipelines', value: data.pipelines.total.toLocaleString(), sub: `${data.pipelines.scheduled} scheduled`, tab: 'pipelines' },
+    { label: 'Data sources', value: data.sources.total.toLocaleString(), sub: `${data.sources.connected} connected`, tab: 'sources' },
+    { label: 'Runs · 24h', value: data.last24h.runs.toLocaleString(), sub: data.last24h.failed ? `${data.last24h.failed} failed` : 'none failed', tab: 'monitoring', alert: data.last24h.failed > 0 },
     { label: 'Rows written · 24h', value: data.last24h.written.toLocaleString(), sub: `${data.datasets.count} dataset${data.datasets.count === 1 ? '' : 's'} · ${data.datasets.rows.toLocaleString()} rows`, tab: 'monitoring' },
   ]
 
   return (
     <div className="space-y-6">
-      <div className="rounded-xl border border-border bg-card p-6">
-        <h2 className="text-2xl font-bold">Welcome{user.name ? `, ${user.name.split(' ')[0]}` : ''}</h2>
-        <p className="mt-1 text-muted-foreground">
-          {workspace.name} · you are {ROLE_INFO[role].label.toLowerCase()}
-        </p>
-      </div>
+      {header}
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        {tiles.map((t) => (
-          <button key={t.label} onClick={() => onNavigate(t.tab)} className={`rounded-xl border bg-card p-4 text-left hover:bg-muted/40 ${t.alert ? 'border-destructive/50' : 'border-border'}`}>
-            <div className="text-sm text-muted-foreground">{t.label}</div>
-            <div className="mt-1 text-3xl font-bold tabular-nums">{t.value}</div>
-            <div className={`mt-1 text-xs ${t.alert ? 'text-destructive' : 'text-muted-foreground'}`}>{t.sub}</div>
-          </button>
+      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border lg:grid-cols-4">
+        {tiles.map((tile) => (
+          <Link
+            key={tile.label}
+            href={href(tile.tab)}
+            className="group bg-card px-4 py-3.5 transition-colors outline-none hover:bg-muted/50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+          >
+            <div className="font-mono text-[11px] font-medium tracking-wide text-muted-foreground uppercase">{tile.label}</div>
+            <div className="mt-1 font-mono text-3xl leading-10 tabular-nums">{tile.value}</div>
+            <div className={cn('mt-0.5 flex items-center gap-1.5 text-xs', tile.alert ? 'font-medium text-danger-text' : 'text-muted-foreground')}>
+              {tile.alert && <XCircle className="size-3.5 text-danger" aria-hidden />}
+              {tile.sub}
+            </div>
+          </Link>
         ))}
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <section className="rounded-xl border border-border bg-card p-5">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="font-semibold">Getting started</h3>
-            <span className="text-sm text-muted-foreground">
+        <section className="rounded-lg border border-border bg-card p-5" aria-labelledby="overview-checklist">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h2 id="overview-checklist" className="text-base font-semibold">
+              Getting started
+            </h2>
+            <span className="font-mono text-xs text-muted-foreground">
               {doneSteps} of {data.checklist.length} done
             </span>
           </div>
-          <ol className="space-y-1">
+          <ol className="space-y-0.5">
             {data.checklist.map((step, i) => (
               <li key={step.key}>
-                <button onClick={() => onNavigate(step.tab)} className="flex w-full items-center gap-3 rounded-md px-2 py-2 text-left text-sm hover:bg-muted/40">
-                  {step.done ? <CheckCircle2 className="h-5 w-5 text-green-600" aria-label="Done" /> : <Circle className="h-5 w-5 text-muted-foreground" aria-label="To do" />}
+                <Link
+                  href={href(step.tab)}
+                  className="flex w-full items-center gap-3 rounded-md px-2 py-2 text-left text-sm outline-none hover:bg-muted/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                >
+                  <Breaker state={step.done ? 'live' : 'idle'} />
+                  <span className="sr-only">{step.done ? 'Done:' : 'To do:'}</span>
                   <span className={step.done ? 'text-muted-foreground line-through' : 'font-medium'}>
-                    {i + 1}. {step.label}
+                    <span className="font-mono text-xs text-muted-foreground">{i + 1}.</span> {step.label}
                   </span>
-                  {!step.done && <ArrowRight className="ml-auto h-4 w-4 text-muted-foreground" />}
-                </button>
+                  <span className={cn('ml-auto text-xs', step.done ? 'text-live-text' : 'text-muted-foreground')} aria-hidden>
+                    {step.done ? 'Done' : 'To do'}
+                  </span>
+                  {!step.done && <ArrowRight className="size-4 text-muted-foreground" aria-hidden />}
+                </Link>
               </li>
             ))}
           </ol>
         </section>
 
-        <section className="rounded-xl border border-border bg-card p-5">
-          <h3 className="mb-3 font-semibold">Needs attention</h3>
+        <section className="rounded-lg border border-border bg-card p-5" aria-labelledby="overview-attention">
+          <h2 id="overview-attention" className="mb-3 text-base font-semibold">
+            Needs attention
+          </h2>
           {data.attention.length === 0 ? (
             <p className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-              <CheckCircle2 className="h-5 w-5 text-green-600" /> No failing or rejecting pipelines.
+              <CheckCircle2 className="size-5 text-live" aria-hidden /> No failing or rejecting pipelines.
             </p>
           ) : (
             <ul className="divide-y divide-border">
-              {data.attention.map((p) => (
-                <li key={p.id} className="flex items-center gap-3 py-2 text-sm">
-                  {p.lastRunStatus === 'failed' ? (
-                    <XCircle className="h-4 w-4 text-destructive" aria-label="Failed" />
-                  ) : (
-                    <AlertTriangle className="h-4 w-4 text-amber-600" aria-label="Rejected rows" />
-                  )}
-                  <span className="min-w-0 flex-1 truncate font-medium">{p.name}</span>
-                  <span className="text-xs text-muted-foreground">{p.lastRunStatus === 'failed' ? 'Failed' : 'Rejected rows'} · {formatWhen(p.lastRunAt)}</span>
-                </li>
-              ))}
+              {data.attention.map((p) => {
+                const failed = p.lastRunStatus === 'failed'
+                return (
+                  <li key={p.id} className="flex items-center gap-3 py-2 text-sm">
+                    <span className={cn('flex w-32 shrink-0 items-center gap-1.5 text-xs font-medium', failed ? 'text-danger-text' : 'text-warning-text')}>
+                      {failed ? <XCircle className="size-4 text-danger" aria-hidden /> : <AlertTriangle className="size-4 text-warning" aria-hidden />}
+                      {failed ? 'Failed' : 'Rejected rows'}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate font-medium">{p.name}</span>
+                    <span className="font-mono text-xs whitespace-nowrap text-muted-foreground">{formatWhen(p.lastRunAt)}</span>
+                  </li>
+                )
+              })}
             </ul>
           )}
-          <Button variant="outline" size="sm" className="mt-3" onClick={() => onNavigate('monitoring')}>
-            Open monitoring <ArrowRight className="ml-1 h-4 w-4" />
-          </Button>
+          <Link href={href('monitoring')} className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'mt-3')}>
+            Open monitoring <ArrowRight aria-hidden />
+          </Link>
         </section>
       </div>
     </div>

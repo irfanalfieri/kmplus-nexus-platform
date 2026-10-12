@@ -126,7 +126,7 @@ async function createSsoProviderImpl(input: z.input<typeof createInput>) {
     await tx.insert(workspaceSso).values({ id: newId('wsso'), workspaceId: ctx.workspaceId, providerId, label: data.label, preset: data.preset, domain: data.domain, defaultRole: data.defaultRole, verificationToken: token, createdBy: ctx.userId })
   })
   await recordAudit(ctx, { action: 'CREATE', resource: 'sso_provider', resourceId: providerId, changes: { label: data.label, preset: data.preset, domain: data.domain, issuer, defaultRole: data.defaultRole } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return { providerId }
 }
 
@@ -148,7 +148,7 @@ async function verifySsoDomainImpl(rawProviderId: string) {
   await db.update(ssoProvider).set({ domainVerified: true }).where(eq(ssoProvider.providerId, row.providerId))
   await db.update(workspaceSso).set({ verifiedAt: new Date(), updatedAt: new Date() }).where(eq(workspaceSso.id, row.id))
   await recordAudit(ctx, { action: 'UPDATE', resource: 'sso_provider', resourceId: row.providerId, changes: { domainVerified: row.domain } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 const updateInput = z.object({
@@ -181,7 +181,7 @@ async function updateSsoProviderImpl(input: z.input<typeof updateInput>) {
   }
   // Field names only: never the secret.
   await recordAudit(ctx, { action: 'UPDATE', resource: 'sso_provider', resourceId: row.providerId, changes: { defaultRole: data.defaultRole, enforce: data.enforce, jitProvisioning: data.jitProvisioning, rotatedSecret: Boolean(data.clientSecret) } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 // ── SAML 2.0 ─────────────────────────────────────────────────────────────────
@@ -236,7 +236,7 @@ async function createSamlProviderImpl(input: z.input<typeof samlCreateInput>) {
     await tx.insert(workspaceSso).values({ id: newId('wsso'), workspaceId: ctx.workspaceId, providerId, label: data.label, preset: data.preset, protocol: 'saml', domain: data.domain, defaultRole: data.defaultRole, verificationToken: token, createdBy: ctx.userId })
   })
   await recordAudit(ctx, { action: 'CREATE', resource: 'sso_provider', resourceId: providerId, changes: { label: data.label, protocol: 'saml', preset: data.preset, domain: data.domain, idpEntityId: idp?.entityId ?? null, defaultRole: data.defaultRole } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return { providerId, ...sp }
 }
 
@@ -255,7 +255,7 @@ async function setSamlIdpImpl(input: z.input<typeof samlIdpInput>) {
   const samlConfig = samlConfigFor({ preset: (SAML_PRESETS as readonly string[]).includes(row.preset) ? (row.preset as SamlPreset) : 'saml', sp, idp })
   await db.update(ssoProvider).set({ issuer: idp.entityId, samlConfig: sealSsoConfig(row.providerId, ctx.workspaceId, samlConfig) }).where(eq(ssoProvider.providerId, row.providerId))
   await recordAudit(ctx, { action: 'UPDATE', resource: 'sso_provider', resourceId: row.providerId, changes: { idpEntityId: idp.entityId, certificateExpires: idp.certificateExpires }, diff: { issuer: { from: p?.issuer ?? '', to: idp.entityId }, ...(p?.samlConfig && JSON.parse(p.samlConfig).entryPoint !== idp.ssoUrl ? { ssoUrl: { from: JSON.parse(p.samlConfig).entryPoint ?? '', to: idp.ssoUrl } } : {}) } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return { entityId: idp.entityId, ssoUrl: idp.ssoUrl, certificateExpires: idp.certificateExpires }
 }
 
@@ -265,7 +265,7 @@ async function deleteSsoProviderImpl(rawProviderId: string) {
   await db.delete(ssoProvider).where(eq(ssoProvider.providerId, row.providerId))
   await db.delete(workspaceSso).where(eq(workspaceSso.id, row.id))
   await recordAudit(ctx, { action: 'DELETE', resource: 'sso_provider', resourceId: row.providerId, changes: { domain: row.domain } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 export async function listSsoProviders(...args: Parameters<typeof listSsoProvidersImpl>) {

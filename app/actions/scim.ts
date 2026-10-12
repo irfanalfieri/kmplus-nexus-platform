@@ -64,7 +64,7 @@ async function createScimTokenImpl(rawName: string) {
   const id = newId('scimt')
   await db.insert(scimTokens).values({ id, workspaceId: ctx.workspaceId, name, prefix: token.slice(0, 10), hash: createHash('sha256').update(token).digest('hex'), createdBy: ctx.userId })
   await recordAudit(ctx, { action: 'CREATE', resource: 'scim_token', resourceId: id, changes: { name } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return { id, token, baseUrl: await scimBaseUrl() }
 }
 
@@ -78,7 +78,7 @@ async function revokeScimTokenImpl(rawId: string) {
     .returning({ name: scimTokens.name })
   if (!res.length) throw new Error('Token not found or already revoked')
   await recordAudit(ctx, { action: 'REVOKE', resource: 'scim_token', resourceId: id, changes: { name: res[0].name } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 const groupRoleInput = z.object({ groupId: idSchema, role: z.enum(ROLES).nullable() })
@@ -92,7 +92,7 @@ async function setScimGroupRoleImpl(input: z.input<typeof groupRoleInput>) {
   await db.update(scimGroups).set({ role: data.role, updatedAt: new Date() }).where(eq(scimGroups.id, g.id))
   await refreshRoles({ workspaceId: ctx.workspaceId, tokenId: 'settings', base: '' }, (g.members as string[]) ?? [])
   await recordAudit(ctx, { action: 'UPDATE', resource: 'scim_group', resourceId: g.id, changes: { displayName: g.displayName }, diff: diffObjects({ role: g.role }, { role: data.role }) })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 export async function getScimOverview(...args: Parameters<typeof getScimOverviewImpl>) {

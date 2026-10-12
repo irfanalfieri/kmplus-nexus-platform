@@ -58,7 +58,7 @@ async function createWebhookImpl(input: z.input<typeof createInput>) {
   const secret = `whsec_${randomBytes(24).toString('base64url')}`
   await db.insert(webhooks).values({ id, workspaceId: ctx.workspaceId, url, description: data.description, events: data.events, secret: encryptCredentials(id, { secret }, ctx.workspaceId), createdBy: ctx.userId })
   await recordAudit(ctx, { action: 'CREATE', resource: 'webhook', resourceId: id, changes: { url, events: data.events } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return { id, secret }
 }
 
@@ -74,7 +74,7 @@ async function updateWebhookImpl(input: z.input<typeof updateInput>) {
     .set({ ...(data.enabled !== undefined ? { enabled: data.enabled } : {}), ...(data.events ? { events: data.events } : {}), ...(url ? { url } : {}), updatedAt: new Date() })
     .where(eq(webhooks.id, data.id))
   await recordAudit(ctx, { action: 'UPDATE', resource: 'webhook', resourceId: data.id, changes: { enabled: data.enabled, events: data.events, url } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 async function deleteWebhookImpl(rawId: string) {
@@ -83,7 +83,7 @@ async function deleteWebhookImpl(rawId: string) {
   await db.delete(webhookDeliveries).where(eq(webhookDeliveries.webhookId, hook.id))
   await db.delete(webhooks).where(eq(webhooks.id, hook.id))
   await recordAudit(ctx, { action: 'DELETE', resource: 'webhook', resourceId: hook.id, changes: { url: hook.url } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 /** Sends a signed "ping" event now and reports what the endpoint answered. */

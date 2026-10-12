@@ -1,9 +1,11 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { Loader2, Plus, Trash2, X } from 'lucide-react'
+import { Loader2, Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Modal } from '@/components/ui/dialog'
+import { Notice } from '@/components/ui/notice'
 import { getAnalyticsDatasets, previewWidget } from '@/lib/actions/analytics'
 import {
   AGGREGATIONS,
@@ -25,7 +27,8 @@ import {
 import { WidgetView } from './charts'
 
 type Datasets = Awaited<ReturnType<typeof getAnalyticsDatasets>>
-const selectClass = 'h-9 w-full rounded-md border border-input bg-background px-2 text-sm'
+const selectClass =
+  'h-9 w-full rounded-md border border-input bg-card px-2 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-60'
 const isNumeric = (t: string) => (NUMERIC_TYPES as readonly string[]).includes(t)
 const isTime = (t: string) => (TIME_TYPES as readonly string[]).includes(t)
 
@@ -100,16 +103,32 @@ export default function WidgetEditor({ datasets: initialDatasets, initial, onCan
   )
   const dimCol = columns.find((c) => c.name === w.dimension?.column)
 
+  const dirty = !saving && JSON.stringify(w) !== JSON.stringify(initial)
+
   return (
-    <div className="fixed inset-0 z-50 flex items-stretch justify-center bg-black/50 p-0 sm:p-4" role="dialog" aria-modal="true" aria-label="Edit widget">
-      <div className="flex w-full max-w-5xl flex-col overflow-hidden border border-border bg-card sm:rounded-xl">
-        <header className="flex items-center gap-3 border-b border-border p-4">
-          <div className="flex-1 font-semibold">{initial.title ? 'Edit widget' : 'Add widget'}</div>
-          <Button size="sm" variant="ghost" onClick={onCancel} aria-label="Close">
-            <X className="h-4 w-4" />
+    <Modal
+      onClose={onCancel}
+      dirty={dirty}
+      size="full"
+      title={initial.title ? 'Edit widget' : 'Add widget'}
+      bodyClassName="p-0"
+      footer={
+        <>
+          {error && (
+            <Notice tone="danger" className="mr-auto py-1.5">
+              {error}
+            </Notice>
+          )}
+          <Button variant="outline" onClick={onCancel}>
+            Cancel
           </Button>
-        </header>
-        <div className="grid flex-1 gap-0 overflow-auto lg:grid-cols-[360px_1fr]">
+          <Button onClick={() => void save()} disabled={saving || !valid.success}>
+            {saving && <Loader2 className="animate-spin" aria-hidden />}Save widget
+          </Button>
+        </>
+      }
+    >
+        <div className="grid gap-0 lg:grid-cols-[360px_1fr]">
           <div className="space-y-4 border-b border-border p-4 lg:border-b-0 lg:border-r">
             <Field label="Dataset">
               <select className={selectClass} value={w.dataset} onChange={(e) => patch({ dataset: e.target.value, measure: { agg: 'count', column: '' }, dimension: null, filters: [] })}>
@@ -118,7 +137,7 @@ export default function WidgetEditor({ datasets: initialDatasets, initial, onCan
                 ))}
               </select>
             </Field>
-            {maskedCount > 0 && <p className="text-xs text-muted-foreground">{maskedCount} masked column{maskedCount === 1 ? ' is' : 's are'} hidden for your role (Governance policy).</p>}
+            {maskedCount > 0 && <p className="font-mono text-xs text-muted-foreground">{maskedCount} masked column{maskedCount === 1 ? ' is' : 's are'} hidden for your role (Governance policy).</p>}
             <Field label="Show as">
               <select className={selectClass} value={w.type} onChange={(e) => setType(e.target.value as Widget['type'])}>
                 {WIDGET_TYPES.map((t) => (
@@ -169,32 +188,32 @@ export default function WidgetEditor({ datasets: initialDatasets, initial, onCan
                 </Field>
               </div>
             )}
-            <div className="space-y-2">
-              <div className="text-xs font-medium text-muted-foreground">Filters</div>
+            <fieldset className="space-y-2">
+              <legend className="mb-2 text-xs font-medium text-muted-foreground">Filters</legend>
               {w.filters.map((f, i) => (
                 <div key={i} className="grid grid-cols-[1fr_auto_1fr_auto] gap-1">
-                  <select className={selectClass} value={f.column} onChange={(e) => patch({ filters: w.filters.map((x, j) => (j === i ? { ...x, column: e.target.value } : x)) })} aria-label="Filter column">
+                  <select className={selectClass} value={f.column} onChange={(e) => patch({ filters: w.filters.map((x, j) => (j === i ? { ...x, column: e.target.value } : x)) })} aria-label={`Filter ${i + 1} column`}>
                     {columns.map((c) => (
                       <option key={c.name} value={c.name}>{c.name}</option>
                     ))}
                   </select>
-                  <select className={`${selectClass} w-auto`} value={f.op} onChange={(e) => patch({ filters: w.filters.map((x, j) => (j === i ? { ...x, op: e.target.value as typeof f.op } : x)) })} aria-label="Filter operator">
+                  <select className={`${selectClass} w-auto`} value={f.op} onChange={(e) => patch({ filters: w.filters.map((x, j) => (j === i ? { ...x, op: e.target.value as typeof f.op } : x)) })} aria-label={`Filter ${i + 1} operator`}>
                     {FILTER_OPS.map((o) => (
                       <option key={o} value={o}>{FILTER_OP_INFO[o]}</option>
                     ))}
                   </select>
-                  <Input value={f.value} disabled={f.op === 'empty' || f.op === 'not_empty'} onChange={(e) => patch({ filters: w.filters.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)) })} aria-label="Filter value" className="h-9" />
-                  <Button size="sm" variant="ghost" onClick={() => patch({ filters: w.filters.filter((_, j) => j !== i) })} aria-label="Remove filter">
-                    <Trash2 className="h-4 w-4" />
+                  <Input value={f.value} disabled={f.op === 'empty' || f.op === 'not_empty'} onChange={(e) => patch({ filters: w.filters.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)) })} aria-label={`Filter ${i + 1} value`} className="h-9" />
+                  <Button size="icon" variant="ghost" className="size-9" onClick={() => patch({ filters: w.filters.filter((_, j) => j !== i) })} aria-label={`Remove filter ${i + 1}`}>
+                    <Trash2 aria-hidden />
                   </Button>
                 </div>
               ))}
               {columns.length > 0 && w.filters.length < 10 && (
                 <Button size="sm" variant="outline" onClick={() => patch({ filters: [...w.filters, { column: columns[0].name, op: 'eq', value: '' }] })}>
-                  <Plus className="mr-1 h-4 w-4" /> Add filter
+                  <Plus aria-hidden /> Add filter
                 </Button>
               )}
-            </div>
+            </fieldset>
             {needsDimension && (
               <div className="grid grid-cols-2 gap-2">
                 <Field label="Sort">
@@ -222,9 +241,15 @@ export default function WidgetEditor({ datasets: initialDatasets, initial, onCan
             </div>
           </div>
           <div className="min-w-0 p-4">
-            <div className="mb-3 flex items-center gap-2 text-sm font-medium">
-              Preview {preview.loading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
-            </div>
+            <h3 className="mb-3 flex items-center gap-2 text-sm font-medium">
+              Preview
+              {preview.loading && (
+                <span role="status" className="text-muted-foreground">
+                  <Loader2 className="size-4 animate-spin" aria-hidden />
+                  <span className="sr-only">Loading preview</span>
+                </span>
+              )}
+            </h3>
             <div className="rounded-lg border border-border p-4">
               <div className="mb-2 font-medium">{w.title || (valid.success ? defaultTitle(valid.data) : '')}</div>
               {preview.result && valid.success ? (
@@ -232,18 +257,14 @@ export default function WidgetEditor({ datasets: initialDatasets, initial, onCan
               ) : (
                 <p className="py-10 text-center text-sm text-muted-foreground">{preview.message ?? 'Choose what to show.'}</p>
               )}
-              {preview.result && preview.message && <p className="mt-2 text-sm text-destructive">{preview.message}</p>}
+              {preview.result && preview.message && (
+                <Notice tone="danger" className="mt-2">
+                  {preview.message}
+                </Notice>
+              )}
             </div>
           </div>
         </div>
-        <footer className="flex items-center justify-end gap-2 border-t border-border p-4">
-          {error && <p className="mr-auto text-sm text-destructive">{error}</p>}
-          <Button variant="outline" onClick={onCancel}>Cancel</Button>
-          <Button onClick={() => void save()} disabled={saving || !valid.success}>
-            {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save widget
-          </Button>
-        </footer>
-      </div>
-    </div>
+    </Modal>
   )
 }

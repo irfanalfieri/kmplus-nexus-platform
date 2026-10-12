@@ -19,3 +19,9 @@ tsconfig.tsbuildinfo
 
 # Nexus Agent bundle (built by scripts/build-agent.mjs)
 /public/downloads/nexus-agent.mjs
+
+# Impeccable design run artifacts (screenshots, decision sketches)
+/.impeccable/review/
+/.impeccable/mocks/
+/.impeccable/questions/
+/.impeccable/live/

@@ -34,9 +34,30 @@ const scope = (ctx: WorkspaceContext) => ({ workspaceId: ctx.workspaceId, actorI
 async function listPipelinesImpl() {
   const ctx = await requireWorkspace()
   // Versions waiting for a second person (GV-6).
-  const pending = new Map(
-    (await db.select({ pipelineId: pipelineApprovals.pipelineId, id: pipelineApprovals.id, version: pipelineApprovals.version, kind: pipelineApprovals.kind }).from(pipelineApprovals).where(and(eq(pipelineApprovals.workspaceId, ctx.workspaceId), eq(pipelineApprovals.status, 'pending')))).map((a) => [a.pipelineId, a])
-  )
+  const [approvals, heldRows, lastRuns] = await Promise.all([
+    db.select({ pipelineId: pipelineApprovals.pipelineId, id: pipelineApprovals.id, version: pipelineApprovals.version, kind: pipelineApprovals.kind }).from(pipelineApprovals).where(and(eq(pipelineApprovals.workspaceId, ctx.workspaceId), eq(pipelineApprovals.status, 'pending'))),
+    // Rows held back in the quarantine, per pipeline (counts only). Flags were written, so they don't count.
+    db
+      .select({ pipelineId: pipelineRunRejects.pipelineId, n: sql<number>`count(*)::int` })
+      .from(pipelineRunRejects)
+      .where(and(eq(pipelineRunRejects.workspaceId, ctx.workspaceId), eq(pipelineRunRejects.status, 'open'), inArray(pipelineRunRejects.kind, ['invalid', 'approval'])))
+      .groupBy(pipelineRunRejects.pipelineId),
+    // The latest finished run of each pipeline: rows read / written / rejected and how long it took.
+    db
+      .selectDistinctOn([executionLogs.pipelineId], {
+        pipelineId: executionLogs.pipelineId,
+        read: executionLogs.recordsProcessed,
+        written: executionLogs.recordsSuccess,
+        rejected: executionLogs.recordsError,
+        duration: executionLogs.duration,
+      })
+      .from(executionLogs)
+      .where(and(eq(executionLogs.workspaceId, ctx.workspaceId), inArray(executionLogs.status, ['success', 'partial', 'failed'])))
+      .orderBy(executionLogs.pipelineId, desc(executionLogs.createdAt)),
+  ])
+  const pending = new Map(approvals.map((a) => [a.pipelineId, a]))
+  const held = new Map(heldRows.map((h) => [h.pipelineId, h.n]))
+  const last = new Map(lastRuns.map(({ pipelineId, ...r }) => [pipelineId, r]))
   return db
     .select({
       id: pipelines.id,
@@ -63,7 +84,13 @@ async function listPipelinesImpl() {
       rows.map(({ state, ...row }) => {
         const def = definitionSchema.safeParse(row.config)
         const approval = pending.get(row.id)
-        return { ...row, syncPosition: def.success ? currentWatermark(def.data, state) : null, pendingApproval: approval ? { id: approval.id, version: approval.version, kind: approval.kind } : null }
+        return {
+          ...row,
+          syncPosition: def.success ? currentWatermark(def.data, state) : null,
+          pendingApproval: approval ? { id: approval.id, version: approval.version, kind: approval.kind } : null,
+          heldRows: held.get(row.id) ?? 0,
+          lastRun: last.get(row.id) ?? null,
+        }
       })
     )
 }
@@ -186,7 +213,7 @@ async function savePipelineImpl(input: z.input<typeof saveInput>) {
   const ctx = await requireWorkspace('pipelines:edit')
   await assertPipelinesEditable(ctx)
   const result = await savePipelineAs(ctx, input)
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return result
 }
 
@@ -199,7 +226,7 @@ async function publishPipelineImpl(rawId: string, rawVersion?: number) {
   if (!version) throw new Error('There is no draft to publish.')
   await assertPipelinesEditable(ctx)
   const outcome = await publishOrRequest(ctx, id, version)
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return { version, published: outcome.published, approvalId: outcome.approvalId ?? null }
 }
 
@@ -212,7 +239,7 @@ async function discardDraftImpl(rawId: string) {
   await assertPipelinesEditable(ctx)
   await db.update(pipelines).set({ draftConfig: null, draftVersion: null, updatedAt: new Date() }).where(and(eq(pipelines.id, id), eq(pipelines.workspaceId, ctx.workspaceId)))
   await audit(ctx, 'UPDATE', id, { discardedDraft: existing.draftVersion })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 /**
@@ -229,7 +256,7 @@ async function createWebhookTriggerImpl(rawId: string) {
   await audit(ctx, 'UPDATE', id, { webhookTrigger: 'created' })
   const h = await headers()
   const origin = process.env.BETTER_AUTH_URL ?? `${h.get('x-forwarded-proto') ?? 'https'}://${h.get('host')}`
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return { url: `${origin.replace(/\/+$/, '')}/api/hooks/pipelines/${id}/${token}` }
 }
 
@@ -239,7 +266,7 @@ async function disableWebhookTriggerImpl(rawId: string) {
   await getOwned(ctx, id)
   await db.update(pipelines).set({ triggerTokenHash: null, updatedAt: new Date() }).where(and(eq(pipelines.id, id), eq(pipelines.workspaceId, ctx.workspaceId)))
   await audit(ctx, 'UPDATE', id, { webhookTrigger: 'disabled' })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 async function setPipelineEnabledImpl(rawId: string, rawEnabled: boolean) {
@@ -254,7 +281,7 @@ async function setPipelineEnabledImpl(rawId: string, rawEnabled: boolean) {
     .set({ enabled, nextRunAt: computeNextRun(enabled, schedule), updatedAt: new Date() })
     .where(and(eq(pipelines.id, id), eq(pipelines.workspaceId, ctx.workspaceId)))
   await audit(ctx, enabled ? 'ENABLE' : 'DISABLE', id)
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 async function deletePipelineImpl(rawId: string) {
@@ -270,7 +297,7 @@ async function deletePipelineImpl(rawId: string) {
   await db.delete(pipelines).where(and(eq(pipelines.id, id), eq(pipelines.workspaceId, ctx.workspaceId)))
   // Datasets produced by the pipeline are kept; they may be used elsewhere.
   await audit(ctx, 'DELETE', id)
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 /** Rollback (VC-4): an older version becomes a new version and is published; history is never rewritten. */
@@ -297,7 +324,7 @@ async function restoreVersionImpl(rawId: string, rawVersion: number) {
     changeNote: `Restored v${version}`,
     publish: true,
   })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return result
 }
 
@@ -309,7 +336,7 @@ async function runPipelineNowImpl(rawId: string) {
   if (!existing.version) throw new Error('Publish the pipeline before running it. Test runs work on the draft.')
   const outcome = await enqueueRun(id, scope(ctx), 'manual')
   if (outcome.status === 'queued') startWorker()
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return outcome
 }
 
@@ -321,7 +348,7 @@ async function cancelPipelineRunImpl(rawRunId: string) {
   if (result === 'not_active') throw new Error('This run has already finished.')
   await audit(ctx, 'CANCEL', runId, { result }, 'run')
   if (result === 'cancelling') await nudgeWorker(ctx.workspaceId)
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return {
     status: result,
     message: result === 'cancelled' ? 'Run cancelled.' : 'Cancelling: the run stops after the chunk it is writing now.',
@@ -343,7 +370,7 @@ async function retryPipelineRunImpl(rawRunId: string) {
   const outcome = await enqueueRun(run.pipelineId, scope(ctx), 'manual')
   if (outcome.status === 'queued') startWorker()
   await audit(ctx, 'RETRY', run.pipelineId, { previousRunId: runId, runId: outcome.runId })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return outcome
 }
 
@@ -390,7 +417,7 @@ async function resetSyncPositionImpl(rawId: string) {
   delete state.watermark
   await db.update(pipelines).set({ state, updatedAt: new Date() }).where(and(eq(pipelines.id, id), eq(pipelines.workspaceId, ctx.workspaceId)))
   await audit(ctx, 'RESET_SYNC', id)
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 // ── Server actions: thin wrappers that return errors as values so their messages

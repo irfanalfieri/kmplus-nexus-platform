@@ -61,7 +61,7 @@ async function createApiKeyImpl(input: z.input<typeof createInput>) {
     expiresAt: data.expiresInDays ? new Date(Date.now() + data.expiresInDays * 86_400_000) : null,
   })
   await recordAudit(ctx, { action: 'CREATE', resource: 'api_key', resourceId: id, changes: { name: data.name, prefix, role: data.role, scopes: data.scopes, expiresInDays: data.expiresInDays, rateLimitPerMinute: data.rateLimitPerMinute } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return { id, key }
 }
 
@@ -75,7 +75,7 @@ async function revokeApiKeyImpl(rawId: string) {
     .returning({ prefix: apiKeys.prefix })
   if (!res.length) throw new Error('Key not found or already revoked.')
   await recordAudit(ctx, { action: 'REVOKE', resource: 'api_key', resourceId: id, changes: { prefix: res[0].prefix } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 export async function listApiKeys(...args: Parameters<typeof listApiKeysImpl>) {

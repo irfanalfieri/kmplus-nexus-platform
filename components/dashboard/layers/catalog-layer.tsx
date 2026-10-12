@@ -1,10 +1,17 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { BookOpen, Database, Eye, Loader2, RefreshCw, Save, Search, Server, Zap } from 'lucide-react'
+import { BookOpen, Database, Eye, Loader2, MousePointerClick, RefreshCw, Save, Search, SearchX, Server, Zap } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
+import { Notice } from '@/components/ui/notice'
+import { EmptyState } from '@/components/ui/empty-state'
+import { useConfirm } from '@/components/ui/dialog'
+import { Table, TBody, THead, Td, Th, Tr } from '@/components/ui/data-table'
+import { PageHeader } from '@/components/dashboard/page-header'
+import { useT } from '@/components/i18n/i18n-provider'
+import { cn } from '@/lib/utils'
 import { deleteDomainMapping, getCatalogSample, listCatalog, refreshCatalogCache, saveCatalogEntry, saveDomainMapping } from '@/lib/actions/catalog'
 import { CATALOG_CLASSIFICATIONS, CATALOG_CLASSIFICATION_INFO, freshness, matchesSearch, type CatalogClassification } from '@/lib/catalog/definition'
 import { CACHE_REFRESH_LABELS, CACHE_REFRESH_OPTIONS, type CacheRefreshOption } from '@/lib/catalog/refresh'
@@ -19,12 +26,15 @@ type Catalog = Awaited<ReturnType<typeof listCatalog>>
 type Item = Catalog['items'][number]
 type Sample = Awaited<ReturnType<typeof getCatalogSample>>
 
+const focusRing = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring'
+
 function FreshnessLabel({ item }: { item: Item }) {
   if (item.kind === 'source_table' && item.accessMode === 'live') return <span>live from the source</span>
   return <span title={item.lastLoadedAt ? new Date(item.lastLoadedAt).toLocaleString() : undefined}>{item.kind === 'dataset' ? 'loaded' : 'cached'} {freshness(item.lastLoadedAt)}</span>
 }
 
 export default function CatalogLayer() {
+  const t = useT()
   const [data, setData] = useState<Catalog | null>(null)
   const [error, setError] = useState('')
   const [query, setQuery] = useState('')
@@ -52,18 +62,9 @@ export default function CatalogLayer() {
 
   return (
     <div className="space-y-6">
-      <div className="rounded-xl border border-border bg-card p-6">
-        <div className="mb-2 flex items-center gap-2">
-          <BookOpen className="h-5 w-5 text-primary" />
-          <Badge variant="outline">Layers 8 & 9</Badge>
-        </div>
-        <h2 className="text-2xl font-bold">Data Catalog</h2>
-        <p className="mt-1 max-w-3xl text-muted-foreground">
-          Every Nexus dataset and every table of your data sources, in one searchable place. Document owners, classification and columns; choose whether source tables are queried live or kept as a cached copy.
-        </p>
-      </div>
+      <PageHeader title={t('pages.catalog.title')} description={t('pages.catalog.description')} />
 
-      {error && <p className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
+      {error && <Notice tone="danger">{error}</Notice>}
 
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative min-w-[240px] flex-1">
@@ -78,28 +79,45 @@ export default function CatalogLayer() {
       </div>
 
       {!data ? (
-        <div className="flex items-center justify-center rounded-xl border border-border bg-card p-10 text-muted-foreground">
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading catalog…
-        </div>
+        !error && (
+          <div className="flex items-center justify-center rounded-lg border border-border bg-card p-10 text-muted-foreground" role="status">
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> Loading catalog…
+          </div>
+        )
       ) : data.items.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-border bg-card p-10 text-center text-sm text-muted-foreground">
-          The catalog fills itself: connect a data source (its tables appear here) or run a pipeline (its datasets appear here).
+        <div className="rounded-lg border border-border bg-card">
+          <EmptyState icon={<BookOpen />} title="The catalog is empty">
+            The catalog fills itself: connect a data source (its tables appear here) or run a pipeline (its datasets appear here).
+          </EmptyState>
         </div>
       ) : (
         <div className="grid gap-4 lg:grid-cols-[minmax(280px,2fr)_3fr]">
           <ul className="max-h-[75vh] space-y-2 overflow-y-auto pr-1" aria-label="Catalog items">
-            {items.length === 0 && <li className="text-sm text-muted-foreground">Nothing matches “{query}”.</li>}
+            {items.length === 0 && (
+              <li className="rounded-lg border border-border bg-card">
+                <EmptyState compact icon={<SearchX />} title={query ? `Nothing matches “${query}”` : 'Nothing of this kind'}>
+                  Try another search or kind.
+                </EmptyState>
+              </li>
+            )}
             {items.map((i) => (
               <li key={i.key}>
                 <button
+                  type="button"
                   onClick={() => setSelectedKey(i.key)}
-                  className={`w-full rounded-lg border p-3 text-left text-sm hover:bg-muted/40 ${selectedKey === i.key ? 'border-primary bg-primary/5' : 'border-border bg-card'}`}
+                  aria-current={selectedKey === i.key ? 'true' : undefined}
+                  className={cn(
+                    'w-full rounded-lg border p-3 text-left text-sm',
+                    focusRing,
+                    selectedKey === i.key ? 'border-primary bg-accent text-accent-foreground shadow-[inset_3px_0_0_var(--live)]' : 'border-border bg-card hover:bg-muted'
+                  )}
                 >
                   <div className="flex items-center gap-2">
-                    {i.kind === 'dataset' ? <Database className="h-4 w-4 shrink-0 text-primary" aria-hidden /> : <Server className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />}
+                    {i.kind === 'dataset' ? <Database className="h-4 w-4 shrink-0 text-live" aria-hidden /> : <Server className="h-4 w-4 shrink-0 text-info" aria-hidden />}
+                    <span className="sr-only">{i.kind === 'dataset' ? 'Dataset' : 'Source table'}</span>
                     <span className="truncate font-mono font-medium">{i.name}</span>
-                    {i.classification === 'pii' && <Badge variant="outline" className="border-amber-500 text-amber-700 dark:text-amber-300">PII</Badge>}
-                    {i.kind === 'source_table' && <Badge variant="outline">{i.accessMode}</Badge>}
+                    {i.classification === 'pii' && <Badge variant="outline" className="border-warning/50 bg-warning-soft font-mono text-warning-text">PII</Badge>}
+                    {i.kind === 'source_table' && <Badge variant="outline" className="font-mono">{i.accessMode}</Badge>}
                   </div>
                   <div className="mt-1 truncate text-xs text-muted-foreground">
                     {i.kind === 'dataset' ? (i.producedBy.length ? `by ${i.producedBy.map((p) => p.name).join(', ')}` : 'dataset') : i.sourceName} · {i.rowCount != null ? `${i.rowCount.toLocaleString()} rows · ` : ''}
@@ -108,8 +126,8 @@ export default function CatalogLayer() {
                   {i.description && <div className="mt-1 line-clamp-2 text-xs">{i.description}</div>}
                   {i.tags.length > 0 && (
                     <div className="mt-1 flex flex-wrap gap-1">
-                      {i.tags.map((t) => (
-                        <Badge key={t} variant="secondary" className="text-[10px]">#{t}</Badge>
+                      {i.tags.map((tag) => (
+                        <Badge key={tag} variant="secondary" className="font-mono text-[10px]">#{tag}</Badge>
                       ))}
                     </div>
                   )}
@@ -120,7 +138,11 @@ export default function CatalogLayer() {
           {selected ? (
             <Detail key={selected.key} item={selected} catalog={data} onSaved={load} onOpen={setSelectedKey} />
           ) : (
-            <div className="flex items-center justify-center rounded-xl border border-dashed border-border p-10 text-sm text-muted-foreground">Select an item to see and document it.</div>
+            <div className="rounded-lg border border-border bg-card">
+              <EmptyState icon={<MousePointerClick />} title="Nothing selected">
+                Select a dataset or table to see its columns, lineage and quality.
+              </EmptyState>
+            </div>
           )}
         </div>
       )}
@@ -208,10 +230,10 @@ function Detail({ item, catalog, onSaved, onOpen }: { item: Item; catalog: Catal
   )
 
   return (
-    <div className="min-w-0 space-y-4 rounded-xl border border-border bg-card p-5">
+    <section className="min-w-0 space-y-4 rounded-lg border border-border bg-card p-5" aria-labelledby="catalog-detail-title">
       <div className="flex flex-wrap items-start gap-3">
         <div className="min-w-0 flex-1">
-          <h3 className="truncate font-mono text-lg font-semibold">{item.name}</h3>
+          <h2 id="catalog-detail-title" className="truncate font-mono text-lg font-semibold">{item.name}</h2>
           <p className="text-xs text-muted-foreground">
             {item.kind === 'dataset' ? 'Nexus dataset' : `Table of ${item.sourceName}`}
             {item.kind === 'dataset' && item.sourceName ? ` · cached copy of ${item.sourceName}` : ''}
@@ -223,17 +245,17 @@ function Detail({ item, catalog, onSaved, onOpen }: { item: Item; catalog: Catal
         </div>
         {canPreview && (
           <Button size="sm" variant="outline" onClick={() => void loadSample()} disabled={sampling}>
-            {sampling ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Eye className="mr-1 h-4 w-4" />} Sample rows
+            {sampling ? <Loader2 className="mr-1 h-4 w-4 animate-spin" aria-hidden /> : <Eye className="mr-1 h-4 w-4" aria-hidden />} Sample rows
           </Button>
         )}
         {canEdit && (
           <Button size="sm" onClick={() => void save()} disabled={busy}>
-            {busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Save className="mr-1 h-4 w-4" />} Save
+            {busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" aria-hidden /> : <Save className="mr-1 h-4 w-4" aria-hidden />} Save
           </Button>
         )}
       </div>
-      {notice && <p className="rounded-md bg-green-500/10 p-2 text-sm text-green-700 dark:text-green-400" role="status">{notice}</p>}
-      {error && <p className="rounded-md bg-destructive/10 p-2 text-sm text-destructive" role="alert">{error}</p>}
+      {notice && <Notice tone="success">{notice}</Notice>}
+      {error && <Notice tone="danger">{error}</Notice>}
 
       {sample && (
         <div className="space-y-1">
@@ -249,7 +271,14 @@ function Detail({ item, catalog, onSaved, onOpen }: { item: Item; catalog: Catal
         <div className="md:col-span-2">
           {label(
             'Description',
-            <textarea value={description} onChange={(e) => setDescription(e.target.value)} disabled={!canEdit} rows={3} className="w-full rounded-md border border-input bg-background p-2 text-sm" placeholder="What is in this table, where it comes from, how to use it" />
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              disabled={!canEdit}
+              rows={3}
+              className={cn('w-full rounded-md border border-input bg-card p-2 text-sm disabled:opacity-60', focusRing)}
+              placeholder="What is in this table, where it comes from, how to use it"
+            />
           )}
         </div>
         {label(
@@ -283,11 +312,11 @@ function Detail({ item, catalog, onSaved, onOpen }: { item: Item; catalog: Catal
       {item.kind === 'dataset' && <p className="text-xs text-muted-foreground">Column masking and row-level access for this dataset are set in Governance.</p>}
 
       {item.kind === 'source_table' && (
-        <section className="space-y-3 rounded-md border border-border p-3" aria-label="Access mode">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <Zap className="h-4 w-4 text-primary" /> Access
-          </div>
-          <div className="flex flex-wrap gap-4 text-sm">
+        <section className="space-y-3 rounded-md border border-border p-3" aria-labelledby="catalog-access">
+          <h3 id="catalog-access" className="flex items-center gap-2 text-sm font-medium">
+            <Zap className="h-4 w-4 text-muted-foreground" aria-hidden /> Access
+          </h3>
+          <div className="flex flex-wrap gap-4 text-sm" role="radiogroup" aria-labelledby="catalog-access">
             <label className="flex items-start gap-2">
               <input type="radio" name="mode" checked={accessMode === 'live'} disabled={!canEdit} onChange={() => setAccessMode('live')} className="mt-1" />
               <span>
@@ -336,7 +365,7 @@ function Detail({ item, catalog, onSaved, onOpen }: { item: Item; catalog: Catal
               Copy kept by pipeline “Cache · {item.sourceName} · {item.name}” (see Pipelines and Monitoring).
               {canRun && (
                 <Button size="sm" variant="outline" onClick={() => void refreshNow()}>
-                  <RefreshCw className="mr-1 h-3.5 w-3.5" /> Refresh now
+                  <RefreshCw className="mr-1 h-3.5 w-3.5" aria-hidden /> Refresh now
                 </Button>
               )}
             </div>
@@ -344,50 +373,50 @@ function Detail({ item, catalog, onSaved, onOpen }: { item: Item; catalog: Catal
         </section>
       )}
 
-      <section aria-label="Columns">
-        <div className="mb-2 text-sm font-medium">Columns</div>
+      <section aria-labelledby="catalog-columns">
+        <h3 id="catalog-columns" className="mb-2 text-sm font-medium">Columns</h3>
         <div className="max-h-96 overflow-auto rounded-md border border-border">
-          <table className="w-full text-sm">
-            <thead className="sticky top-0 bg-muted text-left text-xs text-muted-foreground">
+          <Table label={`Columns of ${item.name}`}>
+            <THead className="sticky top-0 z-10 bg-muted">
               <tr>
-                <th className="px-2 py-1.5 font-medium">Column</th>
-                <th className="px-2 py-1.5 font-medium">Type</th>
-                <th className="px-2 py-1.5 font-medium">Business description</th>
+                <Th>Column</Th>
+                <Th>Type</Th>
+                <Th>Business description</Th>
               </tr>
-            </thead>
-            <tbody>
+            </THead>
+            <TBody>
               {item.columns.map((c) => (
-                <tr key={c.name} className="border-t border-border/60">
-                  <td className="whitespace-nowrap px-2 py-1 font-mono text-xs">{c.name}</td>
-                  <td className="px-2 py-1 text-xs text-muted-foreground">{c.type}</td>
-                  <td className="px-2 py-1">
+                <Tr key={c.name}>
+                  <Td className="py-1 font-mono text-xs whitespace-nowrap">{c.name}</Td>
+                  <Td className="py-1 font-mono text-xs text-muted-foreground">{c.type}</Td>
+                  <Td className="py-1">
                     {canEdit ? (
                       <Input className="h-7 text-xs" value={docs[c.name] ?? ''} onChange={(e) => setDocs({ ...docs, [c.name]: e.target.value })} aria-label={`Description of ${c.name}`} />
                     ) : (
                       <span className="text-xs">{docs[c.name] || '—'}</span>
                     )}
-                  </td>
-                </tr>
+                  </Td>
+                </Tr>
               ))}
-            </tbody>
-          </table>
+            </TBody>
+          </Table>
         </div>
       </section>
 
-      <section aria-label="Lineage">
-        <div className="mb-2 text-sm font-medium">Lineage</div>
+      <section aria-labelledby="catalog-lineage">
+        <h3 id="catalog-lineage" className="mb-2 text-sm font-medium">Lineage</h3>
         <LineageView catalogKey={item.key} onOpen={onOpen} />
       </section>
 
       {item.kind === 'dataset' && (
-        <section aria-label="Quality history">
-          <div className="mb-2 text-sm font-medium">Quality</div>
+        <section aria-labelledby="catalog-quality">
+          <h3 id="catalog-quality" className="mb-2 text-sm font-medium">Quality</h3>
           <QualityHistory datasetName={item.name} />
         </section>
       )}
 
       {item.kind === 'dataset' && <DomainMapping item={item} catalog={catalog} onSaved={onSaved} />}
-    </div>
+    </section>
   )
 }
 
@@ -399,6 +428,7 @@ function DomainMapping({ item, catalog, onSaved }: { item: Item; catalog: Catalo
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null)
   const def = DOMAIN_BY_NAME.get(entity)
   const taken = catalog.domainMappings.find((m) => m.entity === entity && m.datasetName !== item.name)
+  const [confirm, confirmEl] = useConfirm()
 
   const choose = (name: string) => {
     setEntity(name)
@@ -414,6 +444,15 @@ function DomainMapping({ item, catalog, onSaved }: { item: Item; catalog: Catalo
   }
 
   const save = async () => {
+    if (
+      taken &&
+      !(await confirm({
+        title: `Move ${def?.label ?? entity} to ${item.name}?`,
+        description: `GET /api/v1/domains/${entity} currently reads ${taken.datasetName}. Apps using it get rows from ${item.name} after you publish.`,
+        confirmLabel: 'Publish mapping',
+      }))
+    )
+      return
     setBusy(true)
     setMessage(null)
     try {
@@ -429,6 +468,13 @@ function DomainMapping({ item, catalog, onSaved }: { item: Item; catalog: Catalo
 
   const remove = async () => {
     if (!existing) return
+    const ok = await confirm({
+      title: `Unpublish ${DOMAIN_BY_NAME.get(existing.entity)?.label ?? existing.entity}?`,
+      description: `GET /api/v1/domains/${existing.entity} stops returning rows. KMPlus apps that read it get nothing until it is published again.`,
+      confirmLabel: 'Unpublish',
+      tone: 'danger',
+    })
+    if (!ok) return
     try {
       await deleteDomainMapping(existing.entity)
       setEntity('')
@@ -440,8 +486,9 @@ function DomainMapping({ item, catalog, onSaved }: { item: Item; catalog: Catalo
   }
 
   return (
-    <section className="space-y-2 rounded-md border border-border p-3" aria-label="Unified data model">
-      <div className="text-sm font-medium">Publish as a business entity</div>
+    <section className="space-y-2 rounded-md border border-border p-3" aria-labelledby="catalog-entity">
+      {confirmEl}
+      <h3 id="catalog-entity" className="text-sm font-medium">Publish as a business entity</h3>
       <p className="text-xs text-muted-foreground">KMPlus apps read standard entities (Employee, Organization, Position…) from the Data API instead of raw tables. Map this dataset&apos;s columns to the entity&apos;s fields.</p>
       <div className="flex flex-wrap items-center gap-2">
         <NativeSelect className="w-56" value={entity} onChange={choose} disabled={!catalog.canEdit} aria-label="Entity">
@@ -450,7 +497,12 @@ function DomainMapping({ item, catalog, onSaved }: { item: Item; catalog: Catalo
             <option key={e.name} value={e.name}>{e.label}</option>
           ))}
         </NativeSelect>
-        {taken && <span className="text-xs text-amber-700 dark:text-amber-300">Currently published from {taken.datasetName}; saving moves it here.</span>}
+        {taken && (
+          <span className="flex items-center gap-1.5 text-xs text-warning-text">
+            <span className="size-2 shrink-0 rounded-[1px] bg-warning" aria-hidden />
+            Currently published from <span className="font-mono">{taken.datasetName}</span>; saving moves it here.
+          </span>
+        )}
       </div>
       {def && (
         <>
@@ -460,7 +512,7 @@ function DomainMapping({ item, catalog, onSaved }: { item: Item; catalog: Catalo
                 <span className="w-40 shrink-0 truncate" title={f.name}>
                   {f.label}
                   {f.name === def.key && ' *'}
-                  {f.pii && <span className="ml-1 text-amber-700 dark:text-amber-300">PII</span>}
+                  {f.pii && <span className="ml-1 font-mono text-warning-text">PII</span>}
                 </span>
                 <NativeSelect className="h-7 text-xs" value={fields[f.name] ?? ''} onChange={(v) => setFields({ ...fields, [f.name]: v })} disabled={!catalog.canEdit} aria-label={`Column for ${f.label}`}>
                   <option value="">—</option>
@@ -474,7 +526,7 @@ function DomainMapping({ item, catalog, onSaved }: { item: Item; catalog: Catalo
           {catalog.canEdit && (
             <div className="flex gap-2">
               <Button size="sm" onClick={() => void save()} disabled={busy}>
-                {busy && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} Publish mapping
+                {busy && <Loader2 className="mr-1 h-4 w-4 animate-spin" aria-hidden />} Publish mapping
               </Button>
               {existing?.entity === entity && (
                 <Button size="sm" variant="ghost" onClick={() => void remove()}>
@@ -485,7 +537,7 @@ function DomainMapping({ item, catalog, onSaved }: { item: Item; catalog: Catalo
           )}
         </>
       )}
-      {message && <p className={`text-xs ${message.ok ? 'text-green-700 dark:text-green-400' : 'text-destructive'}`}>{message.text}</p>}
+      {message && <Notice tone={message.ok ? 'success' : 'danger'}>{message.text}</Notice>}
     </section>
   )
 }

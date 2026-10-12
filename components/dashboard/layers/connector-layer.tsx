@@ -1,18 +1,26 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { Download, Check, Lock, Trash2 } from 'lucide-react'
+import { Download, Loader2, Lock, Plug, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Notice } from '@/components/ui/notice'
+import { EmptyState } from '@/components/ui/empty-state'
+import { StateMark } from '@/components/ui/flow-line'
+import { useConfirm } from '@/components/ui/dialog'
+import { PageHeader } from '@/components/dashboard/page-header'
+import { usePrefs } from '@/components/i18n/i18n-provider'
 import { getConnectorMarketplace, installConnector, uninstallConnector } from '@/lib/actions/connectors'
 import { useCan } from '@/components/workspace/workspace-context'
 
 type MarketplaceConnector = Awaited<ReturnType<typeof getConnectorMarketplace>>[number]
 
 export default function ConnectorLayer() {
+  const { t } = usePrefs()
   const [connectors, setConnectors] = useState<MarketplaceConnector[]>([])
   const [loading, setLoading] = useState(true)
   const [installingSlug, setInstallingSlug] = useState<string | null>(null)
   const [error, setError] = useState('')
+  const [confirm, confirmEl] = useConfirm()
   const canManage = useCan('connectors:manage')
 
   const load = useCallback(async () => {
@@ -42,118 +50,103 @@ export default function ConnectorLayer() {
       setInstallingSlug(null)
     }
   }
-  const handleInstall = (slug: string) => runAction(slug, () => installConnector(slug), 'Install failed')
-  const handleUninstall = (slug: string) => runAction(slug, () => uninstallConnector(slug), 'Uninstall failed')
+  const handleInstall = async (connector: MarketplaceConnector) => {
+    if (connector.locked && !(await confirm({ title: `Purchase ${connector.name}?`, description: 'This premium connector is purchased for the workspace, then installed.', confirmLabel: 'Purchase & install' }))) return
+    await runAction(connector.slug, () => installConnector(connector.slug), 'Install failed')
+  }
+  const handleUninstall = async (connector: MarketplaceConnector) => {
+    if (!(await confirm({ title: `Uninstall ${connector.name}?`, description: 'It will no longer be offered when adding a data source.', confirmLabel: 'Uninstall', tone: 'danger' }))) return
+    await runAction(connector.slug, () => uninstallConnector(connector.slug), 'Uninstall failed')
+  }
   const billing = connectors[0]?.billing ?? false
+  const hasLocked = connectors.some((c) => c.locked && !c.installed)
+  const installedCount = connectors.filter((c) => c.installed).length
+  const premiumCount = connectors.filter((c) => c.premium).length
 
   return (
-    <div className="space-y-6">
-      <div className="rounded-lg border border-border bg-card p-6">
-        <h2 className="mb-2 text-2xl font-bold">Layer 2: Connector Marketplace</h2>
-        <p className="mb-2 text-muted-foreground">
-          Install connectors to unlock source types in Data Source Manager.
-        </p>
-        <p className="mb-6 text-sm text-muted-foreground">
-          Only installed connectors appear when adding a data source.{' '}
-          {billing ? 'Premium connectors require purchase before install.' : 'Development mode: every connector, including premium ones, installs for free.'}
-          {!canManage && ' Only workspace admins can install or uninstall connectors.'}
-        </p>
+    <div className="space-y-5">
+      {confirmEl}
+      <PageHeader
+        title={t('pages.connectors.title')}
+        description={t('pages.connectors.description')}
+        meta={loading && connectors.length === 0 ? undefined : `${installedCount} installed · ${connectors.length} available · ${premiumCount} premium`}
+      />
 
-        {error && (
-          <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-            {error}
-          </div>
-        )}
+      <p className="max-w-3xl text-sm text-muted-foreground">
+        Install connectors to unlock source types in Data sources. Only installed connectors appear when adding a data source.
+      </p>
 
-        {loading ? (
-          <p className="py-8 text-center text-sm text-muted-foreground">Loading marketplace…</p>
-        ) : (
-          <div className="grid gap-4 md:grid-cols-2">
-            {connectors.map((connector) => (
-              <div
-                key={connector.slug}
-                className="rounded-lg border border-border/50 bg-muted/30 p-4 transition-colors hover:bg-muted/50"
-              >
-                <div className="font-semibold">{connector.name}</div>
-                <div className="mt-1 text-xs text-muted-foreground">
+      {!canManage && (
+        <Notice tone="info" live={false}>
+          Only workspace admins can install or uninstall connectors.
+        </Notice>
+      )}
+      {billing && hasLocked && (
+        <Notice tone="info" live={false}>
+          Premium connectors require purchase before install.
+        </Notice>
+      )}
+      {error && <Notice tone="danger">{error}</Notice>}
+
+      {loading && connectors.length === 0 ? (
+        <div className="flex items-center justify-center rounded-lg border border-border bg-card p-10 text-sm text-muted-foreground" role="status">
+          <Loader2 className="mr-2 size-4 animate-spin" aria-hidden /> Loading connectors…
+        </div>
+      ) : connectors.length === 0 ? (
+        <div className="rounded-lg border border-border bg-card">
+          <EmptyState icon={<Plug />} title="No connectors available">
+            No connectors are offered to this workspace yet.
+          </EmptyState>
+        </div>
+      ) : (
+        <ul className="grid gap-3 md:grid-cols-2">
+          {connectors.map((connector) => {
+            const busy = installingSlug === connector.slug
+            return (
+              <li key={connector.slug} className="flex flex-col rounded-lg border border-border bg-card p-4">
+                <h2 className="font-semibold">{connector.name}</h2>
+                <div className="mt-1 font-mono text-xs text-muted-foreground">
                   {connector.category} · v{connector.version}
                   {connector.premium ? ' · Premium' : ' · Included'}
                 </div>
-                <div className="mt-2 text-sm text-muted-foreground">{connector.description}</div>
-                <div className="mt-4 flex items-center gap-2">
+                <p className="mt-2 flex-1 text-sm text-muted-foreground">{connector.description}</p>
+                <div className="mt-4 flex min-h-8 items-center gap-2">
                   {connector.installed ? (
                     <>
-                      <div className="flex flex-1 items-center justify-center gap-1 rounded bg-green-100 px-3 py-1 text-xs font-medium text-green-800">
-                        <Check className="h-3 w-3" />
+                      <StateMark state="live" className="mr-auto">
                         Installed
-                      </div>
-                      {canManage && <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => void handleUninstall(connector.slug)}
-                        disabled={installingSlug === connector.slug}
-                        aria-label={`Uninstall ${connector.name}`}
-                        title="Uninstall"
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </Button>}
+                      </StateMark>
+                      {canManage && (
+                        <Button size="icon-sm" variant="ghost" onClick={() => void handleUninstall(connector)} disabled={busy} aria-label={`Uninstall ${connector.name}`} title="Uninstall">
+                          {busy ? <Loader2 className="animate-spin" aria-hidden /> : <Trash2 aria-hidden />}
+                        </Button>
+                      )}
                     </>
-                  ) : !canManage ? (
-                    <span className="flex-1 text-center text-xs text-muted-foreground">Not installed</span>
-                  ) : connector.locked ? (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="flex-1"
-                      onClick={() => void handleInstall(connector.slug)}
-                      disabled={installingSlug === connector.slug}
-                    >
-                      <Download className="mr-1 h-3 w-3" />
-                      {installingSlug === connector.slug ? 'Purchasing…' : 'Purchase & Install'}
-                    </Button>
                   ) : (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="flex-1"
-                      onClick={() => void handleInstall(connector.slug)}
-                      disabled={installingSlug === connector.slug}
-                    >
-                      <Download className="mr-1 h-3 w-3" />
-                      {installingSlug === connector.slug ? 'Installing…' : 'Install'}
-                    </Button>
-                  )}
-                  {connector.locked && !connector.installed && (
-                    <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                      <Lock className="h-3 w-3" />
-                      Locked
-                    </span>
+                    <>
+                      <StateMark state="idle" className="mr-auto">
+                        Not installed
+                      </StateMark>
+                      {connector.locked && (
+                        <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                          <Lock className="size-3" aria-hidden />
+                          Locked
+                        </span>
+                      )}
+                      {canManage && (
+                        <Button size="sm" variant="outline" onClick={() => void handleInstall(connector)} disabled={busy}>
+                          {busy ? <Loader2 className="animate-spin" aria-hidden /> : <Download aria-hidden />}
+                          {connector.locked ? (busy ? 'Purchasing…' : 'Purchase & install') : busy ? 'Installing…' : 'Install'}
+                        </Button>
+                      )}
+                    </>
                   )}
                 </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="grid grid-cols-3 gap-4">
-        <div className="rounded-lg border border-border bg-card p-4">
-          <div className="text-sm font-medium text-muted-foreground">Installed Connectors</div>
-          <div className="mt-2 text-2xl font-bold">
-            {connectors.filter((c) => c.installed).length}
-          </div>
-        </div>
-        <div className="rounded-lg border border-border bg-card p-4">
-          <div className="text-sm font-medium text-muted-foreground">Available</div>
-          <div className="mt-2 text-2xl font-bold">{connectors.length}</div>
-        </div>
-        <div className="rounded-lg border border-border bg-card p-4">
-          <div className="text-sm font-medium text-muted-foreground">Premium</div>
-          <div className="mt-2 text-2xl font-bold">
-            {connectors.filter((c) => c.premium).length}
-          </div>
-        </div>
-      </div>
+              </li>
+            )
+          })}
+        </ul>
+      )}
     </div>
   )
 }

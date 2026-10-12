@@ -1,9 +1,12 @@
 'use client'
 
 import { useState } from 'react'
-import { Plus, Sparkles, Trash2, Wand2, X } from 'lucide-react'
+import { Plus, Scale, Sparkles, Trash2, Wand2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Notice, type NoticeTone } from '@/components/ui/notice'
+import { EmptyState } from '@/components/ui/empty-state'
+import { cn } from '@/lib/utils'
 import {
   COLUMN_TYPES,
   FILTER_OPERATORS,
@@ -34,7 +37,7 @@ export type BuilderOptions = Awaited<ReturnType<typeof getBuilderOptions>>
 export type Column = { name: string; type: string }
 
 export const selectClass =
-  'h-9 w-full rounded-md border border-input bg-background px-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50'
+  'h-8 w-full rounded-md border border-input bg-card px-2 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-60'
 
 export function NativeSelect({
   value,
@@ -44,15 +47,24 @@ export function NativeSelect({
   ...rest
 }: { value: string; onChange: (v: string) => void; children: React.ReactNode; className?: string } & Omit<React.SelectHTMLAttributes<HTMLSelectElement>, 'onChange' | 'value'>) {
   return (
-    <select value={value} onChange={(e) => onChange(e.target.value)} className={`${selectClass} ${className}`} {...rest}>
+    <select value={value} onChange={(e) => onChange(e.target.value)} className={cn(selectClass, className)} {...rest}>
       {children}
     </select>
   )
 }
 
-function FieldLabel({ children }: { children: React.ReactNode }) {
-  return <div className="mb-1 text-xs font-medium text-muted-foreground">{children}</div>
+/** A visible label wrapped around its control, so the control is named by the words on screen. */
+function Field({ label, children, className }: { label: React.ReactNode; children: React.ReactNode; className?: string }) {
+  return (
+    <label className={cn('grid gap-1', className)}>
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      {children}
+    </label>
+  )
 }
+
+/** Small native input used inside transform chips. */
+const chipInputClass = 'h-6 w-28 rounded-sm border border-input bg-card px-1 font-mono outline-none focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring'
 
 export const human = (s: string) => s.replace(/_/g, ' ')
 
@@ -66,9 +78,8 @@ export function SourceEditor({ step, options, onChange }: { step: SourceStep; op
   const columns = source?.tables.find((t) => t.name === step.table)?.columns ?? []
   return (
     <div className="grid gap-3">
-      <div>
-        <FieldLabel>Data source</FieldLabel>
-        <NativeSelect value={step.dataSourceId} onChange={(v) => onChange({ ...step, dataSourceId: v, table: '' })} aria-label="Data source">
+      <Field label="Data source">
+        <NativeSelect value={step.dataSourceId} onChange={(v) => onChange({ ...step, dataSourceId: v, table: '' })}>
           <option value="">Choose a data source…</option>
           {options.dataSources.map((d) => (
             <option key={d.id} value={d.id}>
@@ -76,51 +87,51 @@ export function SourceEditor({ step, options, onChange }: { step: SourceStep; op
             </option>
           ))}
         </NativeSelect>
-      </div>
+      </Field>
       <div>
-        <FieldLabel>Table / object</FieldLabel>
-        {source && source.tables.length > 0 ? (
-          <NativeSelect value={step.table} onChange={(v) => onChange({ ...step, table: v })} aria-label="Table">
-            <option value="">Choose a table…</option>
-            {source.tables.map((t) => (
-              <option key={t.name} value={t.name}>
-                {t.name} · {t.columns.length} cols
-              </option>
-            ))}
-          </NativeSelect>
-        ) : (
-          <Input value={step.table} onChange={(e) => onChange({ ...step, table: e.target.value })} placeholder="Table, entity set or endpoint name" aria-label="Table" />
-        )}
-        {source && source.tables.length === 0 && (
-          <p className="mt-1 text-xs text-muted-foreground">No schema scan for this source yet. Re-test it in Data Sources to load its tables, or type the name.</p>
-        )}
-      </div>
-      <div>
-        <FieldLabel>Max rows per run</FieldLabel>
-        <Input type="number" min={1} max={1000000} value={step.maxRows} onChange={(e) => onChange({ ...step, maxRows: Math.max(1, Math.min(1000000, Number(e.target.value) || 1)) })} aria-label="Max rows per run" />
-      </div>
-      <div>
-        <FieldLabel>Sync mode</FieldLabel>
-        <NativeSelect value={step.mode} onChange={(v) => onChange({ ...step, mode: v as 'full' | 'incremental' })} aria-label="Sync mode">
-          <option value="full">Full: read every row each run</option>
-          <option value="incremental">Incremental: only new or changed rows</option>
-        </NativeSelect>
-      </div>
-      {step.mode === 'incremental' && (
-        <div>
-          <FieldLabel>Watermark column (always increases, e.g. updated_at or id)</FieldLabel>
-          {columns.length ? (
-            <NativeSelect value={step.watermarkColumn} onChange={(v) => onChange({ ...step, watermarkColumn: v })} aria-label="Watermark column">
-              <option value="">Choose a column…</option>
-              {columns.map((c) => (
-                <option key={c.name} value={c.name}>
-                  {c.name} ({c.type})
+        <Field label="Table / object">
+          {source && source.tables.length > 0 ? (
+            <NativeSelect value={step.table} onChange={(v) => onChange({ ...step, table: v })}>
+              <option value="">Choose a table…</option>
+              {source.tables.map((t) => (
+                <option key={t.name} value={t.name}>
+                  {t.name} · {t.columns.length} cols
                 </option>
               ))}
             </NativeSelect>
           ) : (
-            <Input value={step.watermarkColumn} placeholder="updated_at" onChange={(e) => onChange({ ...step, watermarkColumn: e.target.value })} aria-label="Watermark column" />
+            <Input value={step.table} onChange={(e) => onChange({ ...step, table: e.target.value })} placeholder="Table, entity set or endpoint name" className="font-mono" />
           )}
+        </Field>
+        {source && source.tables.length === 0 && (
+          <p className="mt-1 text-xs text-muted-foreground">No schema scan for this source yet. Re-test it in Data Sources to load its tables, or type the name.</p>
+        )}
+      </div>
+      <Field label="Max rows per run">
+        <Input type="number" min={1} max={1000000} value={step.maxRows} onChange={(e) => onChange({ ...step, maxRows: Math.max(1, Math.min(1000000, Number(e.target.value) || 1)) })} className="font-mono" />
+      </Field>
+      <Field label="Sync mode">
+        <NativeSelect value={step.mode} onChange={(v) => onChange({ ...step, mode: v as 'full' | 'incremental' })}>
+          <option value="full">Full: read every row each run</option>
+          <option value="incremental">Incremental: only new or changed rows</option>
+        </NativeSelect>
+      </Field>
+      {step.mode === 'incremental' && (
+        <div>
+          <Field label="Watermark column (always increases, e.g. updated_at or id)">
+            {columns.length ? (
+              <NativeSelect value={step.watermarkColumn} onChange={(v) => onChange({ ...step, watermarkColumn: v })}>
+                <option value="">Choose a column…</option>
+                {columns.map((c) => (
+                  <option key={c.name} value={c.name}>
+                    {c.name} ({c.type})
+                  </option>
+                ))}
+              </NativeSelect>
+            ) : (
+              <Input value={step.watermarkColumn} placeholder="updated_at" onChange={(e) => onChange({ ...step, watermarkColumn: e.target.value })} className="font-mono" />
+            )}
+          </Field>
           <p className="mt-1 text-xs text-muted-foreground">
             Each run reads rows where this column is greater than the last value synced, oldest first.
             {source && !['postgres', 'mysql', 'supabase'].includes(source.sourceType) && ' This connector filters after reading, so keep max rows above the number of new rows per run.'}
@@ -160,7 +171,7 @@ export function ConditionsEditor({
         of:
       </div>
       {conditions.map((c, i) => (
-        <div key={i} className="grid grid-cols-[1fr_1fr_auto] gap-1.5 rounded-md border border-border/60 p-1.5">
+        <div key={i} className="grid grid-cols-[1fr_1fr_auto] gap-1.5 rounded-md border border-border p-1.5">
           <ColumnPicker columns={columns} value={c.field} onChange={(v) => update(i, { field: v })} label="Field" />
           <NativeSelect value={c.operator} onChange={(v) => update(i, { operator: v as Condition['operator'] })} aria-label="Operator">
             {FILTER_OPERATORS.map((op) => (
@@ -169,8 +180,8 @@ export function ConditionsEditor({
               </option>
             ))}
           </NativeSelect>
-          <Button size="sm" variant="ghost" onClick={() => onChange(match, conditions.filter((_, j) => j !== i))} aria-label="Remove condition">
-            <X className="h-4 w-4" />
+          <Button size="icon-sm" variant="ghost" onClick={() => onChange(match, conditions.filter((_, j) => j !== i))} aria-label={`Remove condition ${i + 1}`}>
+            <X aria-hidden />
           </Button>
           {!NO_VALUE_OPS.has(c.operator) && (
             <div className="col-span-3 grid grid-cols-[auto_1fr] items-center gap-1.5">
@@ -188,15 +199,16 @@ export function ConditionsEditor({
         </div>
       ))}
       <Button size="sm" variant="outline" onClick={() => onChange(match, [...conditions, newCondition(columns[0]?.name ?? '')])}>
-        <Plus className="mr-1 h-4 w-4" /> Condition
+        <Plus aria-hidden /> Condition
       </Button>
     </div>
   )
 }
 
-function RulePicker({ rules, value, onChange, label = 'Business rule' }: { rules: BuilderOptions['rules']; value: string; onChange: (v: string) => void; label?: string }) {
+/** `label`: the accessible name; pass null when a visible <Field> already names it. */
+function RulePicker({ rules, value, onChange, label = 'Business rule' }: { rules: BuilderOptions['rules']; value: string; onChange: (v: string) => void; label?: string | null }) {
   return (
-    <NativeSelect value={value} onChange={onChange} aria-label={label}>
+    <NativeSelect value={value} onChange={onChange} aria-label={label ?? undefined}>
       <option value="">{rules.length ? 'Choose a rule…' : 'No business rules yet'}</option>
       {rules.map((r) => (
         <option key={r.id} value={r.id}>
@@ -212,10 +224,9 @@ function RulePicker({ rules, value, onChange, label = 'Business rule' }: { rules
 export function FilterEditor({ step, columns, options, onChange }: { step: FilterStep; columns: Column[]; options: BuilderOptions; onChange: (s: FilterStep) => void }) {
   return (
     <div className="space-y-3">
-      <div>
-        <FieldLabel>Keep rows matching a business rule (optional)</FieldLabel>
-        <RulePicker rules={options.rules} value={step.ruleId} onChange={(v) => onChange({ ...step, ruleId: v })} />
-      </div>
+      <Field label="Keep rows matching a business rule (optional)">
+        <RulePicker rules={options.rules} value={step.ruleId} onChange={(v) => onChange({ ...step, ruleId: v })} label={null} />
+      </Field>
       <ConditionsEditor
         label={step.ruleId ? 'and' : 'Keep rows matching'}
         match={step.match}
@@ -227,11 +238,12 @@ export function FilterEditor({ step, columns, options, onChange }: { step: Filte
   )
 }
 
-export function ColumnPicker({ columns, value, onChange, label = 'Column' }: { columns: Column[]; value: string; onChange: (v: string) => void; label?: string }) {
-  if (!columns.length) return <Input value={value} onChange={(e) => onChange(e.target.value)} placeholder="column" aria-label={label} />
+/** `label`: the accessible name; pass null when a visible <Field> already names it. */
+export function ColumnPicker({ columns, value, onChange, label = 'Column' }: { columns: Column[]; value: string; onChange: (v: string) => void; label?: string | null }) {
+  if (!columns.length) return <Input value={value} onChange={(e) => onChange(e.target.value)} placeholder="column" aria-label={label ?? undefined} className="font-mono" />
   const known = columns.some((c) => c.name === value)
   return (
-    <NativeSelect value={value} onChange={onChange} aria-label={label}>
+    <NativeSelect value={value} onChange={onChange} aria-label={label ?? undefined}>
       <option value="">Column…</option>
       {!known && value && <option value={value}>{value} (not in schema)</option>}
       {columns.map((c) => (
@@ -266,7 +278,9 @@ const TRANSFORM_ARGS: Partial<Record<TransformName, string[]>> = {
 
 export function MapEditor({ step, columns, options, source, onChange }: { step: MapStep; columns: Column[]; options?: BuilderOptions; source?: { dataSourceId: string; table: string }; onChange: (s: MapStep) => void }) {
   const update = (i: number, patch: Partial<MapStep['fields'][number]>) => onChange({ ...step, fields: step.fields.map((f, j) => (j === i ? { ...f, ...patch } : f)) })
-  const [templateMsg, setTemplateMsg] = useState('')
+  const [templateMsg, setTemplateMsg] = useState<{ tone: NoticeTone; text: string } | null>(null)
+  const [templateName, setTemplateName] = useState<string | null>(null)
+  const [savingTemplate, setSavingTemplate] = useState(false)
   const autoMap = () => {
     // HR synonyms (PERNR → employee_code, TGL_LAHIR → birth_date …), else a safe snake_case name.
     const existing = new Set(step.fields.map((f) => f.from))
@@ -278,27 +292,31 @@ export function MapEditor({ step, columns, options, source, onChange }: { step: 
     const tpl = templates.find((x) => x.id === id)
     if (!tpl) return
     const { fields, missing } = applyMappingTemplate(tpl, columns.length ? columns : tpl.fields.map((f) => ({ name: f.from, type: 'text' })))
-    if (!fields.length) return setTemplateMsg(`None of the template's columns (${tpl.fields.map((f) => f.from).slice(0, 5).join(', ')}…) are in this step's input.`)
+    if (!fields.length) return setTemplateMsg({ tone: 'warning', text: `None of the template's columns (${tpl.fields.map((f) => f.from).slice(0, 5).join(', ')}…) are in this step's input.` })
     onChange({ ...step, fields, keepUnmapped: tpl.keepUnmapped })
-    setTemplateMsg(`Applied "${tpl.name}": ${fields.length} fields${missing.length ? `; not in the input: ${missing.join(', ')}` : ''}.`)
+    setTemplateMsg({ tone: 'success', text: `Applied "${tpl.name}": ${fields.length} fields${missing.length ? `; not in the input: ${missing.join(', ')}` : ''}.` })
   }
   const saveTemplate = async () => {
-    const name = window.prompt('Template name (e.g. "HRIS export → Employee")')
+    const name = templateName?.trim()
     if (!name) return
+    setSavingTemplate(true)
     try {
       const res = await saveMappingTemplate({ name, fields: step.fields.filter((f) => f.from && f.to), keepUnmapped: step.keepUnmapped })
-      setTemplateMsg(`${res.replaced ? 'Updated' : 'Saved'} template "${name}". It appears in the templates list of every pipeline (after reopening the editor).`)
+      setTemplateMsg({ tone: 'success', text: `${res.replaced ? 'Updated' : 'Saved'} template "${name}". It appears in the templates list of every pipeline (after reopening the editor).` })
+      setTemplateName(null)
     } catch (err) {
-      setTemplateMsg(err instanceof Error ? err.message : 'Save failed')
+      setTemplateMsg({ tone: 'danger', text: err instanceof Error ? err.message : 'Save failed' })
+    } finally {
+      setSavingTemplate(false)
     }
   }
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
         <Button size="sm" variant="outline" onClick={autoMap} disabled={!columns.length}>
-          <Wand2 className="mr-1 h-4 w-4" /> Auto-map all columns
+          <Wand2 aria-hidden /> Auto-map all columns
         </Button>
-        <select value="" onChange={(e) => applyTemplate(e.target.value)} className="h-8 rounded-md border border-input bg-background px-2 text-xs" aria-label="Apply a mapping template">
+        <NativeSelect value="" onChange={applyTemplate} className="w-auto text-xs" aria-label="Apply a mapping template">
           <option value="">Apply template…</option>
           {templates.map((tpl) => (
             <option key={tpl.id} value={tpl.id}>
@@ -306,34 +324,57 @@ export function MapEditor({ step, columns, options, source, onChange }: { step: 
               {tpl.builtIn ? '' : ' (saved)'}
             </option>
           ))}
-        </select>
+        </NativeSelect>
         <AiMappingButton
           columns={columns.filter((c) => !step.fields.some((f) => f.from === c.name))}
           mapped={step.fields.map((f) => f.to).filter(Boolean)}
           source={source}
           onAccept={(added) => onChange({ ...step, fields: [...step.fields.filter((f) => f.from), ...added.filter((a) => !step.fields.some((f) => f.to === a.to))] })}
         />
-        <Button size="sm" variant="ghost" onClick={() => void saveTemplate()} disabled={!step.fields.some((f) => f.from && f.to)}>
+        <Button size="sm" variant="ghost" onClick={() => setTemplateName((v) => (v === null ? '' : null))} disabled={!step.fields.some((f) => f.from && f.to)} aria-expanded={templateName !== null}>
           Save as template
         </Button>
         <label className="flex items-center gap-2 text-sm text-muted-foreground">
-          <input type="checkbox" checked={step.keepUnmapped} onChange={(e) => onChange({ ...step, keepUnmapped: e.target.checked })} />
+          <input type="checkbox" className="size-4 accent-primary" checked={step.keepUnmapped} onChange={(e) => onChange({ ...step, keepUnmapped: e.target.checked })} />
           Pass through unmapped columns
         </label>
       </div>
+      {templateName !== null && (
+        <form
+          className="flex flex-wrap items-end gap-2 rounded-md border border-border p-2"
+          onSubmit={(e) => {
+            e.preventDefault()
+            void saveTemplate()
+          }}
+        >
+          <Field label="Template name" className="min-w-0 flex-1">
+            <Input autoFocus value={templateName} placeholder="e.g. HRIS export → Employee" onChange={(e) => setTemplateName(e.target.value)} />
+          </Field>
+          <Button type="submit" size="sm" disabled={!templateName.trim() || savingTemplate}>
+            Save template
+          </Button>
+          <Button type="button" size="sm" variant="ghost" onClick={() => setTemplateName(null)}>
+            Cancel
+          </Button>
+        </form>
+      )}
       <p className="text-xs text-muted-foreground">Auto-map recognizes common HR column names (e.g. PERNR → employee_code, TGL_LAHIR → birth_date). Templates map SAP, Talenta and Active Directory fields; the lookup transform translates codes using a dataset.</p>
-      {templateMsg && <p className="rounded-md bg-muted/50 p-2 text-xs">{templateMsg}</p>}
+      {templateMsg && (
+        <Notice tone={templateMsg.tone} className="text-xs">
+          {templateMsg.text}
+        </Notice>
+      )}
       {step.fields.map((f, i) => (
-        <div key={i} className="rounded-md border border-border/70 p-2">
+        <div key={i} className="rounded-md border border-border p-2">
           <div className="grid grid-cols-[1fr_1fr_auto] gap-1.5">
-            <ColumnPicker columns={columns} value={f.from} onChange={(v) => update(i, { from: v, to: f.to || autoMapName(v) })} label="Source column" />
-            <Input value={f.to} placeholder="target_name" onChange={(e) => update(i, { to: e.target.value })} aria-label="Target column" />
-            <Button size="sm" variant="ghost" disabled={step.fields.length === 1} onClick={() => onChange({ ...step, fields: step.fields.filter((_, j) => j !== i) })} aria-label="Remove field">
-              <Trash2 className="h-4 w-4" />
+            <ColumnPicker columns={columns} value={f.from} onChange={(v) => update(i, { from: v, to: f.to || autoMapName(v) })} label={`Source column ${i + 1}`} />
+            <Input value={f.to} placeholder="target_name" onChange={(e) => update(i, { to: e.target.value })} aria-label={`Target column ${i + 1}`} className="font-mono" />
+            <Button size="icon-sm" variant="ghost" disabled={step.fields.length === 1} onClick={() => onChange({ ...step, fields: step.fields.filter((_, j) => j !== i) })} aria-label={`Remove field ${f.to || i + 1}`}>
+              <Trash2 aria-hidden />
             </Button>
           </div>
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-            <NativeSelect className="h-7 w-28 text-xs" value={f.type} onChange={(v) => update(i, { type: v as ColumnType })} aria-label="Type">
+            <NativeSelect className="h-7 w-28 text-xs" value={f.type} onChange={(v) => update(i, { type: v as ColumnType })} aria-label={`Type of ${f.to || `field ${i + 1}`}`}>
               {COLUMN_TYPES.map((t) => (
                 <option key={t} value={t}>
                   {t}
@@ -341,7 +382,7 @@ export function MapEditor({ step, columns, options, source, onChange }: { step: 
               ))}
             </NativeSelect>
             {f.transforms.map((t, ti) => (
-              <div key={ti} className="flex flex-wrap items-center gap-1 rounded-md bg-muted/50 px-2 py-1 text-xs">
+              <div key={ti} className="flex flex-wrap items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs">
                 <span className="font-medium">{human(t.fn)}</span>
                 {(TRANSFORM_ARGS[t.fn] ?? []).map((placeholder, ai) => (
                   <input
@@ -354,19 +395,24 @@ export function MapEditor({ step, columns, options, source, onChange }: { step: 
                       args[ai] = e.target.value
                       update(i, { transforms: f.transforms.map((x, xi) => (xi === ti ? { ...x, args } : x)) })
                     }}
-                    className="h-6 w-28 rounded border border-input bg-background px-1"
+                    className={chipInputClass}
                   />
                 ))}
-                <button className="text-muted-foreground hover:text-foreground" onClick={() => update(i, { transforms: f.transforms.filter((_, xi) => xi !== ti) })} aria-label="Remove transform">
-                  <X className="h-3 w-3" />
+                <button
+                  type="button"
+                  className="rounded-sm p-0.5 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+                  onClick={() => update(i, { transforms: f.transforms.filter((_, xi) => xi !== ti) })}
+                  aria-label={`Remove transform ${human(t.fn)}`}
+                >
+                  <X className="size-3" aria-hidden />
                 </button>
               </div>
             ))}
-            <select
+            <NativeSelect
               value=""
-              aria-label="Add transform"
-              onChange={(e) => e.target.value && update(i, { transforms: [...f.transforms, { fn: e.target.value as TransformName, args: [] }] })}
-              className="h-7 rounded-md border border-dashed border-input bg-background px-1 text-xs text-muted-foreground"
+              aria-label={`Add transform to ${f.to || `field ${i + 1}`}`}
+              onChange={(v) => v && update(i, { transforms: [...f.transforms, { fn: v as TransformName, args: [] }] })}
+              className="h-7 w-auto border-dashed px-1 text-xs text-muted-foreground"
             >
               <option value="">+ transform</option>
               {TRANSFORMS.map((t) => (
@@ -374,12 +420,12 @@ export function MapEditor({ step, columns, options, source, onChange }: { step: 
                   {human(t)}
                 </option>
               ))}
-            </select>
+            </NativeSelect>
           </div>
         </div>
       ))}
       <Button size="sm" variant="outline" onClick={() => onChange({ ...step, fields: [...step.fields, { from: '', to: '', type: 'text', transforms: [] }] })}>
-        <Plus className="mr-1 h-4 w-4" /> Field
+        <Plus aria-hidden /> Field
       </Button>
     </div>
   )
@@ -412,31 +458,52 @@ const VALUE_RULES = new Set(['regex', 'min_length', 'max_length', 'min', 'max', 
 export function ValidateEditor({ step, columns, options, onChange }: { step: ValidateStep; columns: Column[]; options: BuilderOptions; onChange: (s: ValidateStep) => void }) {
   const update = (i: number, patch: Partial<ValidationRuleSpec>) => onChange({ ...step, rules: step.rules.map((r, j) => (j === i ? { ...r, ...patch } : r)) })
   const lookups = options.datasets.flatMap((d) => d.columns.map((c) => `${d.name}.${c.name}`))
+  const [packMsg, setPackMsg] = useState<{ tone: NoticeTone; title?: string; lines: string[] } | null>(null)
   const addPack = () => {
     const { rules, notes } = hrRulePack(columns, options.datasets)
-    if (!rules.length) return window.alert(notes.join('\n') || 'No HR columns recognized in this step\'s input.')
+    if (!rules.length) return setPackMsg({ tone: 'warning', lines: notes.length ? notes : ["No HR columns recognized in this step's input."] })
     const existing = step.rules.filter((r) => r.field)
     onChange({ ...step, rules: [...existing, ...rules] })
-    if (notes.length) window.alert(`HR rule pack added ${rules.length} rules.\n\n${notes.join('\n')}`)
+    setPackMsg({ tone: 'success', title: `HR rule pack added ${rules.length} rules.`, lines: notes })
   }
   return (
     <div className="space-y-2">
       <Button size="sm" variant="outline" onClick={addPack} disabled={!columns.length}>
-        <Sparkles className="mr-1 h-4 w-4" /> Add HR rule pack
+        <Sparkles aria-hidden /> Add HR rule pack
       </Button>
+      {packMsg && (
+        <Notice
+          tone={packMsg.tone}
+          title={packMsg.title}
+          className="text-xs"
+          action={
+            <Button size="icon-xs" variant="ghost" onClick={() => setPackMsg(null)} aria-label="Dismiss rule pack message">
+              <X aria-hidden />
+            </Button>
+          }
+        >
+          {packMsg.lines.length > 0 && (
+            <ul className="space-y-0.5">
+              {packMsg.lines.map((l, k) => (
+                <li key={k}>{l}</li>
+              ))}
+            </ul>
+          )}
+        </Notice>
+      )}
       {step.rules.map((r, i) => (
-        <div key={i} className="space-y-1.5 rounded-md border border-border/60 p-1.5">
+        <div key={i} className="space-y-1.5 rounded-md border border-border p-1.5">
           <div className="grid grid-cols-[1fr_1fr_auto] gap-1.5">
-            <ColumnPicker columns={columns} value={r.field} onChange={(v) => update(i, { field: v })} label="Field" />
-            <NativeSelect value={r.rule} onChange={(v) => update(i, { rule: v as ValidationRuleSpec['rule'], value: '' })} aria-label="Rule">
+            <ColumnPicker columns={columns} value={r.field} onChange={(v) => update(i, { field: v })} label={`Field of rule ${i + 1}`} />
+            <NativeSelect value={r.rule} onChange={(v) => update(i, { rule: v as ValidationRuleSpec['rule'], value: '' })} aria-label={`Rule ${i + 1}`}>
               {VALIDATION_RULES.map((rule) => (
                 <option key={rule} value={rule}>
                   {RULE_LABEL[rule]}
                 </option>
               ))}
             </NativeSelect>
-            <Button size="sm" variant="ghost" disabled={step.rules.length === 1} onClick={() => onChange({ ...step, rules: step.rules.filter((_, j) => j !== i) })} aria-label="Remove rule">
-              <X className="h-4 w-4" />
+            <Button size="icon-sm" variant="ghost" disabled={step.rules.length === 1} onClick={() => onChange({ ...step, rules: step.rules.filter((_, j) => j !== i) })} aria-label={`Remove rule ${i + 1}`}>
+              <X aria-hidden />
             </Button>
           </div>
           <div className="grid grid-cols-[1fr_110px] gap-1.5">
@@ -463,7 +530,7 @@ export function ValidateEditor({ step, columns, options, onChange }: { step: Val
                 <ColumnPicker columns={columns} value={r.otherField} onChange={(v) => update(i, { otherField: v })} label="Other field" />
               </div>
             ) : r.rule === 'condition' ? (
-              <RulePicker rules={options.rules} value={r.ruleId} onChange={(v) => update(i, { ruleId: v })} />
+              <RulePicker rules={options.rules} value={r.ruleId} onChange={(v) => update(i, { ruleId: v })} label={`Business rule for rule ${i + 1}`} />
             ) : r.rule === 'manager' ? (
               <ColumnPicker columns={columns} value={r.value} onChange={(v) => update(i, { value: v })} label="Employee key column" />
             ) : r.rule === 'date' ? (
@@ -471,7 +538,7 @@ export function ValidateEditor({ step, columns, options, onChange }: { step: Val
             ) : (
               <span />
             )}
-            <NativeSelect value={r.severity} onChange={(v) => update(i, { severity: v as ValidationRuleSpec['severity'] })} aria-label="Severity">
+            <NativeSelect value={r.severity} onChange={(v) => update(i, { severity: v as ValidationRuleSpec['severity'] })} aria-label={`Severity of rule ${i + 1}`}>
               {SEVERITIES.map((s) => (
                 <option key={s} value={s}>
                   {s}
@@ -483,11 +550,11 @@ export function ValidateEditor({ step, columns, options, onChange }: { step: Val
       ))}
       <div className="flex flex-wrap items-center gap-2">
         <Button size="sm" variant="outline" onClick={() => onChange({ ...step, rules: [...step.rules, newValidationRule(columns[0]?.name ?? '')] })}>
-          <Plus className="mr-1 h-4 w-4" /> Rule
+          <Plus aria-hidden /> Rule
         </Button>
         <label className="flex items-center gap-2 text-sm text-muted-foreground">
           On an error:
-          <NativeSelect className="w-48" value={step.onFail} onChange={(v) => onChange({ ...step, onFail: v as 'reject' | 'abort' })} aria-label="On an error">
+          <NativeSelect className="w-48" value={step.onFail} onChange={(v) => onChange({ ...step, onFail: v as 'reject' | 'abort' })}>
             <option value="reject">Quarantine the row</option>
             <option value="abort">Stop the whole run</option>
           </NativeSelect>
@@ -505,10 +572,20 @@ export function RulesEditor({ step, options, onChange }: { step: RulesStep; opti
   return (
     <div className="space-y-2">
       <p className="text-xs text-muted-foreground">Applies these rules to every row, in order: keep or drop rows, set or calculate fields, route, notify, hold for approval or trigger pipelines. Manage rules in the Business Rules tab.</p>
-      {options.rules.length === 0 && <p className="text-sm text-muted-foreground">No business rules yet.</p>}
+      {options.rules.length === 0 && (
+        <EmptyState compact icon={<Scale />} title="No business rules yet" className="rounded-md border border-border">
+          Create rules in the Business Rules tab, then pick them here.
+        </EmptyState>
+      )}
       {options.rules.map((r) => (
-        <label key={r.id} className={`flex cursor-pointer items-start gap-2 rounded-md border p-2 text-sm ${step.ruleIds.includes(r.id) ? 'border-primary bg-primary/5' : 'border-border'}`}>
-          <input type="checkbox" className="mt-0.5" checked={step.ruleIds.includes(r.id)} onChange={() => toggle(r.id)} />
+        <label
+          key={r.id}
+          className={cn(
+            'flex cursor-pointer items-start gap-2 rounded-md border p-2 text-sm has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-ring',
+            step.ruleIds.includes(r.id) ? 'border-ring bg-accent text-accent-foreground' : 'border-border hover:bg-muted',
+          )}
+        >
+          <input type="checkbox" className="mt-0.5 size-4 accent-primary" checked={step.ruleIds.includes(r.id)} onChange={() => toggle(r.id)} />
           <span>
             <span className="font-medium">{r.name}</span>
             {r.description && <span className="block text-xs text-muted-foreground">{r.description}</span>}
@@ -532,17 +609,17 @@ export function RouterEditor({ step, columns, options, onChange }: { step: Route
       {step.branches.map((b, i) => (
         <div key={b.id} className="space-y-2 rounded-md border border-border p-2">
           <div className="grid grid-cols-[1fr_auto] gap-1.5">
-            <Input value={b.label} onChange={(e) => update(i, { label: e.target.value })} placeholder="Branch name" aria-label="Branch name" />
-            <Button size="sm" variant="ghost" disabled={step.branches.length === 1} onClick={() => onChange({ ...step, branches: step.branches.filter((_, j) => j !== i) })} aria-label="Remove branch">
-              <Trash2 className="h-4 w-4" />
+            <Input value={b.label} onChange={(e) => update(i, { label: e.target.value })} placeholder="Branch name" aria-label={`Branch ${i + 1} name`} />
+            <Button size="icon-sm" variant="ghost" disabled={step.branches.length === 1} onClick={() => onChange({ ...step, branches: step.branches.filter((_, j) => j !== i) })} aria-label={`Remove branch ${b.label || i + 1}`}>
+              <Trash2 aria-hidden />
             </Button>
           </div>
-          <NativeSelect value={b.ruleId ? 'rule' : 'conditions'} onChange={(v) => update(i, v === 'rule' ? { ruleId: options.rules[0]?.id ?? '', condition: undefined } : { ruleId: '', condition: { match: 'all', conditions: [newCondition(columns[0]?.name ?? '')], groups: [] } })} aria-label="Branch matches by">
+          <NativeSelect value={b.ruleId ? 'rule' : 'conditions'} onChange={(v) => update(i, v === 'rule' ? { ruleId: options.rules[0]?.id ?? '', condition: undefined } : { ruleId: '', condition: { match: 'all', conditions: [newCondition(columns[0]?.name ?? '')], groups: [] } })} aria-label={`Branch ${b.label || i + 1} matches by`}>
             <option value="conditions">Matches conditions</option>
             <option value="rule">Matches a business rule</option>
           </NativeSelect>
           {b.ruleId || (!b.condition && options.rules.length) ? (
-            <RulePicker rules={options.rules} value={b.ruleId} onChange={(v) => update(i, { ruleId: v })} />
+            <RulePicker rules={options.rules} value={b.ruleId} onChange={(v) => update(i, { ruleId: v })} label={`Business rule for branch ${b.label || i + 1}`} />
           ) : (
             <ConditionsEditor
               match={b.condition?.match ?? 'all'}
@@ -554,9 +631,9 @@ export function RouterEditor({ step, columns, options, onChange }: { step: Route
         </div>
       ))}
       <Button size="sm" variant="outline" onClick={() => onChange({ ...step, branches: [...step.branches, { id: newStepId(), label: `Branch ${step.branches.length + 1}`, ruleId: '', condition: { match: 'all', conditions: [newCondition(columns[0]?.name ?? '')], groups: [] } }] })}>
-        <Plus className="mr-1 h-4 w-4" /> Branch
+        <Plus aria-hidden /> Branch
       </Button>
-      <p className="text-xs text-muted-foreground">Rows matching no branch go to <span className="font-medium">{OTHERWISE}</span>; leave it unconnected to drop them.</p>
+      <p className="text-xs text-muted-foreground">Rows matching no branch go to <span className="font-mono font-medium">{OTHERWISE}</span>; leave it unconnected to drop them.</p>
     </div>
   )
 }
@@ -574,40 +651,37 @@ export function DestinationEditor({ step, options, columns, onChange }: { step: 
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap gap-2">
-        <Button size="sm" variant={step.kind === 'dataset' ? 'default' : 'outline'} onClick={() => onChange({ ...base, kind: 'dataset', datasetName: '', mode: 'replace' })}>
+      <div className="flex flex-wrap gap-2" role="group" aria-label="Write to">
+        <Button size="sm" aria-pressed={step.kind === 'dataset'} variant={step.kind === 'dataset' ? 'default' : 'outline'} onClick={() => onChange({ ...base, kind: 'dataset', datasetName: '', mode: 'replace' })}>
           Nexus dataset
         </Button>
-        <Button size="sm" variant={step.kind === 'datasource' ? 'default' : 'outline'} onClick={() => onChange({ ...base, kind: 'datasource', dataSourceId: '', table: '', mode: 'append', softDeleteColumn: '' })}>
+        <Button size="sm" aria-pressed={step.kind === 'datasource'} variant={step.kind === 'datasource' ? 'default' : 'outline'} onClick={() => onChange({ ...base, kind: 'datasource', dataSourceId: '', table: '', mode: 'append', softDeleteColumn: '' })}>
           Write back to a database
         </Button>
       </div>
 
       {step.kind === 'dataset' ? (
         <div className="grid gap-3">
-          <div>
-            <FieldLabel>Dataset name</FieldLabel>
-            <Input list="nexus-datasets" value={step.datasetName} placeholder="employee_master" onChange={(e) => onChange({ ...step, datasetName: e.target.value.toLowerCase() })} aria-label="Dataset name" />
-            <datalist id="nexus-datasets">
-              {options.datasets.map((d) => (
-                <option key={d.name} value={d.name} />
-              ))}
-            </datalist>
-          </div>
-          <div>
-            <FieldLabel>Write mode</FieldLabel>
-            <NativeSelect value={step.mode} onChange={(v) => onChange({ ...step, mode: v as 'append' | 'upsert' | 'replace', softDeleteMissing: v === 'upsert' ? step.softDeleteMissing : false })} aria-label="Write mode">
+          <Field label="Dataset name">
+            <Input list="nexus-datasets" value={step.datasetName} placeholder="employee_master" onChange={(e) => onChange({ ...step, datasetName: e.target.value.toLowerCase() })} className="font-mono" />
+          </Field>
+          <datalist id="nexus-datasets">
+            {options.datasets.map((d) => (
+              <option key={d.name} value={d.name} />
+            ))}
+          </datalist>
+          <Field label="Write mode">
+            <NativeSelect value={step.mode} onChange={(v) => onChange({ ...step, mode: v as 'append' | 'upsert' | 'replace', softDeleteMissing: v === 'upsert' ? step.softDeleteMissing : false })}>
               <option value="replace">Replace (load a fresh copy)</option>
               <option value="upsert">Upsert (update by key)</option>
               <option value="append">Append</option>
             </NativeSelect>
-          </div>
+          </Field>
         </div>
       ) : (
         <div className="grid gap-3">
-          <div>
-            <FieldLabel>Destination database</FieldLabel>
-            <NativeSelect value={step.dataSourceId} onChange={(v) => onChange({ ...step, dataSourceId: v, table: '' })} aria-label="Destination database">
+          <Field label="Destination database">
+            <NativeSelect value={step.dataSourceId} onChange={(v) => onChange({ ...step, dataSourceId: v, table: '' })}>
               <option value="">Choose…</option>
               {writable.map((d) => (
                 <option key={d.id} value={d.id}>
@@ -615,11 +689,10 @@ export function DestinationEditor({ step, options, columns, onChange }: { step: 
                 </option>
               ))}
             </NativeSelect>
-          </div>
-          <div>
-            <FieldLabel>Table (must already exist)</FieldLabel>
+          </Field>
+          <Field label="Table (must already exist)">
             {target && target.tables.length ? (
-              <NativeSelect value={step.table} onChange={(v) => onChange({ ...step, table: v })} aria-label="Destination table">
+              <NativeSelect value={step.table} onChange={(v) => onChange({ ...step, table: v })}>
                 <option value="">Choose a table…</option>
                 {target.tables.map((t) => (
                   <option key={t.name} value={t.name}>
@@ -628,36 +701,41 @@ export function DestinationEditor({ step, options, columns, onChange }: { step: 
                 ))}
               </NativeSelect>
             ) : (
-              <Input value={step.table} placeholder="table_name" onChange={(e) => onChange({ ...step, table: e.target.value })} aria-label="Destination table" />
+              <Input value={step.table} placeholder="table_name" onChange={(e) => onChange({ ...step, table: e.target.value })} className="font-mono" />
             )}
-          </div>
-          <div>
-            <FieldLabel>Write mode</FieldLabel>
-            <NativeSelect value={step.mode} onChange={(v) => onChange({ ...step, mode: v as 'append' | 'upsert', softDeleteMissing: v === 'upsert' ? step.softDeleteMissing : false })} aria-label="Write mode">
+          </Field>
+          <Field label="Write mode">
+            <NativeSelect value={step.mode} onChange={(v) => onChange({ ...step, mode: v as 'append' | 'upsert', softDeleteMissing: v === 'upsert' ? step.softDeleteMissing : false })}>
               <option value="append">Insert (append)</option>
               <option value="upsert">Upsert (needs a unique key)</option>
             </NativeSelect>
-          </div>
+          </Field>
           {!writable.length && <p className="text-xs text-muted-foreground">Add a PostgreSQL, MySQL or Supabase (with Database URL) data source to write back.</p>}
           {target && target.role !== 'destination' && (
-            <p className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-300">
+            <Notice tone="warning" className="text-xs">
               &ldquo;{target.name}&rdquo; was added as a source, so runs will refuse to write to it. Add the database with Data Sources → Add Destination.
-            </p>
+            </Notice>
           )}
         </div>
       )}
 
       {(step.mode === 'upsert' || step.mode === 'replace') && (
-        <div>
-          <FieldLabel>{step.mode === 'replace' ? 'Key column(s), optional' : 'Key column(s)'}</FieldLabel>
+        <fieldset>
+          <legend className="mb-1 text-xs font-medium text-muted-foreground">{step.mode === 'replace' ? 'Key column(s), optional' : 'Key column(s)'}</legend>
           {step.mode === 'replace' && (
             <p className="mb-2 text-xs text-muted-foreground">Used when fixed rows are replayed from Data Quality: a replayed row replaces the row with the same key instead of adding a copy.</p>
           )}
           <div className="flex flex-wrap gap-2">
             {columns.length ? (
               columns.map((c) => (
-                <label key={c.name} className={`flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-xs ${step.keys.includes(c.name) ? 'border-primary bg-primary/10' : 'border-border'}`}>
-                  <input type="checkbox" checked={step.keys.includes(c.name)} onChange={() => toggleKey(c.name)} />
+                <label
+                  key={c.name}
+                  className={cn(
+                    'flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 font-mono text-xs has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-ring',
+                    step.keys.includes(c.name) ? 'border-ring bg-accent text-accent-foreground' : 'border-border hover:bg-muted',
+                  )}
+                >
+                  <input type="checkbox" className="accent-primary" checked={step.keys.includes(c.name)} onChange={() => toggleKey(c.name)} />
                   {c.name}
                 </label>
               ))
@@ -667,7 +745,7 @@ export function DestinationEditor({ step, options, columns, onChange }: { step: 
           </div>
           {step.mode === 'upsert' && (
           <label className="mt-3 flex items-start gap-2 text-sm">
-            <input type="checkbox" className="mt-0.5" checked={step.softDeleteMissing} onChange={(e) => onChange({ ...step, softDeleteMissing: e.target.checked } as DestinationStep)} />
+            <input type="checkbox" className="mt-0.5 size-4 accent-primary" checked={step.softDeleteMissing} onChange={(e) => onChange({ ...step, softDeleteMissing: e.target.checked } as DestinationStep)} />
             <span>
               Mark rows missing from the source as deleted
               <span className="block text-xs text-muted-foreground">After each full run, rows this run didn&apos;t write are flagged deleted (not removed). Needs a full read, not incremental.</span>
@@ -675,12 +753,11 @@ export function DestinationEditor({ step, options, columns, onChange }: { step: 
           </label>
           )}
           {step.mode === 'upsert' && step.kind === 'datasource' && step.softDeleteMissing && (
-            <div className="mt-2">
-              <FieldLabel>Column marking deleted rows (boolean or timestamp)</FieldLabel>
-              <ColumnPicker columns={targetColumns} value={step.softDeleteColumn} onChange={(v) => onChange({ ...step, softDeleteColumn: v })} label="Deleted marker column" />
-            </div>
+            <Field label="Column marking deleted rows (boolean or timestamp)" className="mt-2">
+              <ColumnPicker columns={targetColumns} value={step.softDeleteColumn} onChange={(v) => onChange({ ...step, softDeleteColumn: v })} label={null} />
+            </Field>
           )}
-        </div>
+        </fieldset>
       )}
     </div>
   )

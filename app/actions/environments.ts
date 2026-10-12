@@ -86,7 +86,7 @@ async function setApprovalPolicyImpl(rawPolicy: string) {
   }
   await db.update(workspaces).set({ publishApproval: policy, updatedAt: new Date() }).where(eq(workspaces.id, ctx.workspaceId))
   await recordAudit(ctx, { action: 'UPDATE_POLICY', resource: 'workspace', resourceId: ctx.workspaceId, changes: { publishApproval: policy }, diff: diffObjects({ publishApproval: ws.publishApproval }, { publishApproval: policy }) })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 // ── Environment group ────────────────────────────────────────────────────────
@@ -118,7 +118,7 @@ async function setupEnvironmentsImpl(input: z.input<typeof setupInput>) {
     await recordAudit({ userId: ctx.userId, workspaceId: id }, { action: 'CREATE', resource: 'workspace', resourceId: id, changes: { name, environment: env, environmentGroupId: groupId, from: ctx.workspaceId } })
     created.push({ id, name, environment: env })
   }
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return { groupId, created }
 }
 
@@ -137,7 +137,7 @@ async function linkEnvironmentImpl(input: z.input<typeof linkInput>) {
   await db.update(workspaces).set({ environment: data.environment, environmentGroupId: ws.environmentGroupId, environmentLocked: data.environment === 'prod', updatedAt: new Date() }).where(eq(workspaces.id, tctx.workspaceId))
   await recordAudit(ctx, { action: 'UPDATE', resource: 'workspace', resourceId: tctx.workspaceId, changes: { linked: tctx.workspaceName, environment: data.environment } })
   await recordAudit(tctx, { action: 'UPDATE', resource: 'workspace', resourceId: tctx.workspaceId, changes: { environment: data.environment, environmentGroupId: ws.environmentGroupId, linkedFrom: ctx.workspaceId } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 async function unlinkEnvironmentImpl(rawWorkspaceId: string) {
@@ -153,7 +153,7 @@ async function unlinkEnvironmentImpl(rawWorkspaceId: string) {
   const rest = group.filter((g) => g.id !== workspaceId)
   if (rest.length === 1) await db.update(workspaces).set(clear).where(eq(workspaces.id, rest[0].id))
   await recordAudit(tctx, { action: 'UPDATE', resource: 'workspace', resourceId: workspaceId, changes: { unlinkedFromEnvironmentGroup: ws.environmentGroupId } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 async function setEnvironmentLockImpl(rawLocked: boolean) {
@@ -163,7 +163,7 @@ async function setEnvironmentLockImpl(rawLocked: boolean) {
   if (!ws.environmentGroupId) throw new Error('Only workspaces in an environment group can be locked.')
   await db.update(workspaces).set({ environmentLocked: locked, updatedAt: new Date() }).where(eq(workspaces.id, ctx.workspaceId))
   await recordAudit(ctx, { action: 'UPDATE_POLICY', resource: 'workspace', resourceId: ctx.workspaceId, changes: { environmentLocked: locked }, diff: diffObjects({ environmentLocked: ws.environmentLocked }, { environmentLocked: locked }) })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 // ── Promotion ────────────────────────────────────────────────────────────────
@@ -282,7 +282,7 @@ async function promotePipelineImpl(input: z.input<typeof promoteInput>) {
     resourceId: b.pipeline.id,
     changes: { version: b.pipeline.version, to: b.target.id, toEnvironment: b.nextEnv, targetPipelineId: saved.id, targetVersion: saved.version, published: outcome.published, approvalId: outcome.approvalId, rules: b.plan.rules.map((r) => r.name) },
   })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return { target: { id: b.target.id, name: b.target.name, environment: b.nextEnv }, pipelineId: saved.id, version: saved.version, published: outcome.published, approvalId: outcome.approvalId ?? null }
 }
 

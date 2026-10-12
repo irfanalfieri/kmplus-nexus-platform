@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Notice } from '@/components/ui/notice'
 import { acceptInvite } from '@/lib/actions/workspaces'
 
 export default function AcceptInviteButton({ token }: { token: string }) {
@@ -26,11 +27,11 @@ export default function AcceptInviteButton({ token }: { token: string }) {
 
   return (
     <div className="space-y-2">
-      <Button className="w-full" onClick={() => void accept()} disabled={busy}>
-        {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+      <Button size="lg" className="w-full" onClick={() => void accept()} disabled={busy}>
+        {busy && <Loader2 className="animate-spin" aria-hidden />}
         Join workspace
       </Button>
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {error && <Notice tone="danger">{error}</Notice>}
     </div>
   )
 }

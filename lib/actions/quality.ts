@@ -3,4 +3,4 @@
 import * as actions from '@/app/actions/quality'
 import { unwrapActions } from '@/lib/action-result'
 
-export const { listQuarantine, getQualityOverview, fixRow, bulkFix, approveRows, dismissRows, replayRows } = unwrapActions(actions)
+export const { listQuarantine, getQualityOverview, fixRow, bulkFix, approveRows, dismissRows, restoreRows, replayRows } = unwrapActions(actions)

@@ -1,7 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { Badge } from '@/components/ui/badge'
+import { useCallback, useEffect, useId, useState, type ReactNode } from 'react'
+import { StateMark } from '@/components/ui/flow-line'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -37,15 +37,25 @@ function val(values: Record<string, string>, key: keyof typeof REST_DEFAULTS) {
   return values[key] ?? REST_DEFAULTS[key]
 }
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+/** A labelled control: `id` goes on the control so the label (and hint) are tied to it. */
+function Field({ id, label, hint, children }: { id: string; label: string; hint?: string; children: ReactNode }) {
   return (
     <div className="space-y-1.5">
-      <Label className="text-xs text-muted-foreground">{label}</Label>
+      <Label htmlFor={id} className="text-xs text-muted-foreground">
+        {label}
+      </Label>
       {children}
-      {hint ? <p className="text-[11px] text-muted-foreground/80">{hint}</p> : null}
+      {hint ? (
+        <p id={`${id}-hint`} className="text-[11px] text-muted-foreground">
+          {hint}
+        </p>
+      ) : null}
     </div>
   )
 }
+
+const textareaClass =
+  'w-full rounded-md border border-input bg-card px-3 py-2 font-mono text-xs outline-none placeholder:text-muted-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring'
 
 const METHODS: RestHttpMethod[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']
 
@@ -64,6 +74,8 @@ export default function RestConnectorForm({
   const fullUrlPreview = `${val(values, 'baseUrl').replace(/\/+$/, '')}${val(values, 'resourcePath').startsWith('/') ? '' : '/'}${val(values, 'resourcePath')}`
   const [pasteBox, setPasteBox] = useState('')
   const [pasteHint, setPasteHint] = useState('')
+  const uid = useId()
+  const fid = (key: string) => `${uid}-${key}`
 
   const applyPatch = useCallback(
     (patch: Record<string, string>) => {
@@ -119,12 +131,13 @@ export default function RestConnectorForm({
 
   return (
     <div className="space-y-4">
-      <div className="rounded-lg border border-dashed border-border/70 bg-muted/10 p-3 space-y-2">
-        <Label className="text-xs text-muted-foreground">
-          Quick import — paste <code className="text-[10px]">url:</code> + <code className="text-[10px]">auth:</code>
+      <div className="space-y-2 rounded-lg border border-dashed border-border bg-muted/40 p-3">
+        <Label htmlFor={fid('quickImport')} className="text-xs text-muted-foreground">
+          Quick import — paste <code className="font-mono text-[11px]">url:</code> + <code className="font-mono text-[11px]">auth:</code>
         </Label>
         <textarea
-          className="min-h-[72px] w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-[11px]"
+          id={fid('quickImport')}
+          className={`min-h-[72px] ${textareaClass} text-[11px]`}
           placeholder={`url: https://developmentplan-service-portaverse.pelindo.co.id/tms/v2/event-talent/ninebox\nauth: eyJhbGci…`}
           value={pasteBox}
           onChange={(e) => setPasteBox(e.target.value)}
@@ -137,18 +150,20 @@ export default function RestConnectorForm({
           <Button type="button" size="sm" variant="secondary" onClick={() => importConnection(pasteBox)}>
             Import connection
           </Button>
-          {pasteHint ? <span className="text-[11px] text-muted-foreground">{pasteHint}</span> : null}
+          <span role="status" className="text-[11px] text-muted-foreground">
+            {pasteHint}
+          </span>
         </div>
       </div>
 
       {/* Postman-style request line */}
-      <div className="overflow-hidden rounded-lg border border-border bg-muted/20">
-        <div className="flex items-stretch border-b border-border/60">
+      <div className="overflow-hidden rounded-lg border border-border bg-card">
+        <div className="flex items-stretch border-b border-border">
           <Select
             value={val(values, 'httpMethod')}
             onValueChange={(v) => v && onChange('httpMethod', v)}
           >
-            <SelectTrigger className="h-10 w-[110px] shrink-0 rounded-none border-0 border-r bg-background font-semibold">
+            <SelectTrigger aria-label="HTTP method" className="h-10 w-[110px] shrink-0 rounded-none border-0 border-r font-mono font-semibold focus-visible:outline-offset-[-2px]">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -160,7 +175,8 @@ export default function RestConnectorForm({
             </SelectContent>
           </Select>
           <Input
-            className="h-10 flex-1 rounded-none border-0 font-mono text-sm focus-visible:ring-0"
+            className="h-10 flex-1 rounded-none border-0 font-mono text-sm focus-visible:outline-offset-[-2px]"
+            aria-label="Base URL"
             placeholder="https://api.example.com (host only)"
             value={val(values, 'baseUrl')}
             onChange={(e) => onChange('baseUrl', e.target.value)}
@@ -176,22 +192,18 @@ export default function RestConnectorForm({
         <div className="flex items-center gap-2 px-3 py-2">
           <Input
             className="h-8 flex-1 font-mono text-xs"
+            aria-label="Resource path"
             placeholder="/resource/path"
             value={val(values, 'resourcePath')}
             onChange={(e) => onChange('resourcePath', e.target.value)}
           />
           {onSend && (
-            <button
-              type="button"
-              onClick={onSend}
-              disabled={sending}
-              className="shrink-0 rounded-md bg-orange-500 px-4 py-1.5 text-sm font-semibold text-white hover:bg-orange-600 disabled:opacity-50"
-            >
+            <Button type="button" onClick={onSend} disabled={sending} className="shrink-0 px-4">
               {sending ? 'Sending…' : 'Send'}
-            </button>
+            </Button>
           )}
         </div>
-        <div className="border-t border-border/40 px-3 py-1.5 font-mono text-[10px] text-muted-foreground">
+        <div className="border-t border-border bg-muted/40 px-3 py-1.5 font-mono text-[11px] break-all text-muted-foreground">
           {fullUrlPreview || 'Enter base URL and path'}
         </div>
       </div>
@@ -206,19 +218,21 @@ export default function RestConnectorForm({
           <TabsTrigger value="settings">Settings</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="params" className="mt-3 rounded-lg border border-border/50 p-3">
+        <TabsContent value="params" className="mt-3 rounded-lg border border-border p-3">
           <KeyValueEditor
             value={val(values, 'paramsKv')}
             onChange={(v) => onChange('paramsKv', v)}
             keyPlaceholder="Query param"
             valuePlaceholder="Value"
+            keyLabel="Query param name"
+            valueLabel="Query param value"
           />
         </TabsContent>
 
-        <TabsContent value="auth" className="mt-3 space-y-3 rounded-lg border border-border/50 p-3">
-          <Field label="Type">
+        <TabsContent value="auth" className="mt-3 space-y-3 rounded-lg border border-border p-3">
+          <Field id={fid('authMethod')} label="Type">
             <Select value={authMethod} onValueChange={(v) => v && onChange('authMethod', v)}>
-              <SelectTrigger>
+              <SelectTrigger id={fid('authMethod')}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -236,12 +250,12 @@ export default function RestConnectorForm({
           {authMethod === 'api_key' && (
             <>
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Add to">
+                <Field id={fid('apiKeyLocation')} label="Add to">
                   <Select
                     value={val(values, 'apiKeyLocation')}
                     onValueChange={(v) => v && onChange('apiKeyLocation', v)}
                   >
-                    <SelectTrigger>
+                    <SelectTrigger id={fid('apiKeyLocation')}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -250,95 +264,97 @@ export default function RestConnectorForm({
                     </SelectContent>
                   </Select>
                 </Field>
-                <Field label="Header / param name">
-                  <Input value={val(values, 'apiKeyHeader')} onChange={(e) => onChange('apiKeyHeader', e.target.value)} />
+                <Field id={fid('apiKeyHeader')} label="Header / param name">
+                  <Input id={fid('apiKeyHeader')} value={val(values, 'apiKeyHeader')} onChange={(e) => onChange('apiKeyHeader', e.target.value)} />
                 </Field>
               </div>
-              <Field label="Prefix (optional)" hint='e.g. "Bearer" — prepended before the key value'>
-                <Input value={val(values, 'apiKeyPrefix')} onChange={(e) => onChange('apiKeyPrefix', e.target.value)} />
+              <Field id={fid('apiKeyPrefix')} label="Prefix (optional)" hint='e.g. "Bearer" — prepended before the key value'>
+                <Input id={fid('apiKeyPrefix')} aria-describedby={`${fid('apiKeyPrefix')}-hint`} value={val(values, 'apiKeyPrefix')} onChange={(e) => onChange('apiKeyPrefix', e.target.value)} />
               </Field>
-              <Field label="Value">
-                <Input type="password" value={val(values, 'apiKeyValue')} onChange={(e) => onChange('apiKeyValue', e.target.value)} />
+              <Field id={fid('apiKeyValue')} label="Value">
+                <Input id={fid('apiKeyValue')} type="password" value={val(values, 'apiKeyValue')} onChange={(e) => onChange('apiKeyValue', e.target.value)} />
               </Field>
             </>
           )}
 
           {authMethod === 'bearer' && (
             <>
-              <Field label="Token prefix">
-                <Input value={val(values, 'bearerPrefix')} onChange={(e) => onChange('bearerPrefix', e.target.value)} />
+              <Field id={fid('bearerPrefix')} label="Token prefix">
+                <Input id={fid('bearerPrefix')} value={val(values, 'bearerPrefix')} onChange={(e) => onChange('bearerPrefix', e.target.value)} />
               </Field>
-              <Field label="Token">
-                <Input type="password" value={val(values, 'bearerToken')} onChange={(e) => onChange('bearerToken', e.target.value)} />
+              <Field id={fid('bearerToken')} label="Token">
+                <Input id={fid('bearerToken')} type="password" value={val(values, 'bearerToken')} onChange={(e) => onChange('bearerToken', e.target.value)} />
               </Field>
             </>
           )}
 
           {authMethod === 'basic' && (
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Username">
-                <Input value={val(values, 'basicUsername')} onChange={(e) => onChange('basicUsername', e.target.value)} />
+              <Field id={fid('basicUsername')} label="Username">
+                <Input id={fid('basicUsername')} value={val(values, 'basicUsername')} onChange={(e) => onChange('basicUsername', e.target.value)} />
               </Field>
-              <Field label="Password">
-                <Input type="password" value={val(values, 'basicPassword')} onChange={(e) => onChange('basicPassword', e.target.value)} />
+              <Field id={fid('basicPassword')} label="Password">
+                <Input id={fid('basicPassword')} type="password" value={val(values, 'basicPassword')} onChange={(e) => onChange('basicPassword', e.target.value)} />
               </Field>
             </div>
           )}
 
           {authMethod === 'custom_header' && (
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Header name">
-                <Input value={val(values, 'customHeaderName')} onChange={(e) => onChange('customHeaderName', e.target.value)} />
+              <Field id={fid('customHeaderName')} label="Header name">
+                <Input id={fid('customHeaderName')} value={val(values, 'customHeaderName')} onChange={(e) => onChange('customHeaderName', e.target.value)} />
               </Field>
-              <Field label="Header value">
-                <Input type="password" value={val(values, 'customHeaderValue')} onChange={(e) => onChange('customHeaderValue', e.target.value)} />
+              <Field id={fid('customHeaderValue')} label="Header value">
+                <Input id={fid('customHeaderValue')} type="password" value={val(values, 'customHeaderValue')} onChange={(e) => onChange('customHeaderValue', e.target.value)} />
               </Field>
             </div>
           )}
 
           {(authMethod === 'oauth2_client_credentials' || authMethod === 'oauth2_password') && (
             <>
-              <Field label="Access Token URL">
-                <Input value={val(values, 'oauthTokenUrl')} onChange={(e) => onChange('oauthTokenUrl', e.target.value)} placeholder="https://auth.example.com/oauth/token" />
+              <Field id={fid('oauthTokenUrl')} label="Access Token URL">
+                <Input id={fid('oauthTokenUrl')} value={val(values, 'oauthTokenUrl')} onChange={(e) => onChange('oauthTokenUrl', e.target.value)} placeholder="https://auth.example.com/oauth/token" />
               </Field>
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Client ID">
-                  <Input value={val(values, 'oauthClientId')} onChange={(e) => onChange('oauthClientId', e.target.value)} />
+                <Field id={fid('oauthClientId')} label="Client ID">
+                  <Input id={fid('oauthClientId')} value={val(values, 'oauthClientId')} onChange={(e) => onChange('oauthClientId', e.target.value)} />
                 </Field>
-                <Field label="Client Secret">
-                  <Input type="password" value={val(values, 'oauthClientSecret')} onChange={(e) => onChange('oauthClientSecret', e.target.value)} />
+                <Field id={fid('oauthClientSecret')} label="Client Secret">
+                  <Input id={fid('oauthClientSecret')} type="password" value={val(values, 'oauthClientSecret')} onChange={(e) => onChange('oauthClientSecret', e.target.value)} />
                 </Field>
               </div>
               {authMethod === 'oauth2_password' && (
                 <div className="grid grid-cols-2 gap-3">
-                  <Field label="Username">
-                    <Input value={val(values, 'oauthUsername')} onChange={(e) => onChange('oauthUsername', e.target.value)} />
+                  <Field id={fid('oauthUsername')} label="Username">
+                    <Input id={fid('oauthUsername')} value={val(values, 'oauthUsername')} onChange={(e) => onChange('oauthUsername', e.target.value)} />
                   </Field>
-                  <Field label="Password">
-                    <Input type="password" value={val(values, 'oauthPassword')} onChange={(e) => onChange('oauthPassword', e.target.value)} />
+                  <Field id={fid('oauthPassword')} label="Password">
+                    <Input id={fid('oauthPassword')} type="password" value={val(values, 'oauthPassword')} onChange={(e) => onChange('oauthPassword', e.target.value)} />
                   </Field>
                 </div>
               )}
-              <Field label="Scope (optional)">
-                <Input value={val(values, 'oauthScope')} onChange={(e) => onChange('oauthScope', e.target.value)} />
+              <Field id={fid('oauthScope')} label="Scope (optional)">
+                <Input id={fid('oauthScope')} value={val(values, 'oauthScope')} onChange={(e) => onChange('oauthScope', e.target.value)} />
               </Field>
             </>
           )}
         </TabsContent>
 
-        <TabsContent value="headers" className="mt-3 rounded-lg border border-border/50 p-3">
+        <TabsContent value="headers" className="mt-3 rounded-lg border border-border p-3">
           <KeyValueEditor
             value={val(values, 'headersKv')}
             onChange={(v) => onChange('headersKv', v)}
             keyPlaceholder="Header"
             valuePlaceholder="Value"
+            keyLabel="Header name"
+            valueLabel="Header value"
           />
         </TabsContent>
 
-        <TabsContent value="body" className="mt-3 space-y-3 rounded-lg border border-border/50 p-3">
-          <Field label="Integration scheme">
+        <TabsContent value="body" className="mt-3 space-y-3 rounded-lg border border-border p-3">
+          <Field id={fid('integrationScheme')} label="Integration scheme">
             <Select value={scheme} onValueChange={(v) => v && onChange('integrationScheme', v)}>
-              <SelectTrigger>
+              <SelectTrigger id={fid('integrationScheme')}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -350,9 +366,9 @@ export default function RestConnectorForm({
           </Field>
 
           {scheme !== 'graphql' && (
-            <Field label="Body type">
+            <Field id={fid('bodyType')} label="Body type">
               <Select value={bodyType} onValueChange={(v) => v && onChange('bodyType', v)}>
-                <SelectTrigger>
+                <SelectTrigger id={fid('bodyType')}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -366,9 +382,9 @@ export default function RestConnectorForm({
           )}
 
           {resolvedBodyType === 'graphql' && (
-            <Field label="GraphQL query">
-              <textarea
-                className="min-h-[140px] w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs"
+            <Field id={fid('graphqlQuery')} label="GraphQL query">
+              <textarea id={fid('graphqlQuery')}
+                className={`min-h-[140px] ${textareaClass}`}
                 placeholder={`query Users {\n  users(limit: 5) { id name email }\n}`}
                 value={val(values, 'graphqlQuery')}
                 onChange={(e) => onChange('graphqlQuery', e.target.value)}
@@ -377,9 +393,9 @@ export default function RestConnectorForm({
           )}
 
           {resolvedBodyType === 'json' && (
-            <Field label="JSON body">
-              <textarea
-                className="min-h-[120px] w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs"
+            <Field id={fid('requestBody')} label="JSON body">
+              <textarea id={fid('requestBody')}
+                className={`min-h-[120px] ${textareaClass}`}
                 placeholder='{"filter":"active"}'
                 value={val(values, 'requestBody')}
                 onChange={(e) => onChange('requestBody', e.target.value)}
@@ -389,12 +405,12 @@ export default function RestConnectorForm({
 
           {resolvedBodyType === 'raw' && (
             <>
-              <Field label="Content-Type">
-                <Input value={val(values, 'rawContentType')} onChange={(e) => onChange('rawContentType', e.target.value)} />
+              <Field id={fid('rawContentType')} label="Content-Type">
+                <Input id={fid('rawContentType')} value={val(values, 'rawContentType')} onChange={(e) => onChange('rawContentType', e.target.value)} />
               </Field>
-              <Field label="Raw body">
-                <textarea
-                  className="min-h-[120px] w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs"
+              <Field id={fid('requestBody')} label="Raw body">
+                <textarea id={fid('requestBody')}
+                  className={`min-h-[120px] ${textareaClass}`}
                   value={val(values, 'requestBody')}
                   onChange={(e) => onChange('requestBody', e.target.value)}
                 />
@@ -408,45 +424,47 @@ export default function RestConnectorForm({
               onChange={(v) => onChange('bodyKv', v)}
               keyPlaceholder="Field"
               valuePlaceholder="Value"
+              keyLabel="Form field name"
+              valueLabel="Form field value"
             />
           )}
         </TabsContent>
 
-        <TabsContent value="variables" className="mt-3 space-y-3 rounded-lg border border-border/50 p-3">
-          <Field
+        <TabsContent value="variables" className="mt-3 space-y-3 rounded-lg border border-border p-3">
+          <Field id={fid('variablesJson')}
             label="Environment variables (JSON)"
             hint='Use {{name}} in URL, headers, params, or body. Example: {"base":"https://api.example.com"}'
           >
-            <textarea
-              className="min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs"
+            <textarea id={fid('variablesJson')} aria-describedby={`${fid('variablesJson')}-hint`}
+              className={`min-h-[100px] ${textareaClass}`}
               placeholder='{"apiHost":"https://api.example.com","tenantId":"acme"}'
               value={val(values, 'variablesJson')}
               onChange={(e) => onChange('variablesJson', e.target.value)}
             />
           </Field>
-          <Field label="Response data path" hint="Dot path to array in JSON response, e.g. data.items">
-            <Input value={val(values, 'dataPath')} onChange={(e) => onChange('dataPath', e.target.value)} placeholder="data.items" />
+          <Field id={fid('dataPath')} label="Response data path" hint="Dot path to array in JSON response, e.g. data.items">
+            <Input id={fid('dataPath')} aria-describedby={`${fid('dataPath')}-hint`} value={val(values, 'dataPath')} onChange={(e) => onChange('dataPath', e.target.value)} placeholder="data.items" />
           </Field>
         </TabsContent>
 
-        <TabsContent value="settings" className="mt-3 space-y-3 rounded-lg border border-border/50 p-3">
+        <TabsContent value="settings" className="mt-3 space-y-3 rounded-lg border border-border p-3">
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Timeout (ms)">
-              <Input type="number" value={val(values, 'timeoutMs')} onChange={(e) => onChange('timeoutMs', e.target.value)} />
+            <Field id={fid('timeoutMs')} label="Timeout (ms)">
+              <Input id={fid('timeoutMs')} type="number" value={val(values, 'timeoutMs')} onChange={(e) => onChange('timeoutMs', e.target.value)} />
             </Field>
-            <Field label="Retries">
-              <Input type="number" value={val(values, 'retries')} onChange={(e) => onChange('retries', e.target.value)} />
+            <Field id={fid('retries')} label="Retries">
+              <Input id={fid('retries')} type="number" value={val(values, 'retries')} onChange={(e) => onChange('retries', e.target.value)} />
             </Field>
-            <Field label="Retry backoff (ms)">
-              <Input type="number" value={val(values, 'retryBackoffMs')} onChange={(e) => onChange('retryBackoffMs', e.target.value)} />
+            <Field id={fid('retryBackoffMs')} label="Retry backoff (ms)">
+              <Input id={fid('retryBackoffMs')} type="number" value={val(values, 'retryBackoffMs')} onChange={(e) => onChange('retryBackoffMs', e.target.value)} />
             </Field>
-            <Field label="Validate status">
-              <Input value={val(values, 'validateStatus')} onChange={(e) => onChange('validateStatus', e.target.value)} placeholder="2xx" />
+            <Field id={fid('validateStatus')} label="Validate status">
+              <Input id={fid('validateStatus')} value={val(values, 'validateStatus')} onChange={(e) => onChange('validateStatus', e.target.value)} placeholder="2xx" />
             </Field>
           </div>
-          <Field label="Follow redirects">
+          <Field id={fid('followRedirects')} label="Follow redirects">
             <Select value={val(values, 'followRedirects')} onValueChange={(v) => v && onChange('followRedirects', v)}>
-              <SelectTrigger>
+              <SelectTrigger id={fid('followRedirects')}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -456,13 +474,13 @@ export default function RestConnectorForm({
             </Select>
           </Field>
 
-          <div className="border-t border-border/50 pt-3">
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          <div className="border-t border-border pt-3">
+            <h3 className="mb-2 font-mono text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
               Pagination (production fetch)
-            </p>
-            <Field label="Style">
+            </h3>
+            <Field id={fid('paginationStyle')} label="Style">
               <Select value={val(values, 'paginationStyle')} onValueChange={(v) => v && onChange('paginationStyle', v)}>
-                <SelectTrigger>
+                <SelectTrigger id={fid('paginationStyle')}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -475,32 +493,32 @@ export default function RestConnectorForm({
             </Field>
             {val(values, 'paginationStyle') !== 'none' && (
               <div className="mt-3 grid grid-cols-2 gap-3">
-                <Field label="Page size">
-                  <Input value={val(values, 'paginationPageSize')} onChange={(e) => onChange('paginationPageSize', e.target.value)} />
+                <Field id={fid('paginationPageSize')} label="Page size">
+                  <Input id={fid('paginationPageSize')} value={val(values, 'paginationPageSize')} onChange={(e) => onChange('paginationPageSize', e.target.value)} />
                 </Field>
-                <Field label="Max pages">
-                  <Input value={val(values, 'paginationMaxPages')} onChange={(e) => onChange('paginationMaxPages', e.target.value)} />
+                <Field id={fid('paginationMaxPages')} label="Max pages">
+                  <Input id={fid('paginationMaxPages')} value={val(values, 'paginationMaxPages')} onChange={(e) => onChange('paginationMaxPages', e.target.value)} />
                 </Field>
-                <Field label="Limit param">
-                  <Input value={val(values, 'paginationLimitParam')} onChange={(e) => onChange('paginationLimitParam', e.target.value)} />
+                <Field id={fid('paginationLimitParam')} label="Limit param">
+                  <Input id={fid('paginationLimitParam')} value={val(values, 'paginationLimitParam')} onChange={(e) => onChange('paginationLimitParam', e.target.value)} />
                 </Field>
                 {val(values, 'paginationStyle') === 'offset' && (
-                  <Field label="Offset param">
-                    <Input value={val(values, 'paginationOffsetParam')} onChange={(e) => onChange('paginationOffsetParam', e.target.value)} />
+                  <Field id={fid('paginationOffsetParam')} label="Offset param">
+                    <Input id={fid('paginationOffsetParam')} value={val(values, 'paginationOffsetParam')} onChange={(e) => onChange('paginationOffsetParam', e.target.value)} />
                   </Field>
                 )}
                 {val(values, 'paginationStyle') === 'page' && (
-                  <Field label="Page param">
-                    <Input value={val(values, 'paginationPageParam')} onChange={(e) => onChange('paginationPageParam', e.target.value)} />
+                  <Field id={fid('paginationPageParam')} label="Page param">
+                    <Input id={fid('paginationPageParam')} value={val(values, 'paginationPageParam')} onChange={(e) => onChange('paginationPageParam', e.target.value)} />
                   </Field>
                 )}
                 {val(values, 'paginationStyle') === 'cursor' && (
                   <>
-                    <Field label="Cursor param">
-                      <Input value={val(values, 'paginationCursorParam')} onChange={(e) => onChange('paginationCursorParam', e.target.value)} />
+                    <Field id={fid('paginationCursorParam')} label="Cursor param">
+                      <Input id={fid('paginationCursorParam')} value={val(values, 'paginationCursorParam')} onChange={(e) => onChange('paginationCursorParam', e.target.value)} />
                     </Field>
-                    <Field label="Next cursor path">
-                      <Input value={val(values, 'paginationCursorPath')} onChange={(e) => onChange('paginationCursorPath', e.target.value)} />
+                    <Field id={fid('paginationCursorPath')} label="Next cursor path">
+                      <Input id={fid('paginationCursorPath')} value={val(values, 'paginationCursorPath')} onChange={(e) => onChange('paginationCursorPath', e.target.value)} />
                     </Field>
                   </>
                 )}
@@ -512,17 +530,17 @@ export default function RestConnectorForm({
 
       {preview && (
         <div className="overflow-hidden rounded-lg border border-border">
-          <div className="flex flex-wrap items-center gap-2 border-b border-border/60 bg-muted/30 px-3 py-2">
-            <Badge variant={preview.ok ? 'default' : 'destructive'}>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-muted/60 px-3 py-2">
+            <StateMark state={preview.ok ? 'live' : 'tripped'} className="font-mono">
               {preview.response.status || 'ERR'} {preview.response.statusText}
-            </Badge>
-            <span className="text-xs text-muted-foreground">{preview.response.durationMs} ms</span>
-            <span className="text-xs text-muted-foreground">{preview.response.sizeBytes} bytes</span>
+            </StateMark>
+            <span className="font-mono text-xs text-muted-foreground">{preview.response.durationMs} ms</span>
+            <span className="font-mono text-xs text-muted-foreground">{preview.response.sizeBytes} bytes</span>
             {preview.response.contentType && (
-              <span className="truncate text-xs text-muted-foreground">{preview.response.contentType}</span>
+              <span className="truncate font-mono text-xs text-muted-foreground">{preview.response.contentType}</span>
             )}
           </div>
-          <div className="max-h-48 overflow-auto bg-zinc-950 p-3 font-mono text-xs text-green-400">
+          <div className="max-h-48 overflow-auto bg-card p-3 font-mono text-xs text-foreground">
             <pre className="whitespace-pre-wrap break-all">{preview.response.bodyPreview || preview.message}</pre>
           </div>
         </div>

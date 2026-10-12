@@ -1,9 +1,15 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { History, Loader2, RotateCcw, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, History, Loader2, RotateCcw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
+import { Modal, useConfirm } from '@/components/ui/dialog'
+import { Notice } from '@/components/ui/notice'
+import { EmptyState } from '@/components/ui/empty-state'
+import { StateMark, type FlowState } from '@/components/ui/flow-line'
+import { Table, THead, TBody, Tr, Th, Td } from '@/components/ui/data-table'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { cn } from '@/lib/utils'
 import { getRunRejects, listRuns, listVersions, restoreVersion } from '@/lib/actions/pipelines'
 import type { DestinationResult, StepStat } from '@/lib/pipelines/engine'
 import { useCan } from '@/components/workspace/workspace-context'
@@ -11,23 +17,29 @@ import { useCan } from '@/components/workspace/workspace-context'
 type Run = Awaited<ReturnType<typeof listRuns>>[number]
 type Version = Awaited<ReturnType<typeof listVersions>>[number]
 
-export function statusBadge(status: string | null | undefined) {
+/** Run status as breaker + words. `held`: rows quarantined or held back, for partial runs. */
+export function runState(status: string | null | undefined, held?: number | null): { state: FlowState; label: string } {
   switch (status) {
     case 'success':
-      return <Badge className="bg-green-600 text-white hover:bg-green-600">Success</Badge>
+      return { state: 'live', label: 'Success' }
     case 'partial':
-      return <Badge className="bg-amber-500 text-white hover:bg-amber-500">Partial</Badge>
+      return { state: 'tripped', label: held ? `Partial · ${held.toLocaleString()} held` : 'Partial' }
     case 'failed':
-      return <Badge variant="destructive">Failed</Badge>
+      return { state: 'tripped', label: 'Failed' }
     case 'running':
-      return <Badge variant="secondary">Running…</Badge>
+      return { state: 'running', label: 'Running…' }
     case 'queued':
-      return <Badge variant="outline">Queued…</Badge>
+      return { state: 'idle', label: 'Queued…' }
     case 'cancelled':
-      return <Badge variant="outline">Cancelled</Badge>
+      return { state: 'paused', label: 'Cancelled' }
     default:
-      return <Badge variant="outline">Never run</Badge>
+      return { state: 'idle', label: 'Never run' }
   }
+}
+
+export function statusBadge(status: string | null | undefined, held?: number | null) {
+  const { state, label } = runState(status, held)
+  return <StateMark state={state}>{label}</StateMark>
 }
 
 export function formatWhen(value: Date | string | null | undefined) {
@@ -36,7 +48,22 @@ export function formatWhen(value: Date | string | null | undefined) {
   return new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jakarta', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(d) + ' WIB'
 }
 
-export default function RunHistory({ pipelineId, pipelineName, currentVersion, onClose, onRestored }: {
+/** Seconds as "42s", "3m 05s", "1h 02m". */
+function formatDuration(seconds: number | null | undefined) {
+  if (seconds == null) return '—'
+  if (seconds < 60) return `${seconds}s`
+  const m = Math.floor(seconds / 60)
+  if (m < 60) return `${m}m ${String(seconds % 60).padStart(2, '0')}s`
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`
+}
+
+export default function RunHistory({
+  pipelineId,
+  pipelineName,
+  currentVersion,
+  onClose,
+  onRestored,
+}: {
   pipelineId: string
   pipelineName: string
   currentVersion: number
@@ -52,6 +79,7 @@ export default function RunHistory({ pipelineId, pipelineName, currentVersion, o
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [restoring, setRestoring] = useState<number | null>(null)
+  const [confirm, confirmDialog] = useConfirm()
   const canEdit = useCan('pipelines:edit')
   const canPreview = useCan('data:preview')
 
@@ -62,7 +90,7 @@ export default function RunHistory({ pipelineId, pipelineName, currentVersion, o
       const [r, v] = await Promise.all([listRuns(pipelineId, 30), listVersions(pipelineId)])
       setRuns(r)
       setVersions(v)
-      setSelected((cur) => (cur ? r.find((x) => x.id === cur.id) ?? r[0] ?? null : r[0] ?? null))
+      setSelected((cur) => (cur ? (r.find((x) => x.id === cur.id) ?? r[0] ?? null) : (r[0] ?? null)))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load history')
     } finally {
@@ -78,13 +106,21 @@ export default function RunHistory({ pipelineId, pipelineName, currentVersion, o
     const flagged = Number((selected?.executionDetails as { flagged?: number } | null)?.flagged ?? 0)
     if (!selected || (!selected.recordsError && !flagged) || !canPreview) return setRejects([])
     let cancelled = false
-    getRunRejects(selected.id, 100).then((r) => !cancelled && setRejects(r)).catch(() => !cancelled && setRejects([]))
+    getRunRejects(selected.id, 100)
+      .then((r) => !cancelled && setRejects(r))
+      .catch(() => !cancelled && setRejects([]))
     return () => {
       cancelled = true
     }
   }, [selected, canPreview])
 
   const restore = async (version: number) => {
+    const ok = await confirm({
+      title: `Restore and publish v${version}?`,
+      description: `v${version} becomes the running version${currentVersion ? ` instead of v${currentVersion}` : ''}. If this workspace requires approval, it waits for a second person first.`,
+      confirmLabel: 'Restore & publish',
+    })
+    if (!ok) return
     setRestoring(version)
     try {
       await restoreVersion(pipelineId, version)
@@ -109,203 +145,324 @@ export default function RunHistory({ pipelineId, pipelineName, currentVersion, o
     watermark?: { column: string; value: string | null }
   }
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-stretch justify-center bg-black/50 p-0 sm:p-4" role="dialog" aria-modal="true" aria-label="Pipeline history">
-      <div className="flex w-full max-w-5xl flex-col overflow-hidden border border-border bg-card sm:rounded-xl">
-        <header className="flex items-center gap-3 border-b border-border p-4">
-          <History className="h-5 w-5 text-primary" />
-          <div className="flex-1">
-            <div className="font-semibold">{pipelineName}</div>
-            <div className="text-xs text-muted-foreground">Run and version history · {currentVersion ? `published v${currentVersion}` : 'never published'}</div>
-          </div>
-          <Button size="sm" variant={tab === 'runs' ? 'default' : 'outline'} onClick={() => setTab('runs')}>Runs</Button>
-          <Button size="sm" variant={tab === 'versions' ? 'default' : 'outline'} onClick={() => setTab('versions')}>Versions</Button>
-          <Button size="sm" variant="ghost" onClick={onClose} aria-label="Close history">
-            <X className="h-4 w-4" />
-          </Button>
-        </header>
+  // One time scale for every listed run, so bar lengths compare true durations.
+  const maxDuration = Math.max(0, ...runs.map((r) => r.duration ?? 0))
 
-        {error && <p className="border-b border-border bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
+  return (
+    <Modal
+      onClose={onClose}
+      size="xl"
+      className="sm:h-[calc(100dvh-2rem)]"
+      title={pipelineName}
+      description={`Run and version history · ${currentVersion ? `published v${currentVersion}` : 'never published'}`}
+      bodyClassName="flex flex-col p-0 md:overflow-hidden"
+    >
+      {confirmDialog}
+      <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)} className="min-h-0 flex-1 flex-col gap-0">
+        <TabsList variant="line" className="w-full shrink-0 justify-start border-b border-border px-4 pt-2" aria-label="History">
+          <TabsTrigger value="runs">
+            <History aria-hidden /> Runs
+          </TabsTrigger>
+          <TabsTrigger value="versions">Versions</TabsTrigger>
+        </TabsList>
+
+        {error && (
+          <Notice tone="danger" className="m-4 mb-0">
+            {error}
+          </Notice>
+        )}
         {loading ? (
-          <div className="flex flex-1 items-center justify-center p-10 text-muted-foreground">
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading…
+          <div className="flex flex-1 items-center justify-center gap-2 p-10 text-sm text-muted-foreground" role="status">
+            <Loader2 className="size-4 animate-spin" aria-hidden /> Loading…
           </div>
-        ) : tab === 'runs' ? (
-          runs.length === 0 ? (
-            <p className="p-10 text-center text-muted-foreground">No runs yet. Use Run now on the pipeline.</p>
-          ) : (
-            <div className="grid flex-1 overflow-hidden md:grid-cols-[300px_1fr]">
-              <ul className="overflow-y-auto border-b border-border md:border-b-0 md:border-r">
-                {runs.map((r) => (
-                  <li key={r.id}>
-                    <button onClick={() => setSelected(r)} className={`w-full border-b border-border/60 p-3 text-left text-sm ${selected?.id === r.id ? 'bg-primary/5' : 'hover:bg-muted/40'}`}>
-                      <div className="flex items-center justify-between gap-2">
-                        {statusBadge(r.status)}
-                        <span className="text-xs text-muted-foreground">{r.trigger} · v{r.pipelineVersion}</span>
-                      </div>
-                      <div className="mt-1 text-xs text-muted-foreground">{formatWhen(r.startTime)}</div>
-                      <div className="text-xs">
-                        {r.recordsSuccess ?? 0} written / {r.recordsProcessed ?? 0} read{r.recordsError ? ` · ${r.recordsError} quarantined` : ''}
-                      </div>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-              {selected && (
-                <div className="space-y-4 overflow-y-auto p-4">
-                  <div className="grid gap-2 sm:grid-cols-4">
-                    {[
-                      ['Status', statusBadge(selected.status)],
-                      ['Duration', selected.duration != null ? `${selected.duration}s` : '—'],
-                      ['Rows read', selected.recordsProcessed ?? 0],
-                      ['Rows written', selected.recordsSuccess ?? 0],
-                    ].map(([label, value]) => (
-                      <div key={String(label)} className="rounded-md bg-muted/30 p-2">
-                        <div className="text-xs text-muted-foreground">{label}</div>
-                        <div className="mt-1 font-semibold">{value}</div>
-                      </div>
-                    ))}
-                  </div>
-                  {(details.destinations ?? (details.destination ? [details.destination] : [])).map((d) => (
-                    <p key={d.id ?? d.target} className="text-sm text-muted-foreground">
-                      Wrote {d.written != null && <>{d.written.toLocaleString()} rows </>}to <span className="font-medium text-foreground">{d.target}</span>
-                      {d.rowCount != null && ` (now ${d.rowCount.toLocaleString()} rows)`}
-                    </p>
-                  ))}
-                  {(!!details.flagged || !!details.held) && (
-                    <p className="text-sm text-muted-foreground">
-                      {!!details.held && <>{details.held.toLocaleString()} row(s) held for approval. </>}
-                      {!!details.flagged && <>{details.flagged.toLocaleString()} row(s) written with warnings. </>}
-                      Review them in Data Quality.
-                    </p>
-                  )}
-                  {selected.errorMessage && <p className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{selected.errorMessage}</p>}
-                  {details.errorStack && (
-                    <details className="rounded-md border border-border p-2 text-xs">
-                      <summary className="cursor-pointer text-muted-foreground">Stack trace (admins only)</summary>
-                      <pre className="mt-2 max-h-60 overflow-auto whitespace-pre-wrap font-mono">{details.errorStack}</pre>
-                    </details>
-                  )}
-                  {details.attempts && details.attempts.length > 1 && (
-                    <div className="rounded-md border border-border p-3 text-sm">
-                      <div className="mb-1 font-medium">{details.attempts.length} attempts</div>
-                      <ul className="space-y-0.5 text-xs text-muted-foreground">
-                        {details.attempts.map((a) => (
-                          <li key={a.attempt}>
-                            #{a.attempt} · {formatWhen(a.at)} · {a.error ? <span className="text-destructive">{a.error}</span> : 'succeeded'}
-                          </li>
+        ) : (
+          <>
+            <TabsContent value="runs" className="flex min-h-0 flex-1 flex-col">
+              {runs.length === 0 ? (
+                <EmptyState icon={<History />} title="No runs yet">
+                  Use Run now on the pipeline.
+                </EmptyState>
+              ) : (
+                <div className="grid min-h-0 flex-1 md:grid-cols-[320px_1fr]">
+                  <ul className="min-h-0 overflow-y-auto border-b border-border md:border-r md:border-b-0" aria-label="Runs, newest first">
+                    {runs.map((r) => {
+                      const { state, label } = runState(r.status, r.recordsError)
+                      const isSelected = selected?.id === r.id
+                      const width = maxDuration > 0 && r.duration != null ? Math.max((r.duration / maxDuration) * 100, r.duration > 0 ? 1.5 : 0) : 0
+                      return (
+                        <li key={r.id}>
+                          <button
+                            type="button"
+                            onClick={() => setSelected(r)}
+                            aria-current={isSelected ? 'true' : undefined}
+                            className={cn(
+                              'w-full border-b border-border px-4 py-3 text-left text-sm focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring',
+                              isSelected ? 'bg-accent text-accent-foreground shadow-[inset_3px_0_0_var(--live)]' : 'hover:bg-muted',
+                            )}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <StateMark state={state}>{label}</StateMark>
+                              <span className="font-mono text-xs text-muted-foreground">
+                                {r.trigger} · v{r.pipelineVersion}
+                              </span>
+                            </div>
+                            <div className="mt-1 font-mono text-xs text-muted-foreground">{formatWhen(r.startTime)}</div>
+                            <div className="text-xs">
+                              <span className="font-mono">{r.recordsSuccess ?? 0}</span> written / <span className="font-mono">{r.recordsProcessed ?? 0}</span> read
+                              {r.recordsError ? (
+                                <>
+                                  {' '}
+                                  · <span className="font-mono">{r.recordsError}</span> quarantined
+                                </>
+                              ) : null}
+                            </div>
+                            <div className="mt-1.5 flex items-center gap-2">
+                              <span className="h-1 min-w-0 flex-1 bg-muted" aria-hidden>
+                                {width > 0 && <span className={cn('block h-full', state === 'tripped' ? 'bg-danger' : 'bg-live')} style={{ width: `${width}%` }} />}
+                              </span>
+                              <span className="w-16 shrink-0 text-right font-mono text-xs text-muted-foreground">
+                                <span className="sr-only">Duration </span>
+                                {formatDuration(r.duration)}
+                              </span>
+                            </div>
+                          </button>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                  {selected && (
+                    <div className="min-h-0 space-y-4 overflow-y-auto p-4" aria-label="Run details" role="region">
+                      <dl className="grid gap-2 sm:grid-cols-4">
+                        {(
+                          [
+                            ['Status', statusBadge(selected.status, selected.recordsError)],
+                            [
+                              'Duration',
+                              <span key="d" className="font-mono">
+                                {formatDuration(selected.duration)}
+                              </span>,
+                            ],
+                            [
+                              'Rows read',
+                              <span key="r" className="font-mono">
+                                {selected.recordsProcessed ?? 0}
+                              </span>,
+                            ],
+                            [
+                              'Rows written',
+                              <span key="w" className="font-mono">
+                                {selected.recordsSuccess ?? 0}
+                              </span>,
+                            ],
+                          ] as const
+                        ).map(([label, value]) => (
+                          <div key={label} className="rounded-md border border-border p-2">
+                            <dt className="text-xs text-muted-foreground">{label}</dt>
+                            <dd className="mt-1 font-semibold">{value}</dd>
+                          </div>
                         ))}
-                      </ul>
-                    </div>
-                  )}
-                  {details.watermark && (
-                    <p className="text-xs text-muted-foreground">
-                      Incremental on <span className="font-mono">{details.watermark.column}</span>:{' '}
-                      {details.watermark.value ? <>read up to <span className="font-mono">{details.watermark.value}</span></> : 'no new rows'}
-                    </p>
-                  )}
-                  {details.steps && details.steps.length > 0 && (
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-border text-left text-xs uppercase text-muted-foreground">
-                          <th className="py-2">Step</th>
-                          <th>In</th>
-                          <th>Out</th>
-                          <th>Quarantined</th>
-                          <th>Time</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {details.steps.map((s) => (
-                          <tr key={s.id} className="border-b border-border/60">
-                            <td className="py-2">
-                              {s.label}
-                              {s.error && <div className="text-xs text-destructive">{s.error}</div>}
-                            </td>
-                            <td>{s.rowsIn}</td>
-                            <td>{s.rowsOut}</td>
-                            <td className={s.rejected ? 'text-destructive' : ''}>{s.rejected}</td>
-                            <td>{s.durationMs} ms</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                  {details.log && details.log.length > 0 && (
-                    <div className="rounded-md border border-border">
-                      <button className="w-full p-2 text-left text-sm font-medium" onClick={() => setShowLog((v) => !v)} aria-expanded={showLog}>
-                        Run log ({details.log.length} lines) {showLog ? '▾' : '▸'}
-                      </button>
-                      {showLog && (
-                        <ol className="max-h-64 overflow-auto border-t border-border p-2 font-mono text-xs">
-                          {details.log.map((l, i) => (
-                            <li key={i} className={l.level === 'error' ? 'text-destructive' : l.level === 'warn' ? 'text-amber-700 dark:text-amber-300' : 'text-muted-foreground'}>
-                              {formatWhen(l.at)} {l.level.toUpperCase()} {l.message}
-                            </li>
-                          ))}
-                        </ol>
+                      </dl>
+                      {(details.destinations ?? (details.destination ? [details.destination] : [])).map((d) => (
+                        <p key={d.id ?? d.target} className="text-sm text-muted-foreground">
+                          Wrote{' '}
+                          {d.written != null && (
+                            <>
+                              <span className="font-mono">{d.written.toLocaleString()}</span> rows{' '}
+                            </>
+                          )}
+                          to <span className="font-medium text-foreground">{d.target}</span>
+                          {d.rowCount != null && (
+                            <>
+                              {' '}
+                              (now <span className="font-mono">{d.rowCount.toLocaleString()}</span> rows)
+                            </>
+                          )}
+                        </p>
+                      ))}
+                      {(!!details.flagged || !!details.held) && (
+                        <Notice tone={details.held ? 'held' : 'warning'} live={false}>
+                          {!!details.held && <>{details.held.toLocaleString()} row(s) held for approval. </>}
+                          {!!details.flagged && <>{details.flagged.toLocaleString()} row(s) written with warnings. </>}
+                          Review them in Data Quality.
+                        </Notice>
                       )}
-                    </div>
-                  )}
-                  {rejects.length > 0 && (
-                    <div>
-                      <div className="mb-2 text-sm font-medium">Quarantined and flagged rows (showing {rejects.length}; fix or approve them in Data Quality)</div>
-                      {/* Rows rejected at different steps have different columns, so show each row's own fields. */}
-                      <div className="max-h-80 overflow-auto rounded-md border border-border">
-                        <table className="w-full text-xs">
-                          <thead className="sticky top-0 bg-muted">
-                            <tr>
-                              <th className="px-2 py-1 text-left font-medium">Step</th>
-                              <th className="px-2 py-1 text-left font-medium">Kind</th>
-                              <th className="px-2 py-1 text-left font-medium">Why</th>
-                              <th className="px-2 py-1 text-left font-medium">Row</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {rejects.map((r, i) => {
-                              const errs = r.errors as { stepId?: string; messages?: string[] }
-                              const step = details.steps?.find((s) => s.id === errs.stepId)
-                              return (
-                                <tr key={i} className="border-t border-border/60 align-top">
-                                  <td className="whitespace-nowrap px-2 py-1">{step?.label ?? '—'}</td>
-                                  <td className="whitespace-nowrap px-2 py-1">{r.kind === 'flag' ? `flag (${r.severity})` : r.kind === 'approval' ? 'approval' : 'invalid'}{r.status && r.status !== 'open' ? ` · ${r.status}` : ''}</td>
-                                  <td className={`px-2 py-1 ${r.kind === 'flag' ? 'text-amber-700 dark:text-amber-300' : 'text-destructive'}`}>{(errs.messages ?? []).join('; ')}</td>
-                                  <td className="px-2 py-1 font-mono">
-                                    {Object.entries(r.row as Record<string, unknown>)
-                                      .map(([k, v]) => `${k}: ${v === null || v === undefined ? '∅' : typeof v === 'object' ? JSON.stringify(v) : String(v)}`)
-                                      .join(' · ')}
-                                  </td>
+                      {selected.errorMessage && (
+                        <Notice tone="danger" live={false}>
+                          {selected.errorMessage}
+                        </Notice>
+                      )}
+                      {details.errorStack && (
+                        <details className="rounded-md border border-border p-2 text-xs">
+                          <summary className="cursor-pointer text-muted-foreground">Stack trace (admins only)</summary>
+                          <pre className="mt-2 max-h-60 overflow-auto font-mono whitespace-pre-wrap">{details.errorStack}</pre>
+                        </details>
+                      )}
+                      {details.attempts && details.attempts.length > 1 && (
+                        <section className="rounded-md border border-border p-3 text-sm" aria-labelledby="run-attempts">
+                          <h3 id="run-attempts" className="mb-1 font-medium">
+                            {details.attempts.length} attempts
+                          </h3>
+                          <ul className="space-y-0.5 text-xs text-muted-foreground">
+                            {details.attempts.map((a) => (
+                              <li key={a.attempt}>
+                                <span className="font-mono">
+                                  #{a.attempt} · {formatWhen(a.at)}
+                                </span>{' '}
+                                · {a.error ? <span className="text-danger-text">failed: {a.error}</span> : 'succeeded'}
+                              </li>
+                            ))}
+                          </ul>
+                        </section>
+                      )}
+                      {details.watermark && (
+                        <p className="text-xs text-muted-foreground">
+                          Incremental on <span className="font-mono">{details.watermark.column}</span>:{' '}
+                          {details.watermark.value ? (
+                            <>
+                              read up to <span className="font-mono">{details.watermark.value}</span>
+                            </>
+                          ) : (
+                            'no new rows'
+                          )}
+                        </p>
+                      )}
+                      {details.steps && details.steps.length > 0 && (
+                        <div className="rounded-md border border-border">
+                          <Table label="Steps of this run">
+                            <THead>
+                              <tr>
+                                <Th>Step</Th>
+                                <Th className="text-right">In</Th>
+                                <Th className="text-right">Out</Th>
+                                <Th className="text-right">Quarantined</Th>
+                                <Th className="text-right">Time</Th>
+                              </tr>
+                            </THead>
+                            <TBody>
+                              {details.steps.map((s) => (
+                                <Tr key={s.id}>
+                                  <Td>
+                                    {s.label}
+                                    {s.error && <div className="text-xs text-danger-text">Failed: {s.error}</div>}
+                                  </Td>
+                                  <Td className="text-right font-mono">{s.rowsIn}</Td>
+                                  <Td className="text-right font-mono">{s.rowsOut}</Td>
+                                  <Td className={cn('text-right font-mono', s.rejected ? 'text-danger-text' : '')}>{s.rejected}</Td>
+                                  <Td className="text-right font-mono">{s.durationMs} ms</Td>
+                                </Tr>
+                              ))}
+                            </TBody>
+                          </Table>
+                        </div>
+                      )}
+                      {details.log && details.log.length > 0 && (
+                        <div className="rounded-md border border-border">
+                          <button
+                            type="button"
+                            className="flex w-full items-center gap-1.5 rounded-md p-2 text-left text-sm font-medium hover:bg-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+                            onClick={() => setShowLog((v) => !v)}
+                            aria-expanded={showLog}
+                          >
+                            {showLog ? <ChevronDown className="size-4" aria-hidden /> : <ChevronRight className="size-4" aria-hidden />}
+                            Run log ({details.log.length} lines)
+                          </button>
+                          {showLog && (
+                            <ol className="max-h-64 overflow-auto border-t border-border p-2 font-mono text-xs">
+                              {details.log.map((l, i) => (
+                                <li key={i} className={l.level === 'error' ? 'text-danger-text' : l.level === 'warn' ? 'text-warning-text' : 'text-muted-foreground'}>
+                                  {formatWhen(l.at)} {l.level.toUpperCase()} {l.message}
+                                </li>
+                              ))}
+                            </ol>
+                          )}
+                        </div>
+                      )}
+                      {rejects.length > 0 && (
+                        <section aria-labelledby="run-rejects">
+                          <h3 id="run-rejects" className="mb-2 text-sm font-medium">
+                            Quarantined and flagged rows (showing {rejects.length}; fix or approve them in Data Quality)
+                          </h3>
+                          {/* Rows rejected at different steps have different columns, so show each row's own fields. */}
+                          <div className="max-h-80 overflow-auto rounded-md border border-border" tabIndex={0} role="region" aria-label="Quarantined and flagged rows">
+                            <table className="w-full border-collapse text-left text-xs">
+                              <THead className="sticky top-0 z-[1] bg-muted">
+                                <tr>
+                                  <Th className="h-7 px-2 first:pl-2">Step</Th>
+                                  <Th className="h-7 px-2">Kind</Th>
+                                  <Th className="h-7 px-2">Why</Th>
+                                  <Th className="h-7 px-2 last:pr-2">Row</Th>
                                 </tr>
-                              )
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
+                              </THead>
+                              <TBody>
+                                {rejects.map((r, i) => {
+                                  const errs = r.errors as { stepId?: string; messages?: string[] }
+                                  const step = details.steps?.find((s) => s.id === errs.stepId)
+                                  return (
+                                    <Tr key={i} className="align-top">
+                                      <Td className="px-2 py-1 whitespace-nowrap first:pl-2">{step?.label ?? '—'}</Td>
+                                      <Td className="px-2 py-1 whitespace-nowrap">
+                                        {r.kind === 'flag' ? `flag (${r.severity})` : r.kind === 'approval' ? 'approval' : 'invalid'}
+                                        {r.status && r.status !== 'open' ? ` · ${r.status}` : ''}
+                                      </Td>
+                                      <Td className={cn('px-2 py-1', r.kind === 'flag' ? 'text-warning-text' : r.kind === 'approval' ? 'text-held-text' : 'text-danger-text')}>
+                                        {(errs.messages ?? []).join('; ')}
+                                      </Td>
+                                      <Td className="px-2 py-1 font-mono last:pr-2">
+                                        {Object.entries(r.row as Record<string, unknown>)
+                                          .map(([k, v]) => `${k}: ${v === null || v === undefined ? '∅' : typeof v === 'object' ? JSON.stringify(v) : String(v)}`)
+                                          .join(' · ')}
+                                      </Td>
+                                    </Tr>
+                                  )
+                                })}
+                              </TBody>
+                            </table>
+                          </div>
+                        </section>
+                      )}
                     </div>
                   )}
                 </div>
               )}
-            </div>
-          )
-        ) : (
-          <ul className="flex-1 overflow-y-auto">
-            {versions.map((v) => (
-              <li key={v.version} className="flex items-center gap-3 border-b border-border/60 p-3 text-sm">
-                <Badge variant={v.version === currentVersion ? 'default' : 'outline'}>v{v.version}</Badge>
-                {v.version === currentVersion ? <Badge variant="secondary">live</Badge> : v.publishedAt ? <span className="text-xs text-muted-foreground">published {formatWhen(v.publishedAt)}</span> : <span className="text-xs text-muted-foreground">draft</span>}
-                <span className="flex-1">{v.changes}</span>
-                <span className="text-xs text-muted-foreground">{formatWhen(v.createdAt)}</span>
-                {v.version !== currentVersion && canEdit && (
-                  <Button size="sm" variant="outline" disabled={restoring !== null} onClick={() => restore(v.version)}>
-                    {restoring === v.version ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-1 h-4 w-4" />}
-                    Restore &amp; publish
-                  </Button>
-                )}
-              </li>
-            ))}
-          </ul>
+            </TabsContent>
+            <TabsContent value="versions" className="flex min-h-0 flex-1 flex-col">
+              {versions.length === 0 ? (
+                <EmptyState icon={<History />} title="No versions yet">
+                  Save the pipeline to create its first version.
+                </EmptyState>
+              ) : (
+                <ul className="min-h-0 flex-1 overflow-y-auto" aria-label="Versions, newest first">
+                  {versions.map((v) => {
+                    const live = v.version === currentVersion
+                    return (
+                      <li key={v.version} className={cn('flex flex-wrap items-center gap-3 border-b border-border px-4 py-3 text-sm', live && 'bg-accent text-accent-foreground')}>
+                        <span className="w-10 font-mono font-semibold">v{v.version}</span>
+                        {live ? (
+                          <StateMark state="live">live</StateMark>
+                        ) : v.publishedAt ? (
+                          <span className="text-xs text-muted-foreground">
+                            published <span className="font-mono">{formatWhen(v.publishedAt)}</span>
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">draft</span>
+                        )}
+                        <span className="min-w-0 flex-1">{v.changes}</span>
+                        <span className="font-mono text-xs text-muted-foreground">{formatWhen(v.createdAt)}</span>
+                        {!live && canEdit && (
+                          <Button size="sm" variant="outline" disabled={restoring !== null} onClick={() => void restore(v.version)}>
+                            {restoring === v.version ? <Loader2 className="animate-spin" aria-hidden /> : <RotateCcw aria-hidden />}
+                            Restore &amp; publish
+                          </Button>
+                        )}
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </TabsContent>
+          </>
         )}
-      </div>
-    </div>
+      </Tabs>
+    </Modal>
   )
 }

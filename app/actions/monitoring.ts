@@ -178,7 +178,7 @@ async function markNotificationsReadImpl(ids?: string[]) {
     ? and(eq(notifications.userId, ctx.userId), eq(notifications.workspaceId, ctx.workspaceId), inArray(notifications.id, parsed))
     : and(eq(notifications.userId, ctx.userId), eq(notifications.workspaceId, ctx.workspaceId))
   await db.update(notifications).set({ readAt: new Date() }).where(and(scope, isNull(notifications.readAt)))
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 // ── Overview (dashboard home) ────────────────────────────────────────────────

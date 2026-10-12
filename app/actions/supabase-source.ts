@@ -90,7 +90,7 @@ async function scanSupabaseSourceSchemaImpl(rawSourceId: string) {
     })
     .where(and(eq(dataSources.id, sourceId), eq(dataSources.workspaceId, workspaceId)))
 
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return scan
 }
 
@@ -142,7 +142,7 @@ async function updateSupabaseSourceCredentialsImpl(
     })
     .where(and(eq(dataSources.id, sourceId), eq(dataSources.workspaceId, workspaceId)))
 
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return { ok: true as const, scan, maskedCredentials: maskSupabaseCredentials(credentials) }
 }
 

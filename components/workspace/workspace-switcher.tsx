@@ -47,26 +47,27 @@ export default function WorkspaceSwitcher() {
     <div className="relative" ref={ref}>
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 rounded-lg border border-border px-2.5 py-2 text-left hover:bg-muted"
+        className="flex w-full items-center gap-2.5 rounded-md border border-sidebar-border px-2.5 py-2 text-left text-sidebar-accent-foreground hover:bg-sidebar-accent"
         aria-haspopup="listbox"
+        aria-label={`Workspace: ${workspace.name}. Switch workspace`}
         aria-expanded={open}
       >
-        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-primary text-xs font-semibold text-primary-foreground">
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-sm bg-sidebar-primary text-xs font-semibold text-sidebar-primary-foreground" aria-hidden>
           {workspace.name.slice(0, 1).toUpperCase()}
         </div>
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">{workspace.name}</div>
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <div className="flex items-center gap-1.5 text-xs text-sidebar-foreground">
             <EnvironmentBadge environment={workspace.environment} />
             {ROLE_INFO[role].label}
           </div>
         </div>
-        <ChevronsUpDown className="h-4 w-4 text-muted-foreground" />
+        <ChevronsUpDown className="h-4 w-4 text-sidebar-muted" aria-hidden />
       </button>
 
       {open && (
         <div className="absolute left-0 right-0 top-full z-50 mt-1 rounded-lg border border-border bg-popover p-1 shadow-lg">
-          <div className="px-2 py-1 text-xs text-muted-foreground">Workspaces</div>
+          <div className="px-2 pt-1.5 pb-1 font-mono text-[11px] tracking-wide text-muted-foreground uppercase">Workspaces</div>
           <ul role="listbox" className="max-h-64 overflow-y-auto">
             {workspaces.map((w) => (
               <li key={w.id}>
@@ -80,7 +81,7 @@ export default function WorkspaceSwitcher() {
                   <span className="min-w-0 flex-1 truncate">{w.name}</span>
                   <EnvironmentBadge environment={w.environment} />
                   <span className="text-xs text-muted-foreground">{ROLE_INFO[w.role].label}</span>
-                  {w.id === workspace.id && <Check className="h-4 w-4 text-primary" />}
+                  {w.id === workspace.id && <Check className="h-4 w-4 text-live-text" />}
                 </button>
               </li>
             ))}
@@ -94,7 +95,7 @@ export default function WorkspaceSwitcher() {
                   void run(() => createWorkspace(name))
                 }}
               >
-                <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Workspace name, e.g. PT Contoh" className="h-8" />
+                <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Workspace name, e.g. PT Contoh" aria-label="New workspace name" className="h-8" />
                 <div className="flex gap-2">
                   <Button size="sm" type="submit" disabled={busy || !name.trim()} className="flex-1">
                     {busy && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}Create
@@ -107,7 +108,7 @@ export default function WorkspaceSwitcher() {
                 <Plus className="h-4 w-4" /> New workspace
               </button>
             )}
-            {error && <p className="px-2 pb-1 text-xs text-destructive">{error}</p>}
+            {error && <p role="alert" className="px-2 pb-1 text-xs text-danger-text">{error}</p>}
           </div>
         </div>
       )}

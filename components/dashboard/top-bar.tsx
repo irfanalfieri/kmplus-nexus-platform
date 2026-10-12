@@ -1,28 +1,45 @@
 'use client'
 
-import { Search, User } from 'lucide-react'
-import { Input } from '@/components/ui/input'
+import { usePathname } from 'next/navigation'
+import { Menu as MenuIcon } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { useT } from '@/components/i18n/i18n-provider'
+import { useWorkspace } from '@/components/workspace/workspace-context'
 import NotificationBell from './notification-bell'
+import { ProfileMenu } from './profile-menu'
+import { JumpTo } from './jump-to'
+import { currentSection } from './sidebar'
 
-export default function TopBar() {
+export default function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
+  const t = useT()
+  const { workspace } = useWorkspace()
+  const section = currentSection(usePathname())
+
   return (
-    <div className="h-16 bg-card border-b border-border px-6 flex items-center justify-between">
-      <div className="flex-1 flex items-center gap-4">
-        <div className="relative w-96">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <Input
-            placeholder="Search pipelines, data sources..."
-            className="pl-10"
-          />
-        </div>
+    <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-card px-3 sm:px-5">
+      <Button variant="ghost" size="icon" className="lg:hidden" aria-label={t('nav.menu')} onClick={onOpenNav}>
+        <MenuIcon />
+      </Button>
+      <nav aria-label={t('shell.breadcrumb')} className="hidden min-w-0 md:block">
+        <ol className="flex items-center gap-1.5 text-sm">
+          <li className="max-w-56 truncate text-muted-foreground">{workspace.name}</li>
+          {section && (
+            <>
+              <li aria-hidden className="text-muted-foreground">/</li>
+              <li aria-current="page" className="font-medium">
+                {t(`nav.${section}`)}
+              </li>
+            </>
+          )}
+        </ol>
+      </nav>
+      <div className="flex min-w-0 flex-1 justify-end md:justify-center">
+        <JumpTo />
       </div>
-
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-1 sm:gap-2">
         <NotificationBell />
-        <div className="w-8 h-8 bg-primary rounded-full flex items-center justify-center">
-          <User className="w-4 h-4 text-primary-foreground" />
-        </div>
+        <ProfileMenu />
       </div>
-    </div>
+    </header>
   )
 }

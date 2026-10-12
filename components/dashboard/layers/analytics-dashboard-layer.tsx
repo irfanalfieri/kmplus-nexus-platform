@@ -1,11 +1,17 @@
 'use client'
 
+import Link from 'next/link'
 import { freshness } from '@/lib/catalog/definition'
 import { useCallback, useEffect, useState } from 'react'
-import { ArrowDown, ArrowUp, BarChart3, Database, Loader2, Pencil, Plus, RefreshCw, Save, Trash2 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
+import { ArrowDown, ArrowUp, BarChart3, Database, LayoutDashboard, Loader2, Pencil, Plus, RefreshCw, Save, Trash2 } from 'lucide-react'
+import { Button, buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Notice } from '@/components/ui/notice'
+import { EmptyState } from '@/components/ui/empty-state'
+import { useConfirm } from '@/components/ui/dialog'
+import { PageHeader } from '@/components/dashboard/page-header'
+import { useT } from '@/components/i18n/i18n-provider'
+import { cn } from '@/lib/utils'
 import { deleteDashboard, getAnalyticsDatasets, getDashboardData, listDashboards, saveDashboard } from '@/lib/actions/analytics'
 import type { Widget } from '@/lib/analytics/definition'
 import { WidgetView } from '@/components/analytics/charts'
@@ -19,7 +25,9 @@ type Results = Awaited<ReturnType<typeof getDashboardData>>['results']
 
 const when = (d: Date | string) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jakarta', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(d)) + ' WIB'
 
-export default function AnalyticsDashboardLayer({ onNavigate }: { onNavigate: (tab: string) => void }) {
+export default function AnalyticsDashboardLayer() {
+  const t = useT()
+  const [confirm, confirmEl] = useConfirm()
   const [list, setList] = useState<List | null>(null)
   const [datasets, setDatasets] = useState<Datasets>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -28,7 +36,6 @@ export default function AnalyticsDashboardLayer({ onNavigate }: { onNavigate: (t
   const [editing, setEditing] = useState<Widget | null>(null)
   const [newName, setNewName] = useState('')
   const [rename, setRename] = useState<{ name: string; description: string } | null>(null)
-  const [confirmDelete, setConfirmDelete] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -63,7 +70,6 @@ export default function AnalyticsDashboardLayer({ onNavigate }: { onNavigate: (t
 
   useEffect(() => {
     setResults(null)
-    setConfirmDelete(false)
     setRename(null)
     if (dash && list?.canView && dash.widgets.length) void loadData(dash.id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -112,8 +118,30 @@ export default function AnalyticsDashboardLayer({ onNavigate }: { onNavigate: (t
     void act(() => persist(dash, w))
   }
 
+  const removeDashboard = async (d: Dash) => {
+    const ok = await confirm({
+      title: `Delete dashboard “${d.name}”?`,
+      description: `Its ${d.widgets.length} widget${d.widgets.length === 1 ? '' : 's'} are deleted too. The datasets stay as they are.`,
+      confirmLabel: 'Delete dashboard',
+      tone: 'danger',
+    })
+    if (!ok) return
+    await act(async () => {
+      await deleteDashboard(d.id)
+      setSelectedId(null)
+      await load()
+    })
+  }
+
+  const removeWidget = async (d: Dash, w: Widget) => {
+    const ok = await confirm({ title: `Remove widget “${w.title}”?`, description: `It is removed from ${d.name} for everyone.`, confirmLabel: 'Remove widget', tone: 'danger' })
+    if (ok) await act(() => persist(d, d.widgets.filter((x) => x.id !== w.id)))
+  }
+
   return (
     <div className="space-y-6">
+      <PageHeader title={t('pages.analytics.title')} description={t('pages.analytics.description')} />
+      {confirmEl}
       {editing && dash && (
         <WidgetEditor
           datasets={datasets}
@@ -127,33 +155,33 @@ export default function AnalyticsDashboardLayer({ onNavigate }: { onNavigate: (t
         />
       )}
 
-      <div className="rounded-xl border border-border bg-card p-6">
-        <div className="mb-2 flex items-center gap-2">
-          <BarChart3 className="h-5 w-5 text-primary" />
-          <Badge variant="outline">Layer 10</Badge>
-        </div>
-        <h2 className="text-2xl font-bold">Analytics</h2>
-        <p className="mt-1 text-muted-foreground">Dashboards built from the datasets your pipelines produce. Pick a measure, group it, filter it; no SQL. Columns masked by a Governance policy are hidden for roles that see masked data.</p>
-      </div>
-
-      {error && <p className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
+      {error && <Notice tone="danger">{error}</Notice>}
 
       {list?.canView && datasets.length > 0 && <AiAsk datasets={datasets.map((d) => d.name)} onAdd={list.canEdit && dash ? (w) => persist(dash, [...dash.widgets, w]) : undefined} />}
 
       {!list ? (
         !error && (
-          <div className="flex items-center justify-center rounded-xl border border-border bg-card p-10 text-muted-foreground">
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading dashboards…
+          <div className="flex items-center justify-center rounded-lg border border-border bg-card p-10 text-muted-foreground" role="status">
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> Loading dashboards…
           </div>
         )
       ) : !list.canView ? (
-        <p className="rounded-xl border border-border bg-card p-6 text-sm text-muted-foreground">Your role can&apos;t see data contents, so dashboards aren&apos;t available. Ask a workspace admin for the Analyst role.</p>
+        <Notice tone="info" live={false}>
+          Your role can&apos;t see data contents, so dashboards aren&apos;t available. Ask a workspace admin for the Analyst role.
+        </Notice>
       ) : datasets.length === 0 ? (
-        <div className="rounded-xl border border-border bg-card p-8 text-center">
-          <Database className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
-          <p className="font-medium">No datasets yet</p>
-          <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">Dashboards read the datasets your pipelines write. Create a pipeline with a &ldquo;Nexus dataset&rdquo; destination and run it once.</p>
-          <Button className="mt-4" onClick={() => onNavigate('pipelines')}>Go to Pipelines</Button>
+        <div className="rounded-lg border border-border bg-card">
+          <EmptyState
+            icon={<Database />}
+            title="No datasets yet"
+            action={
+              <Link href="/dashboard/pipelines" className={buttonVariants()}>
+                Go to Pipelines
+              </Link>
+            }
+          >
+            Dashboards read the datasets your pipelines write. Create a pipeline with a &ldquo;Nexus dataset&rdquo; destination and run it once.
+          </EmptyState>
         </div>
       ) : (
         <div className="grid gap-6 lg:grid-cols-[240px_1fr]">
@@ -163,31 +191,38 @@ export default function AnalyticsDashboardLayer({ onNavigate }: { onNavigate: (t
                 <li key={d.id}>
                   <button
                     onClick={() => setSelectedId(d.id)}
-                    aria-current={d.id === selectedId}
-                    className={`w-full rounded-md px-3 py-2 text-left text-sm ${d.id === selectedId ? 'bg-primary/10 text-primary' : 'hover:bg-muted'}`}
+                    aria-current={d.id === selectedId ? 'true' : undefined}
+                    className={cn(
+                      'w-full rounded-md px-3 py-2 text-left text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
+                      d.id === selectedId ? 'bg-accent text-accent-foreground shadow-[inset_3px_0_0_var(--live)]' : 'hover:bg-muted'
+                    )}
                   >
                     <div className="truncate font-medium">{d.name}</div>
-                    <div className="text-xs text-muted-foreground">{d.widgets.length} widget{d.widgets.length === 1 ? '' : 's'}</div>
+                    <div className="font-mono text-xs text-muted-foreground">{d.widgets.length} widget{d.widgets.length === 1 ? '' : 's'}</div>
                   </button>
                 </li>
               ))}
               {list.dashboards.length === 0 && <li className="px-3 py-2 text-sm text-muted-foreground">No dashboards yet.</li>}
             </ul>
             {list.canEdit && (
-              <form onSubmit={create} className="space-y-2 rounded-lg border border-border p-3">
+              <form onSubmit={create} className="space-y-2 rounded-lg border border-border bg-card p-3">
                 <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="New dashboard name" aria-label="New dashboard name" required />
                 <Button type="submit" size="sm" className="w-full" disabled={busy || !newName.trim()}>
-                  <Plus className="mr-1 h-4 w-4" /> Create dashboard
+                  <Plus className="mr-1 h-4 w-4" aria-hidden /> Create dashboard
                 </Button>
               </form>
             )}
           </aside>
 
           {!dash ? (
-            <div className="rounded-xl border border-border bg-card p-8 text-center text-sm text-muted-foreground">{list.canEdit ? 'Create your first dashboard on the left.' : 'No dashboards in this workspace yet.'}</div>
+            <div className="rounded-lg border border-border bg-card">
+              <EmptyState icon={<LayoutDashboard />} title="No dashboard selected">
+                {list.canEdit ? 'Create your first dashboard on the left.' : 'No dashboards in this workspace yet.'}
+              </EmptyState>
+            </div>
           ) : (
             <section className="min-w-0 space-y-4">
-              <div className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-border bg-card p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-border bg-card p-4">
                 {rename ? (
                   <form
                     className="flex flex-1 flex-wrap gap-2"
@@ -201,39 +236,33 @@ export default function AnalyticsDashboardLayer({ onNavigate }: { onNavigate: (t
                   >
                     <Input value={rename.name} onChange={(e) => setRename({ ...rename, name: e.target.value })} className="max-w-xs" aria-label="Dashboard name" required />
                     <Input value={rename.description} onChange={(e) => setRename({ ...rename, description: e.target.value })} placeholder="Description (optional)" className="max-w-md" aria-label="Dashboard description" />
-                    <Button type="submit" size="sm" disabled={busy}><Save className="mr-1 h-4 w-4" /> Save</Button>
+                    <Button type="submit" size="sm" disabled={busy}><Save className="mr-1 h-4 w-4" aria-hidden /> Save</Button>
                     <Button type="button" size="sm" variant="ghost" onClick={() => setRename(null)}>Cancel</Button>
                   </form>
                 ) : (
                   <div className="min-w-0">
-                    <h3 className="text-lg font-semibold">{dash.name}</h3>
-                    <p className="text-xs text-muted-foreground">{dash.description ? `${dash.description} · ` : ''}updated {when(dash.updatedAt)}</p>
+                    <h2 className="text-lg font-semibold">{dash.name}</h2>
+                    <p className="text-xs text-muted-foreground">
+                      {dash.description ? `${dash.description} · ` : ''}updated <span className="font-mono">{when(dash.updatedAt)}</span>
+                    </p>
                   </div>
                 )}
                 {!rename && (
                   <div className="flex flex-wrap gap-2">
                     <Button size="sm" variant="outline" onClick={() => void loadData(dash.id)} disabled={loadingData || !dash.widgets.length}>
-                      <RefreshCw className={`mr-1 h-4 w-4 ${loadingData ? 'animate-spin' : ''}`} /> Refresh
+                      <RefreshCw className={cn('mr-1 h-4 w-4', loadingData && 'animate-spin')} aria-hidden /> Refresh
                     </Button>
                     {list.canEdit && (
                       <>
                         <Button size="sm" onClick={() => setEditing(newWidget(datasets[0].name))} disabled={dash.widgets.length >= 24}>
-                          <Plus className="mr-1 h-4 w-4" /> Add widget
+                          <Plus className="mr-1 h-4 w-4" aria-hidden /> Add widget
                         </Button>
-                        <Button size="sm" variant="ghost" onClick={() => setRename({ name: dash.name, description: dash.description })} aria-label="Rename dashboard">
-                          <Pencil className="h-4 w-4" />
+                        <Button size="icon-sm" variant="ghost" onClick={() => setRename({ name: dash.name, description: dash.description })} aria-label="Rename dashboard" title="Rename dashboard">
+                          <Pencil className="h-4 w-4" aria-hidden />
                         </Button>
-                        {confirmDelete ? (
-                          <span className="flex items-center gap-1 text-xs">
-                            Delete this dashboard?
-                            <Button size="sm" variant="destructive" disabled={busy} onClick={() => void act(async () => { await deleteDashboard(dash.id); setSelectedId(null); await load() })}>Delete</Button>
-                            <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(false)}>Cancel</Button>
-                          </span>
-                        ) : (
-                          <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(true)} aria-label="Delete dashboard">
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        )}
+                        <Button size="icon-sm" variant="ghost" disabled={busy} onClick={() => void removeDashboard(dash)} aria-label="Delete dashboard" title="Delete dashboard">
+                          <Trash2 className="h-4 w-4" aria-hidden />
+                        </Button>
                       </>
                     )}
                   </div>
@@ -241,39 +270,51 @@ export default function AnalyticsDashboardLayer({ onNavigate }: { onNavigate: (t
               </div>
 
               {dash.widgets.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
-                  {list.canEdit ? 'Empty dashboard. Add a widget: for example "Count rows by department".' : 'This dashboard has no widgets yet.'}
+                <div className="rounded-lg border border-border bg-card">
+                  <EmptyState
+                    icon={<BarChart3 />}
+                    title="No widgets yet"
+                    action={
+                      list.canEdit ? (
+                        <Button onClick={() => setEditing(newWidget(datasets[0].name))}>
+                          <Plus className="mr-1 h-4 w-4" aria-hidden /> Add widget
+                        </Button>
+                      ) : undefined
+                    }
+                  >
+                    {list.canEdit ? 'Empty dashboard. Add a widget: for example "Count rows by department".' : 'This dashboard has no widgets yet.'}
+                  </EmptyState>
                 </div>
               ) : (
                 <div className="grid gap-4 md:grid-cols-2">
                   {dash.widgets.map((w, i) => {
                     const r = results?.[w.id]
                     return (
-                      <article key={w.id} className={`min-w-0 rounded-xl border border-border bg-card p-4 ${w.size === 'wide' ? 'md:col-span-2' : ''}`}>
+                      <article key={w.id} className={cn('min-w-0 rounded-lg border border-border bg-card p-4', w.size === 'wide' && 'md:col-span-2')}>
                         <div className="mb-2 flex items-start justify-between gap-2">
                           <div className="min-w-0">
-                            <h4 className="truncate font-medium">{w.title}</h4>
+                            <h3 className="truncate font-medium">{w.title}</h3>
                             <p className="truncate text-xs text-muted-foreground">
-                              {w.dataset}
+                              <span className="font-mono">{w.dataset}</span>
                               {w.filters.length ? ` · ${w.filters.length} filter${w.filters.length === 1 ? '' : 's'}` : ''}
                               {r?.ok && r.result.lastLoadedAt ? ` · loaded ${freshness(r.result.lastLoadedAt)}` : ''}
                             </p>
                           </div>
                           {list.canEdit && (
                             <div className="flex shrink-0">
-                              <Button size="sm" variant="ghost" onClick={() => move(i, -1)} disabled={busy || i === 0} aria-label={`Move ${w.title} up`}><ArrowUp className="h-4 w-4" /></Button>
-                              <Button size="sm" variant="ghost" onClick={() => move(i, 1)} disabled={busy || i === dash.widgets.length - 1} aria-label={`Move ${w.title} down`}><ArrowDown className="h-4 w-4" /></Button>
-                              <Button size="sm" variant="ghost" onClick={() => setEditing(w)} aria-label={`Edit ${w.title}`}><Pencil className="h-4 w-4" /></Button>
-                              <Button size="sm" variant="ghost" disabled={busy} onClick={() => void act(() => persist(dash, dash.widgets.filter((x) => x.id !== w.id)))} aria-label={`Remove ${w.title}`}><Trash2 className="h-4 w-4" /></Button>
+                              <Button size="icon-sm" variant="ghost" onClick={() => move(i, -1)} disabled={busy || i === 0} aria-label={`Move ${w.title} up`}><ArrowUp className="h-4 w-4" aria-hidden /></Button>
+                              <Button size="icon-sm" variant="ghost" onClick={() => move(i, 1)} disabled={busy || i === dash.widgets.length - 1} aria-label={`Move ${w.title} down`}><ArrowDown className="h-4 w-4" aria-hidden /></Button>
+                              <Button size="icon-sm" variant="ghost" onClick={() => setEditing(w)} aria-label={`Edit ${w.title}`}><Pencil className="h-4 w-4" aria-hidden /></Button>
+                              <Button size="icon-sm" variant="ghost" disabled={busy} onClick={() => void removeWidget(dash, w)} aria-label={`Remove ${w.title}`}><Trash2 className="h-4 w-4" aria-hidden /></Button>
                             </div>
                           )}
                         </div>
                         {!r ? (
-                          <div className="flex h-32 items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading…</div>
+                          <div className="flex h-32 items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> Loading…</div>
                         ) : r.ok ? (
                           <WidgetView widget={w} result={r.result} />
                         ) : (
-                          <p className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{r.message}</p>
+                          <Notice tone="danger">{r.message}</Notice>
                         )}
                       </article>
                     )

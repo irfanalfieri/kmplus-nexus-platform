@@ -123,7 +123,7 @@ async function approveRequestImpl(input: z.input<typeof decisionInput>) {
   }
   await recordAudit(ctx, { action: 'APPROVE', resource: 'pipeline', resourceId: request.pipelineId, changes: { approvalId: request.id, version: request.version, note: data.note || undefined } })
   await tellRequester(ctx, request, true, data.note)
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return { version: request.version }
 }
 
@@ -137,7 +137,7 @@ async function rejectRequestImpl(input: z.input<typeof decisionInput>) {
   await db.update(pipelineApprovals).set({ status: 'rejected', decidedBy: ctx.userId, decisionNote: data.note, decidedAt: new Date() }).where(and(eq(pipelineApprovals.id, request.id), eq(pipelineApprovals.status, 'pending')))
   await recordAudit(ctx, { action: 'REJECT', resource: 'pipeline', resourceId: request.pipelineId, changes: { approvalId: request.id, version: request.version, note: data.note } })
   await tellRequester(ctx, request, false, data.note)
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 async function cancelRequestImpl(rawId: string) {
@@ -147,7 +147,7 @@ async function cancelRequestImpl(rawId: string) {
   if (request.requestedBy !== ctx.userId && ctx.role !== 'admin') throw new Error('Only the requester or an admin can cancel it.')
   await db.update(pipelineApprovals).set({ status: 'cancelled', decidedBy: ctx.userId, decidedAt: new Date() }).where(eq(pipelineApprovals.id, request.id))
   await recordAudit(ctx, { action: 'CANCEL', resource: 'pipeline', resourceId: request.pipelineId, changes: { approvalId: request.id, version: request.version } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 export async function listApprovals(...args: Parameters<typeof listApprovalsImpl>) {

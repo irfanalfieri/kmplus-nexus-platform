@@ -1,0 +1,170 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-12T00:00:00Z",
+  "title": "Design System: KMPlus Nexus",
+  "extensions": {
+    "colorMeta": {
+      "primary": { "role": "primary", "displayName": "KM+ Teal 60", "canonical": "#007d79", "tonalRamp": ["#081a1c", "#022b30", "#004144", "#005d5d", "#007d79", "#009d9a", "#08bdba", "#3ddbd9", "#9ef0f0", "#d9fbfb"] },
+      "live": { "role": "primary", "displayName": "Live Teal 50", "canonical": "#009d9a", "tonalRamp": ["#081a1c", "#022b30", "#004144", "#005d5d", "#007d79", "#009d9a", "#08bdba", "#3ddbd9", "#9ef0f0", "#d9fbfb"] },
+      "live-text": { "role": "primary", "displayName": "Live Teal 70 (words)", "canonical": "#005d5d" },
+      "rail": { "role": "neutral", "displayName": "The Rail (Teal 100, KM+ anchor)", "canonical": "#081a1c", "tonalRamp": ["#081a1c", "#022b30", "#004144", "#005d5d", "#007d79", "#009d9a", "#08bdba", "#3ddbd9", "#9ef0f0", "#d9fbfb"] },
+      "rail-signal": { "role": "primary", "displayName": "Rail Signal (Teal 30)", "canonical": "#3ddbd9" },
+      "info": { "role": "secondary", "displayName": "KM+ Cyan 60", "canonical": "#0072c3", "tonalRamp": ["#061727", "#012749", "#003a6d", "#00539a", "#0072c3", "#1192e8", "#33b1ff", "#82cfff", "#bae6ff", "#e5f6ff"] },
+      "held": { "role": "tertiary", "displayName": "KM+ Purple 60 (held)", "canonical": "#8a3ffc", "tonalRamp": ["#1c0f30", "#31135e", "#491d8b", "#6929c4", "#8a3ffc", "#a56eff", "#be95ff", "#d4bbff", "#e8daff", "#f6f2ff"] },
+      "held-text": { "role": "tertiary", "displayName": "Purple 70 (words)", "canonical": "#6929c4" },
+      "danger": { "role": "state", "displayName": "Tripped Red (Carbon family, outside the KM+ guide)", "canonical": "#da1e28", "tonalRamp": ["#a2191f", "#da1e28", "#fa4d56", "#ff8389", "#fff1f1"] },
+      "warning": { "role": "state", "displayName": "Caution Yellow (Carbon family, outside the KM+ guide)", "canonical": "#b28600", "tonalRamp": ["#8e6a00", "#b28600", "#f1c21b", "#fcf4d6"] },
+      "paused": { "role": "state", "displayName": "Paused Gray 50", "canonical": "#878d96" },
+      "board": { "role": "neutral", "displayName": "Board (Gray 10)", "canonical": "#f2f4f8", "tonalRamp": ["#121619", "#21272a", "#343a3f", "#4d5358", "#697077", "#878d96", "#a2a9b0", "#c1c7cd", "#dde1e6", "#f2f4f8"] },
+      "panel": { "role": "neutral", "displayName": "Panel (white)", "canonical": "#ffffff" },
+      "ink": { "role": "neutral", "displayName": "Ink (Gray 100)", "canonical": "#121619" },
+      "muted-ink": { "role": "neutral", "displayName": "Muted Ink (Gray 70)", "canonical": "#4d5358" },
+      "rule": { "role": "neutral", "displayName": "Rule (Gray 20)", "canonical": "#dde1e6" }
+    },
+    "typographyMeta": {
+      "headline": { "displayName": "Page title", "purpose": "PageHeader h1 only; one per screen." },
+      "title": { "displayName": "Panel / dialog title", "purpose": "SettingsPanel h2, dialog titles, EmptyState titles." },
+      "body": { "displayName": "Body", "purpose": "All UI text and table cells (14px)." },
+      "body-strong": { "displayName": "Body strong", "purpose": "Buttons, StateMark words, current rail item, Notice titles." },
+      "brand": { "displayName": "Brand", "purpose": "'Nexus' beside the KM+ wordmark in the rail only." },
+      "data": { "displayName": "Data (Plex Mono)", "purpose": "Summary lines, FlowLine bus names, times, ids, counts; tabular figures." },
+      "label": { "displayName": "Label (Plex Mono caps)", "purpose": "Table column heads, menu group labels, rail group headings. Never a kicker above a title." },
+      "readout": { "displayName": "Readout (Plex Mono)", "purpose": "Large numeric readouts." }
+    },
+    "shadows": [
+      { "name": "raised", "value": "0 8px 24px -6px rgb(8 26 28 / 0.22), 0 2px 6px -2px rgb(8 26 28 / 0.12)", "purpose": "The one layering shadow: dialogs, ConfirmDialog, menus, toasts, mobile rail drawer. Nothing else." },
+      { "name": "teal-edge", "value": "inset 3px 0 0 var(--live)", "purpose": "Selection mark (not elevation) on the selected row/list item, with the accent fill." },
+      { "name": "backdrop", "value": "rgb(8 26 28 / 0.45)", "purpose": "Dialog backdrop (Teal 100 at 45%; 50% for the drawer; black 60% in dark)." }
+    ],
+    "motion": [
+      { "name": "flow-energise", "value": "repeating-linear-gradient(90deg, currentColor 0 9px, color-mix(in srgb, currentColor 35%, transparent) 9px 18px); background-position 0 -> 18px, 0.9s linear infinite", "purpose": "The one authored motion: a running FlowLine energises." },
+      { "name": "dialog", "value": "150ms ease-out, opacity + scale(0.98)", "purpose": "Dialog and ConfirmDialog enter/exit." },
+      { "name": "menu", "value": "100ms, opacity + scale(0.98)", "purpose": "Menu popups." },
+      { "name": "drawer", "value": "200ms ease-out, translateX(-100%)", "purpose": "Mobile rail drawer." },
+      { "name": "reduced-motion", "value": "animation/transition-duration 0.01ms !important", "purpose": "prefers-reduced-motion: reduce stops all motion." }
+    ],
+    "breakpoints": [
+      { "name": "sm", "value": "640px" },
+      { "name": "md", "value": "768px" },
+      { "name": "lg", "value": "1024px" },
+      { "name": "content-max", "value": "1600px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one teal action per view.",
+      "html": "<button class=\"ds-btn-primary\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" aria-hidden=\"true\"><path d=\"M12 5v14M5 12h14\"/></svg>New pipeline</button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border: 1px solid transparent; border-radius: 2px; background: var(--primary, #007d79); color: var(--primary-foreground, #fff); font: 500 14px/1 'IBM Plex Sans', system-ui, sans-serif; cursor: pointer; transition: background-color .15s, translate .15s; } .ds-btn-primary:hover { background: color-mix(in srgb, var(--primary, #007d79) 82%, black); } .ds-btn-primary:active { translate: 0 1px; } .ds-btn-primary:focus-visible { outline: 2px solid var(--ring, #007d79); outline-offset: 2px; }"
+    },
+    {
+      "name": "Outline Button",
+      "kind": "button",
+      "refersTo": "button-outline",
+      "description": "Secondary and row actions.",
+      "html": "<button class=\"ds-btn-outline\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" aria-hidden=\"true\"><path d=\"M6 4l14 8-14 8z\"/></svg>Run now</button>",
+      "css": ".ds-btn-outline { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border: 1px solid color-mix(in srgb, var(--input, #878d96) 60%, transparent); border-radius: 2px; background: var(--card, #fff); color: var(--foreground, #121619); font: 500 14px/1 'IBM Plex Sans', system-ui, sans-serif; cursor: pointer; transition: background-color .15s; } .ds-btn-outline:hover { background: var(--muted, #eef1f5); } .ds-btn-outline:focus-visible { outline: 2px solid var(--ring, #007d79); outline-offset: 2px; }"
+    },
+    {
+      "name": "Danger Confirm Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "Confirm button of a destructive ConfirmDialog only; names the action.",
+      "html": "<button class=\"ds-btn-danger\">Delete pipeline</button>",
+      "css": ".ds-btn-danger { height: 32px; padding: 0 10px; border: 0; border-radius: 2px; background: var(--danger, #da1e28); color: #fff; font: 500 14px/1 'IBM Plex Sans', system-ui, sans-serif; cursor: pointer; } .ds-btn-danger:hover { background: var(--danger-text, #a2191f); } .ds-btn-danger:focus-visible { outline: 2px solid var(--ring, #007d79); outline-offset: 2px; }"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "32px field, Gray 50 stroke, teal focus outline.",
+      "html": "<label class=\"ds-field\"><span>Pipeline name</span><input class=\"ds-input\" placeholder=\"SAP employees → Employee\" /></label>",
+      "css": ".ds-field { display: grid; gap: 6px; font: 500 14px 'IBM Plex Sans', system-ui, sans-serif; color: var(--foreground, #121619); } .ds-input { height: 32px; padding: 4px 10px; border: 1px solid var(--input, #878d96); border-radius: 2px; background: transparent; color: inherit; font: 400 14px 'IBM Plex Sans', system-ui, sans-serif; caret-color: var(--primary, #007d79); } .ds-input::placeholder { color: var(--muted-foreground, #4d5358); } .ds-input:focus-visible { outline: 2px solid var(--ring, #007d79); outline-offset: 2px; } .ds-input[aria-invalid=true] { border-color: var(--destructive, #da1e28); }"
+    },
+    {
+      "name": "Rail Navigation",
+      "kind": "nav",
+      "refersTo": "rail",
+      "description": "Teal 100 rail; mono group heads; current item with teal edge.",
+      "html": "<nav class=\"ds-rail\" aria-label=\"Primary\"><h2>Build</h2><a href=\"#\">Data sources</a><a href=\"#\" aria-current=\"page\">Pipelines</a><h2>Operate</h2><a href=\"#\">Data quality <span class=\"ds-rail-count\">21</span></a></nav>",
+      "css": ".ds-rail { display: flex; flex-direction: column; gap: 1px; width: 240px; padding: 12px; background: var(--sidebar, #081a1c); color: var(--sidebar-foreground, #c1c7cd); font: 400 14px 'IBM Plex Sans', system-ui, sans-serif; } .ds-rail h2 { margin: 12px 0 4px; padding: 0 10px; font: 500 11px 'IBM Plex Mono', monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--sidebar-muted, #878d96); } .ds-rail a { position: relative; display: flex; align-items: center; height: 36px; padding: 0 10px; border-radius: 1.2px; color: inherit; text-decoration: none; } .ds-rail a:hover { background: var(--sidebar-accent, #022b30); color: var(--sidebar-accent-foreground, #f2f4f8); } .ds-rail a[aria-current=page] { background: var(--sidebar-accent, #022b30); color: var(--sidebar-accent-foreground, #f2f4f8); font-weight: 500; } .ds-rail a[aria-current=page]::before { content: ''; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px; background: var(--sidebar-primary, #3ddbd9); } .ds-rail a:focus-visible { outline: 2px solid var(--sidebar-ring, #3ddbd9); outline-offset: -2px; } .ds-rail-count { margin-left: auto; padding: 0 6px; border-radius: 1.2px; background: #fa4d56; color: #121619; font: 500 11px/18px 'IBM Plex Mono', monospace; }"
+    },
+    {
+      "name": "FlowLine",
+      "kind": "custom",
+      "refersTo": "flowline",
+      "description": "Signature single-line diagram: bus ─ breaker ─ bus, coloured by state; running energises.",
+      "html": "<div class=\"ds-flows\"><span class=\"ds-flow ds-live\"><i class=\"bus\"></i><b>HR exports</b><i class=\"line\"></i><i class=\"brk\"></i><i class=\"line\"></i><b>employees</b><i class=\"bus\"></i></span><span class=\"ds-flow ds-tripped\"><i class=\"bus\"></i><b>SAP HCM</b><i class=\"line\"></i><i class=\"brk\"></i><i class=\"line\"></i><b>employees_sap</b><i class=\"bus\"></i></span><span class=\"ds-flow ds-running\"><i class=\"bus\"></i><b>Talenta</b><i class=\"line en\"></i><i class=\"brk\"></i><i class=\"line en\"></i><b>positions</b><i class=\"bus\"></i></span><span class=\"ds-flow ds-paused\"><i class=\"bus\"></i><b>AD users</b><i class=\"line\"></i><i class=\"brk open\"></i><i class=\"line dash\"></i><b>ad_users</b><i class=\"bus\"></i></span></div>",
+      "css": ".ds-flows { display: grid; gap: 14px; width: 420px; } .ds-flow { display: flex; align-items: center; font: 400 12px 'IBM Plex Mono', monospace; } .ds-flow b { font-weight: 400; padding: 0 6px; color: var(--muted-foreground, #4d5358); white-space: nowrap; } .ds-flow i { display: inline-block; } .ds-flow .bus { width: 6px; height: 16px; border: 2px solid currentColor; box-sizing: border-box; } .ds-flow .line { flex: 1; min-width: 16px; height: 2px; background: currentColor; } .ds-flow .brk { width: 12px; height: 12px; margin: 0 2px; border: 2px solid currentColor; border-radius: 1px; background: currentColor; box-sizing: border-box; } .ds-flow .brk.open { background: transparent; } .ds-flow .line.dash { background: repeating-linear-gradient(90deg, currentColor 0 5px, transparent 5px 9px); } .ds-flow .line.en { background: repeating-linear-gradient(90deg, currentColor 0 9px, color-mix(in srgb, currentColor 35%, transparent) 9px 18px); animation: ds-energise .9s linear infinite; } @keyframes ds-energise { to { background-position: 18px 0; } } @media (prefers-reduced-motion: reduce) { .ds-flow .line.en { animation: none; } } .ds-live, .ds-running { color: var(--live, #009d9a); } .ds-tripped { color: var(--danger, #da1e28); } .ds-paused { color: var(--paused, #878d96); }"
+    },
+    {
+      "name": "StateMark",
+      "kind": "chip",
+      "refersTo": "statemark",
+      "description": "State as breaker + words, never colour alone.",
+      "html": "<div class=\"ds-states\"><span class=\"ds-sm ds-sm-live\"><i></i>Succeeded</span><span class=\"ds-sm ds-sm-tripped\"><i></i>8 held</span><span class=\"ds-sm ds-sm-held\"><i></i>Awaiting approval</span><span class=\"ds-sm ds-sm-paused\"><i></i>Paused</span></div>",
+      "css": ".ds-states { display: flex; gap: 18px; flex-wrap: wrap; } .ds-sm { display: inline-flex; align-items: center; gap: 8px; font: 500 14px 'IBM Plex Sans', system-ui, sans-serif; white-space: nowrap; } .ds-sm i { width: 10px; height: 10px; border: 2px solid currentColor; border-radius: 1px; background: currentColor; box-sizing: border-box; } .ds-sm-live { color: var(--live-text, #005d5d); } .ds-sm-live i { color: var(--live, #009d9a); } .ds-sm-tripped { color: var(--danger-text, #a2191f); } .ds-sm-tripped i { color: var(--danger, #da1e28); } .ds-sm-held { color: var(--held-text, #6929c4); } .ds-sm-held i { color: var(--held, #8a3ffc); } .ds-sm-paused { color: var(--muted-foreground, #4d5358); } .ds-sm-paused i { color: var(--paused, #878d96); background: transparent; }"
+    },
+    {
+      "name": "Notice (danger)",
+      "kind": "card",
+      "refersTo": "notice-danger",
+      "description": "Inline message: icon + words, soft state fill, announced.",
+      "html": "<div class=\"ds-notice\" role=\"alert\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" aria-hidden=\"true\"><path d=\"M7.9 2h8.2L22 7.9v8.2L16.1 22H7.9L2 16.1V7.9z\"/><path d=\"M12 8v4M12 16h.01\"/></svg><div><p>Why it was held</p><span>email is required</span></div></div>",
+      "css": ".ds-notice { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--danger, #da1e28) 40%, transparent); border-radius: 1.6px; background: var(--danger-soft, #fff1f1); color: var(--foreground, #121619); font: 400 14px/20px 'IBM Plex Sans', system-ui, sans-serif; max-width: 420px; } .ds-notice svg { margin-top: 2px; flex-shrink: 0; color: var(--danger-text, #a2191f); } .ds-notice p { margin: 0; font-weight: 500; }"
+    },
+    {
+      "name": "Data Table",
+      "kind": "card",
+      "refersTo": "table-header",
+      "description": "Flat panel table: mono caps heads, mono right-aligned numbers, teal-edge selection.",
+      "html": "<table class=\"ds-table\"><thead><tr><th>Dataset</th><th class=\"r\">Rows</th><th>Loaded</th></tr></thead><tbody><tr><td class=\"m\">employees</td><td class=\"r m\">144</td><td class=\"m\">12 Oct, 17:00 WIB</td></tr><tr aria-selected=\"true\"><td class=\"m\">ad_users</td><td class=\"r m\">144</td><td class=\"m\">12 Oct, 17:00 WIB</td></tr></tbody></table>",
+      "css": ".ds-table { width: 440px; border-collapse: collapse; background: var(--card, #fff); border: 1px solid var(--border, #dde1e6); font: 400 14px 'IBM Plex Sans', system-ui, sans-serif; color: var(--foreground, #121619); font-variant-numeric: tabular-nums; } .ds-table th { height: 36px; padding: 0 12px; text-align: left; background: color-mix(in srgb, var(--muted, #eef1f5) 60%, transparent); color: var(--muted-foreground, #4d5358); font: 500 11px 'IBM Plex Mono', monospace; letter-spacing: .025em; text-transform: uppercase; border-bottom: 1px solid var(--border, #dde1e6); } .ds-table td { padding: 10px 12px; border-bottom: 1px solid var(--border, #dde1e6); } .ds-table tr:last-child td { border-bottom: 0; } .ds-table .r { text-align: right; } .ds-table .m { font-family: 'IBM Plex Mono', monospace; font-size: 13px; } .ds-table tbody tr:hover { background: color-mix(in srgb, var(--muted, #eef1f5) 50%, transparent); } .ds-table tr[aria-selected=true] { background: var(--accent, #e6f7f7); box-shadow: inset 3px 0 0 var(--live, #009d9a); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Substation Mimic Panel",
+    "overview": "Nexus is drawn like a PLN control-room single-line diagram. Every pipeline is one line you can read like a breaker: source bus, breaker, destination bus. Its state is written as a mark plus words. The board is a flat, cool gray-10 ground with white panels and 1px gray-20 rules. A rail in the darkest KM+ teal runs down the left edge. Colour is reserved for state: teal is live and the primary action, red is tripped, purple is held for approval, hollow gray is paused or idle, and cyan is information and links. Everything else is ink on paper.\n\nThe density is operator density, built for long desk sessions: 14px body text, 32px controls, 36px rail rows, and tables as the main surface rather than cards. Numbers, ids, times, column names and summaries are set in IBM Plex Mono with tabular figures, so the board reads like an instrument. Users choose light or dark (the default follows the system), and both themes are fully specified. The rail stays teal-100 in both.\n\nThe system refuses the admin template of KPI cards with colour pills scattered on white. Depth is not decoration. The board is flat, and only dialogs, menus and toasts float above it.",
+    "keyCharacteristics": [
+      "A flat gray-10 board with flat white panels and 1px gray-20 rules, cornered at 2px.",
+      "A teal-100 rail (`#081a1c`), the darkest step of the KM+ anchor colour, in both themes.",
+      "State is always a mark plus words: FlowLine, StateMark and Breaker. Colour is never used alone.",
+      "IBM Plex Sans for UI text and IBM Plex Mono for data, labels and summaries.",
+      "One authored motion: a running line energises.",
+      "One layering rule: dialogs, menus and toasts share one shadow."
+    ],
+    "rules": [
+      { "name": "The Anchor Rail Rule", "body": "The rail is Teal 100 (`#081a1c`), not a neutral Gray 100. The KM+ colour guide makes Cool Green the anchor of every KM+ identity, so the shell carries the anchor. It stays Teal 100 in light and dark.", "section": "colors" },
+      { "name": "The State-Only Colour Rule", "body": "Hue on the board means state. Teal means live or the primary action, red means tripped, purple means held, hollow gray means paused or idle, cyan means info or link, and yellow means warning. Nothing is coloured for decoration.", "section": "colors" },
+      { "name": "The Mark / Text / Soft Rule", "body": "Every state has three tokens: `x` is the mark (lines, dots, icons, at least 3:1), `x-text` is the words (at least 4.5:1 on panels), and `x-soft` is the quiet fill behind a Notice or selection. Words in a state colour always use `x-text`.", "section": "colors" },
+      { "name": "The Verified Pairs Rule", "body": "Text colours are chosen from pairs measured in the build. In light mode: Teal 60 on white 4.99:1, Teal 70 on white 7.71:1, Gray 70 on Gray 10 7.08:1, Cyan 60 on white 5.01:1, red `#da1e28` on white 5.00:1, `#a2191f` 7.79:1, Purple 70 7.74:1, `#8e6a00` 4.99:1. In dark mode: Gray 40 on `#1b2023` ≈6.4:1, Teal 40 on Teal 100 7.66:1, Teal 30 on Teal 100 10.5:1, and `#ff8389` / Purple 40 / Cyan 40 on Gray 90 ≈6.4:1. A new text pair must be measured to reach WCAG 2.2 AA before it ships.", "section": "colors" },
+      { "name": "The Mono Means Data Rule", "body": "Anything a person might compare or copy (counts, times, ids, column names, the summary line) is set in Plex Mono with tabular figures. Every table sets `tabular-nums`.", "section": "typography" },
+      { "name": "The One Layer Rule", "body": "Only dialogs, menus and toasts float, and all three use the Raised shadow. If a new surface seems to need lift, make it a dialog or flatten it.", "section": "elevation" },
+      { "name": "The Mark Plus Words Rule", "body": "A state is never shown by colour alone. It is always a breaker or icon plus a word.", "section": "components" },
+      { "name": "The Energise Rule", "body": "The only authored motion is `flow-energise`: on a running line, a 9px-on, 9px-at-35% dash pattern slides 18px every 0.9s, linear and infinite. Interface transitions stay at or under 200ms. `prefers-reduced-motion` reduces all animation and transition to 0.01ms.", "section": "components" }
+    ],
+    "dos": [
+      "Do use tokens only: `bg-card`, `text-muted-foreground`, `text-live-text`, `border-border`, `bg-sidebar`, `text-chart-1` and so on. New colours enter through `app/globals.css` in light, `.dark` and `prefers-color-scheme` blocks together.",
+      "Do open every screen with PageHeader as its single h1, with the purpose in one line and the summary in mono.",
+      "Do give each view one primary (teal) action. Use outline for secondary and row actions.",
+      "Do route every destructive or outward action (delete, publish, send, revoke, replay) through Modal, ConfirmDialog or `useConfirm`, with a confirm button that names the action. Editors in a Modal pass `dirty`.",
+      "Do use Notice for inline messages, EmptyState for empty places, and Table or DataTable for lists, with numbers in mono and right-aligned.",
+      "Do write state as FlowLine, StateMark or Breaker: a mark plus words, with words in the `-text` token.",
+      "Do make every screen a route with `generateMetadata`, and put every user-facing string in `lib/i18n/messages/en.ts` (the source of truth), with `id.ts` in the same shape, including plurals.",
+      "Do meet WCAG 2.2 AA: visible labels on fields, `aria-label` on icon buttons, keyboard-operable rows and controls, the 2px focus outline, and text pairs taken from the Verified Pairs list.",
+      "Do keep the rail Teal 100 in both themes, and keep corners at 2px."
+    ],
+    "donts": [
+      "Don't use raw Tailwind palette classes (`bg-red-500`, `text-gray-600`) or raw hex in components. The KM+ wordmark's Teal 30 plus is the single brand-asset exception.",
+      "Don't put a drop shadow on anything that sits on the board. Only dialogs, menus and toasts are Raised.",
+      "Don't use rounded corners above 2px. Reserve `rounded-full` for avatars and thin progress tracks.",
+      "Don't show state as a coloured pill or colour alone.",
+      "Don't add a second ambient animation. Spinners for loading and `flow-energise` on running lines are the motion vocabulary.",
+      "Don't build screens as grids of KPI cards. The board is lines and tables.",
+      "Don't put a mono or uppercase kicker or eyebrow above a page or panel title.",
+      "Don't colour anything with red or yellow except tripped, danger and warning states. They are Carbon state colours, not KM+ brand colours."
+    ]
+  }
+}

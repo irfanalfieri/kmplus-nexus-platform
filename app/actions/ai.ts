@@ -49,7 +49,7 @@ async function setAiProviderImpl(input: z.input<typeof providerInput>) {
   const after = { provider: data.provider, agentId: data.provider === 'agent' ? data.agentId : null }
   await db.update(workspaces).set({ aiProvider: after.provider, aiAgentId: after.agentId, updatedAt: new Date() }).where(eq(workspaces.id, ctx.workspaceId))
   await recordAudit(ctx, { action: 'UPDATE_POLICY', resource: 'workspace', resourceId: ctx.workspaceId, changes: { aiProvider: after.provider }, diff: diffObjects(before ?? {}, after) })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 // ── Mapping suggestions ──────────────────────────────────────────────────────

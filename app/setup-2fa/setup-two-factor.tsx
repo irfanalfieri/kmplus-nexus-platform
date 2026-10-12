@@ -2,12 +2,13 @@
 
 import { useState } from 'react'
 import QRCode from 'qrcode'
-import { Check, Copy, Download, Loader2, ShieldCheck } from 'lucide-react'
+import { Check, Copy, Download, Loader2 } from 'lucide-react'
 import { authClient } from '@/lib/auth-client'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Notice } from '@/components/ui/notice'
+import { AuthShell } from '@/components/auth-form'
 
 type Step = 'password' | 'scan' | 'codes'
 
@@ -69,96 +70,91 @@ export default function SetupTwoFactor({ email, next }: { email: string; next: s
   }
 
   return (
-    <main className="flex min-h-svh items-center justify-center bg-background px-4 py-8">
-      <Card className="w-full max-w-md space-y-5 p-6">
-        <div>
-          <div className="mb-2 flex items-center gap-2 text-primary">
-            <ShieldCheck className="h-5 w-5" />
-            <span className="text-xs font-medium uppercase tracking-wide">Step {step === 'password' ? 1 : step === 'scan' ? 2 : 3} of 3</span>
+    <AuthShell className="max-w-md space-y-5">
+      <div>
+        <p className="mb-2 font-mono text-xs tracking-wide text-muted-foreground uppercase">Step {step === 'password' ? 1 : step === 'scan' ? 2 : 3} of 3</p>
+        <h1 className="text-xl font-semibold tracking-tight">Set up two-factor authentication</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          KMPlus Nexus requires a code from an authenticator app (Google Authenticator, Microsoft Authenticator, 1Password, Authy, …) every time you sign in.
+        </p>
+      </div>
+
+      {step === 'password' && (
+        <form onSubmit={start} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="password">Confirm your password</Label>
+            <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete="current-password" autoFocus />
+            <p className="text-xs text-muted-foreground">Signed in as {email}.</p>
           </div>
-          <h1 className="text-2xl font-semibold tracking-tight">Set up two-factor authentication</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            KMPlus Nexus requires a code from an authenticator app (Google Authenticator, Microsoft Authenticator, 1Password, Authy, …) every time you sign in.
+          {error && <Notice tone="danger">{error}</Notice>}
+          <Button type="submit" size="lg" className="w-full" disabled={busy || !password}>
+            {busy && <Loader2 className="animate-spin" aria-hidden />}Continue
+          </Button>
+        </form>
+      )}
+
+      {step === 'scan' && (
+        <form onSubmit={confirm} className="space-y-4">
+          <div className="space-y-2 text-sm">
+            <p>1. Open your authenticator app and scan this QR code.</p>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={qr} alt="QR code for your authenticator app" width={220} height={220} className="mx-auto rounded-md border border-border bg-white p-2" />
+            <details className="text-xs text-muted-foreground">
+              <summary className="cursor-pointer text-info-text">Can&apos;t scan? Enter this key instead</summary>
+              <code className="mt-2 block rounded-sm bg-muted p-2 font-mono break-all text-foreground">{secret}</code>
+            </details>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="code">2. Enter the 6-digit code it shows</Label>
+            <Input
+              id="code"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              pattern="[0-9 ]{6,7}"
+              maxLength={7}
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              placeholder="123 456"
+              required
+              autoFocus
+              className="text-center font-mono text-lg tracking-widest"
+            />
+          </div>
+          {error && <Notice tone="danger">{error}</Notice>}
+          <Button type="submit" size="lg" className="w-full" disabled={busy || code.replace(/\s/g, '').length !== 6}>
+            {busy && <Loader2 className="animate-spin" aria-hidden />}Verify and turn on
+          </Button>
+        </form>
+      )}
+
+      {step === 'codes' && (
+        <div className="space-y-4">
+          <p className="text-sm">
+            Two-factor authentication is on. Save these <span className="font-medium">backup codes</span>: if you lose your phone, each one lets you sign in once. They are shown only now.
           </p>
-        </div>
-
-        {step === 'password' && (
-          <form onSubmit={start} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="password">Confirm your password</Label>
-              <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete="current-password" autoFocus />
-              <p className="text-xs text-muted-foreground">Signed in as {email}.</p>
-            </div>
-            {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
-            <Button type="submit" className="w-full" disabled={busy || !password}>
-              {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Continue
+          <ul className="grid grid-cols-2 gap-2 rounded-md border border-border bg-muted p-3 font-mono text-sm" aria-label="Backup codes">
+            {backupCodes.map((c) => (
+              <li key={c}>{c}</li>
+            ))}
+          </ul>
+          <div className="flex gap-2">
+            <Button type="button" variant="outline" className="flex-1" onClick={() => void copyCodes()}>
+              {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
+              {copied ? 'Copied' : 'Copy'}
             </Button>
-          </form>
-        )}
-
-        {step === 'scan' && (
-          <form onSubmit={confirm} className="space-y-4">
-            <div className="space-y-2 text-sm">
-              <p>1. Open your authenticator app and scan this QR code.</p>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={qr} alt="QR code for your authenticator app" width={220} height={220} className="mx-auto rounded-md border border-border bg-white p-2" />
-              <details className="text-xs text-muted-foreground">
-                <summary className="cursor-pointer">Can&apos;t scan? Enter this key instead</summary>
-                <code className="mt-2 block break-all rounded bg-muted p-2 font-mono text-foreground">{secret}</code>
-              </details>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="code">2. Enter the 6-digit code it shows</Label>
-              <Input
-                id="code"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                pattern="[0-9 ]{6,7}"
-                maxLength={7}
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                placeholder="123 456"
-                required
-                autoFocus
-                className="text-center font-mono text-lg tracking-widest"
-              />
-            </div>
-            {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
-            <Button type="submit" className="w-full" disabled={busy || code.replace(/\s/g, '').length !== 6}>
-              {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Verify and turn on
-            </Button>
-          </form>
-        )}
-
-        {step === 'codes' && (
-          <div className="space-y-4">
-            <p className="text-sm">
-              Two-factor authentication is on. Save these <span className="font-medium">backup codes</span>: if you lose your phone, each one lets you sign in once. They are shown only now.
-            </p>
-            <ul className="grid grid-cols-2 gap-2 rounded-md border border-border bg-muted/40 p-3 font-mono text-sm">
-              {backupCodes.map((c) => (
-                <li key={c}>{c}</li>
-              ))}
-            </ul>
-            <div className="flex gap-2">
-              <Button type="button" variant="outline" className="flex-1" onClick={() => void copyCodes()}>
-                {copied ? <Check className="mr-1 h-4 w-4" /> : <Copy className="mr-1 h-4 w-4" />}
-                {copied ? 'Copied' : 'Copy'}
-              </Button>
-              <Button type="button" variant="outline" className="flex-1" onClick={downloadCodes}>
-                <Download className="mr-1 h-4 w-4" /> Download
-              </Button>
-            </div>
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={saved} onChange={(e) => setSaved(e.target.checked)} className="h-4 w-4" />
-              I saved my backup codes
-            </label>
-            <Button className="w-full" disabled={!saved} onClick={() => window.location.assign(next)}>
-              Continue to KMPlus Nexus
+            <Button type="button" variant="outline" className="flex-1" onClick={downloadCodes}>
+              <Download aria-hidden /> Download
             </Button>
           </div>
-        )}
-      </Card>
-    </main>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={saved} onChange={(e) => setSaved(e.target.checked)} className="size-4 accent-primary" />
+            I saved my backup codes
+          </label>
+          <Button size="lg" className="w-full" disabled={!saved} onClick={() => window.location.assign(next)}>
+            Continue to KMPlus Nexus
+          </Button>
+        </div>
+      )}
+    </AuthShell>
   )
 }

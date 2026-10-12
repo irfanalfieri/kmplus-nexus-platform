@@ -3,12 +3,15 @@
 import { useState } from 'react'
 import { Loader2, Sparkles, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Notice } from '@/components/ui/notice'
 import { suggestMapping } from '@/lib/actions/ai'
 import { DOMAIN_ENTITIES } from '@/lib/domain/model'
 import type { MapStep } from '@/lib/pipelines/definition'
 import { useAiStatus } from './use-ai'
 
 type Suggestion = Awaited<ReturnType<typeof suggestMapping>>['suggestions'][number]
+
+const selectClass = 'h-7 rounded-md border border-input bg-card px-1.5 text-xs outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-60'
 
 /**
  * "Suggest with AI" for a Map step (#14): the model proposes source → target
@@ -44,16 +47,16 @@ export function AiMappingButton({ columns, mapped, source, onAccept }: { columns
   if (!open) {
     return (
       <Button size="sm" variant="outline" onClick={() => setOpen(true)} disabled={!columns.length} title="Ask the AI model to propose mappings for the unmapped columns">
-        <Sparkles className="mr-1 h-4 w-4" /> Suggest with AI
+        <Sparkles aria-hidden /> Suggest with AI
       </Button>
     )
   }
   return (
-    <div className="w-full space-y-2 rounded-md border border-primary/30 bg-primary/5 p-2 text-xs">
+    <div className="w-full space-y-2 rounded-md border border-border bg-muted/50 p-2 text-xs" role="group" aria-label="AI mapping suggestions">
       <div className="flex flex-wrap items-center gap-2">
-        <Sparkles className="h-4 w-4 text-primary" />
-        <span>Map to</span>
-        <select className="h-7 rounded-md border border-input bg-background px-1" value={entity} onChange={(e) => setEntity(e.target.value)} aria-label="Target entity">
+        <Sparkles className="size-4 text-primary" aria-hidden />
+        <label htmlFor="ai-map-entity">Map to</label>
+        <select id="ai-map-entity" className={selectClass} value={entity} onChange={(e) => setEntity(e.target.value)}>
           {DOMAIN_ENTITIES.map((e) => (
             <option key={e.name} value={e.name}>
               {e.label} fields
@@ -61,14 +64,14 @@ export function AiMappingButton({ columns, mapped, source, onAccept }: { columns
           ))}
           <option value="">clear names (no entity)</option>
         </select>
-        <Button size="sm" className="h-7" onClick={() => void run()} disabled={busy}>
-          {busy && <Loader2 className="mr-1 h-3 w-3 animate-spin" />} {busy ? 'Thinking…' : 'Suggest'}
+        <Button size="sm" onClick={() => void run()} disabled={busy}>
+          {busy && <Loader2 className="animate-spin" aria-hidden />} {busy ? 'Thinking…' : 'Suggest'}
         </Button>
-        <Button size="sm" variant="ghost" className="ml-auto h-7" onClick={() => setOpen(false)} aria-label="Close AI suggestions">
-          <X className="h-4 w-4" />
+        <Button size="icon-sm" variant="ghost" className="ml-auto" onClick={() => setOpen(false)} aria-label="Close AI suggestions">
+          <X aria-hidden />
         </Button>
       </div>
-      {error && <p className="text-destructive">{error}</p>}
+      {error && <Notice tone="danger">{error}</Notice>}
       {suggestions && (
         <>
           {suggestions.length === 0 ? (
@@ -78,10 +81,16 @@ export function AiMappingButton({ columns, mapped, source, onAccept }: { columns
               {suggestions.map((s, i) => (
                 <li key={`${s.from}-${s.to}`}>
                   <label className="flex items-start gap-2">
-                    <input type="checkbox" className="mt-0.5" checked={picked.has(i)} onChange={(e) => setPicked((p) => (e.target.checked ? new Set(p).add(i) : new Set([...p].filter((x) => x !== i))))} />
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                      checked={picked.has(i)}
+                      onChange={(e) => setPicked((p) => (e.target.checked ? new Set(p).add(i) : new Set([...p].filter((x) => x !== i))))}
+                    />
                     <span>
-                      <span className="font-mono">{s.from}</span> → <span className="font-mono font-medium">{s.to}</span> <span className="text-muted-foreground">({s.type})</span>
-                      {s.transforms.length > 0 && <span className="text-muted-foreground"> · {s.transforms.map((t) => `${t.fn}${t.args.length ? `(${t.args.join(', ')})` : ''}`).join(' → ')}</span>}
+                      <span className="font-mono">{s.from}</span> <span aria-hidden>→</span>
+                      <span className="sr-only">to</span> <span className="font-mono font-medium">{s.to}</span> <span className="text-muted-foreground">({s.type})</span>
+                      {s.transforms.length > 0 && <span className="font-mono text-muted-foreground"> · {s.transforms.map((t) => `${t.fn}${t.args.length ? `(${t.args.join(', ')})` : ''}`).join(' → ')}</span>}
                       {s.reason && <span className="block text-muted-foreground">{s.reason}</span>}
                     </span>
                   </label>
@@ -89,10 +98,9 @@ export function AiMappingButton({ columns, mapped, source, onAccept }: { columns
               ))}
             </ul>
           )}
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Button
               size="sm"
-              className="h-7"
               disabled={!picked.size}
               onClick={() => {
                 onAccept(suggestions.filter((_, i) => picked.has(i)).map(({ reason: _r, ...f }) => f))
@@ -102,7 +110,9 @@ export function AiMappingButton({ columns, mapped, source, onAccept }: { columns
             >
               Add {picked.size} field{picked.size === 1 ? '' : 's'}
             </Button>
-            <span className="text-muted-foreground">Suggested by {model}. Check them before publishing.</span>
+            <span className="text-muted-foreground">
+              Suggested by <span className="font-mono">{model}</span>. Check them before publishing.
+            </span>
           </div>
         </>
       )}

@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { and, desc, eq, gte, inArray, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/lib/db'
-import { executionLogs, pipelineRunRejects, pipelines } from '@/lib/db/schema'
+import { dataSources, executionLogs, pipelineRunRejects, pipelines } from '@/lib/db/schema'
 import { requireWorkspace, type WorkspaceContext } from '@/lib/auth/session'
 import { can } from '@/lib/auth/permissions'
 import { recordAudit } from '@/lib/audit'
@@ -26,17 +26,26 @@ const STATUSES = ['open', 'fixed', 'approved', 'replayed', 'dismissed', 'superse
 const KINDS = ['invalid', 'approval', 'flag'] as const
 const idsSchema = z.array(z.string().min(1).max(100)).min(1, 'Select rows first').max(REPLAY_MAX_ROWS)
 
-type PipelineInfo = { name: string; steps: Map<string, string>; datasets: string[] }
+/** destinations: where replayed rows end up, as people read them ("dataset employees", "KMS · employees"). */
+type PipelineInfo = { name: string; steps: Map<string, string>; datasets: string[]; destinations: string[] }
 
 async function pipelineInfo(workspaceId: string) {
-  const rows = await db.select({ id: pipelines.id, name: pipelines.name, config: pipelines.config }).from(pipelines).where(eq(pipelines.workspaceId, workspaceId))
+  const [rows, sources] = await Promise.all([
+    db.select({ id: pipelines.id, name: pipelines.name, config: pipelines.config }).from(pipelines).where(eq(pipelines.workspaceId, workspaceId)),
+    db.select({ id: dataSources.id, name: dataSources.name }).from(dataSources).where(eq(dataSources.workspaceId, workspaceId)),
+  ])
+  const sourceName = new Map(sources.map((s) => [s.id, s.name]))
   const out = new Map<string, PipelineInfo>()
   for (const p of rows) {
     const def = definitionSchema.safeParse(p.config)
+    const nodes = def.success ? def.data.nodes : []
     out.set(p.id, {
       name: p.name,
-      steps: new Map(def.success ? def.data.nodes.map((n) => [n.id, stepTitle(n)]) : []),
-      datasets: def.success ? def.data.nodes.flatMap((n) => (n.type === 'destination' && n.kind === 'dataset' ? [n.datasetName] : [])) : [],
+      steps: new Map(nodes.map((n) => [n.id, stepTitle(n)])),
+      datasets: nodes.flatMap((n) => (n.type === 'destination' && n.kind === 'dataset' ? [n.datasetName] : [])),
+      destinations: nodes.flatMap((n) =>
+        n.type !== 'destination' ? [] : n.kind === 'dataset' ? [`dataset ${n.datasetName}`] : [`${sourceName.get(n.dataSourceId) ?? 'missing source'} · ${n.table}`]
+      ),
     })
   }
   return out
@@ -84,6 +93,7 @@ async function listQuarantineImpl(input: z.input<typeof inboxInput> = {}) {
       runId: r.runId,
       pipelineId: r.pipelineId,
       pipelineName: p?.name ?? 'Deleted pipeline',
+      destinations: p?.destinations ?? [],
       step: (r.nodeId && p?.steps.get(r.nodeId)) || 'Removed step',
       kind: r.kind,
       severity: r.severity,
@@ -180,7 +190,7 @@ async function fixRowImpl(input: z.input<typeof fixInput>) {
   const before = row.row as Record<string, unknown>
   const changed = Object.keys(data.row).filter((k) => JSON.stringify(before[k]) !== JSON.stringify(data.row[k]))
   await recordAudit(ctx, { action: 'UPDATE', resource: 'quarantine', resourceId: data.id, changes: { fields: changed } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 const bulkInput = z.object({ ids: idsSchema, field: z.string().trim().min(1).max(128), value: z.string().max(2000) })
@@ -199,7 +209,7 @@ async function bulkFixImpl(input: z.input<typeof bulkInput>) {
     }
   })
   await recordAudit(ctx, { action: 'UPDATE', resource: 'quarantine', resourceId: 'bulk', changes: { rows: rows.length, field: data.field } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return { updated: rows.length }
 }
 
@@ -214,7 +224,7 @@ async function approveRowsImpl(rawIds: string[]) {
     .set({ status: 'approved', updatedBy: ctx.userId, updatedAt: new Date() })
     .where(and(eq(pipelineRunRejects.workspaceId, ctx.workspaceId), inArray(pipelineRunRejects.id, rows.map((r) => r.id))))
   await recordAudit(ctx, { action: 'APPROVE', resource: 'quarantine', resourceId: rows.length === 1 ? rows[0].id : 'bulk', changes: { rows: rows.length } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return { approved: rows.length }
 }
 
@@ -228,8 +238,24 @@ async function dismissRowsImpl(rawIds: string[]) {
     .set({ status: 'dismissed', updatedBy: ctx.userId, updatedAt: new Date() })
     .where(and(eq(pipelineRunRejects.workspaceId, ctx.workspaceId), inArray(pipelineRunRejects.id, rows.map((r) => r.id))))
   await recordAudit(ctx, { action: 'DISMISS', resource: 'quarantine', resourceId: rows.length === 1 ? rows[0].id : 'bulk', changes: { rows: rows.length } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return { dismissed: rows.length }
+}
+
+/** Undo for dismiss: dismissed rows go back to the inbox (fixed if they carry a fix, else open). */
+async function restoreRowsImpl(rawIds: string[]) {
+  const ctx = await requireWorkspace('quality:manage')
+  const ids = idsSchema.parse(rawIds)
+  const rows = (await ownedRows(ctx, ids)).filter((r) => r.status === 'dismissed')
+  const now = new Date()
+  await db.transaction(async (tx) => {
+    for (const r of rows) {
+      await tx.update(pipelineRunRejects).set({ status: r.fixedRow ? 'fixed' : 'open', updatedBy: ctx.userId, updatedAt: now }).where(eq(pipelineRunRejects.id, r.id))
+    }
+  })
+  await recordAudit(ctx, { action: 'RESTORE', resource: 'quarantine', resourceId: rows.length === 1 ? rows[0].id : 'bulk', changes: { rows: rows.length } })
+  revalidatePath('/dashboard', 'layout')
+  return { restored: rows.length }
 }
 
 /**
@@ -260,7 +286,7 @@ async function replayRowsImpl(rawIds: string[]) {
     if (outcome.status === 'queued') await recordAudit(ctx, { action: 'REPLAY', resource: 'pipeline', resourceId: pipelineId, changes: { runId: outcome.runId, rows: rejectIds.length } })
   }
   if (outcomes.some((o) => o.status === 'queued')) startWorker()
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return outcomes
 }
 
@@ -286,6 +312,10 @@ export async function approveRows(...args: Parameters<typeof approveRowsImpl>) {
 
 export async function dismissRows(...args: Parameters<typeof dismissRowsImpl>) {
   return guard(() => dismissRowsImpl(...args))
+}
+
+export async function restoreRows(...args: Parameters<typeof restoreRowsImpl>) {
+  return guard(() => restoreRowsImpl(...args))
 }
 
 export async function replayRows(...args: Parameters<typeof replayRowsImpl>) {

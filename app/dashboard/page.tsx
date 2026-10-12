@@ -1,13 +1,9 @@
-import { requirePageUser } from '@/lib/auth/session'
-import DashboardLayout from '@/components/dashboard/dashboard-layout'
+import { redirect } from 'next/navigation'
 import { getWorkspaceContext } from '@/lib/actions/workspaces'
+import { landingSection, sectionHref } from '@/lib/navigation'
 
-// Server actions on this page include manual pipeline runs.
-export const maxDuration = 300
-
-export default async function DashboardPage() {
-  await requirePageUser('/dashboard')
-
-  const workspace = await getWorkspaceContext()
-  return <DashboardLayout workspace={workspace} />
+/** /dashboard lands by role: stewards in the quarantine inbox, everyone else on the overview. */
+export default async function DashboardIndex() {
+  const { role } = await getWorkspaceContext()
+  redirect(sectionHref(landingSection(role)))
 }

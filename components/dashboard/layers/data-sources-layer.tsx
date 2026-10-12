@@ -1,61 +1,48 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Plus, Trash2, CheckCircle2, AlertCircle, X, Save, Edit, Eye, Lock, KeyRound, Upload } from 'lucide-react'
+import Link from 'next/link'
+import { Database, Eye, KeyRound, Loader2, MoreHorizontal, Pencil, Plus, RefreshCw, Save, Trash2, Upload } from 'lucide-react'
 import EditCredentialsDialog from '@/components/connectors/edit-credentials-dialog'
 import { useCan } from '@/components/workspace/workspace-context'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
+import { Button, buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { Label } from '@/components/ui/label'
+import { Notice } from '@/components/ui/notice'
+import { EmptyState } from '@/components/ui/empty-state'
+import { ConfirmDialog, Modal } from '@/components/ui/dialog'
+import { Table, TBody, Td, Th, THead, Tr } from '@/components/ui/data-table'
+import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from '@/components/ui/menu'
+import { StateMark } from '@/components/ui/flow-line'
+import { useToast } from '@/components/ui/toast'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import ConnectorCredentialForm from '@/components/connectors/connector-credential-form'
 import SchemaExplorerModal from '@/components/modals/schema-explorer-modal'
 import FileUploadDialog from '@/components/data-sources/file-upload-dialog'
+import { PageHeader } from '@/components/dashboard/page-header'
+import { nativeSelectClass } from '@/components/workspace/settings-panel'
+import { usePrefs } from '@/components/i18n/i18n-provider'
 import type { UploadedFile } from '@/app/actions/files'
 import { CONNECTOR_CATALOG, getConnectorDefinition } from '@/lib/connectors/catalog'
 import { REST_DEFAULTS, validateRestCredentials } from '@/lib/connectors/rest-client'
 import { validateSalesforceCredentials } from '@/lib/connectors/salesforce/oauth'
 import { SALESFORCE_DEFAULTS } from '@/components/connectors/salesforce-connector-form'
 import type { SchemaScanResult } from '@/lib/connectors/types'
-import {
-  createDataSource,
-  deleteDataSource,
-  getDataSources,
-  renameDataSource,
-  setDataSourceRole,
-  testConnection,
-} from '@/lib/actions/data-sources'
+import { createDataSource, deleteDataSource, getDataSources, renameDataSource, setDataSourceRole, testConnection } from '@/lib/actions/data-sources'
 import { getInstalledConnectorSlugs } from '@/lib/actions/connectors'
 import { previewRestConnection, testAndScanDataSource } from '@/lib/actions/connector-source'
 import type { RestRequestPreview } from '@/lib/connectors/rest-client'
 
+type Role = 'source' | 'destination'
 type DataSourceRow = {
   id: string
   name: string
   type: string
   sourceType: string
-  role?: 'source' | 'destination'
+  role?: Role
   status: string
   lastConnected: string | Date | null
   config?: Record<string, unknown> | null
-}
-
-function formatLastConnected(value: string | Date | null) {
-  if (!value) return 'Never'
-  if (typeof value === 'string') return value
-  const diffMs = Date.now() - value.getTime()
-  const minutes = Math.floor(diffMs / 60000)
-  if (minutes < 1) return 'Just now'
-  if (minutes < 60) return `${minutes} min ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`
-  return value.toLocaleDateString()
 }
 
 function credentialsValid(slug: string, values: Record<string, string>) {
@@ -63,58 +50,45 @@ function credentialsValid(slug: string, values: Record<string, string>) {
   if (slug === 'salesforce') return validateSalesforceCredentials(values)
   const def = getConnectorDefinition(slug)
   if (!def) return false
-  return def.credentialFields
-    .filter((f) => f.required)
-    .every((f) => Boolean(values[f.key]?.trim()))
+  return def.credentialFields.filter((f) => f.required).every((f) => Boolean(values[f.key]?.trim()))
 }
 
 function defaultCredentialsForConnector(slug: string): Record<string, string> {
-  if (slug === 'rest') {
-    return Object.fromEntries(
-      Object.entries(REST_DEFAULTS).map(([key, value]) => [key, String(value)])
-    )
-  }
-  if (slug === 'salesforce') {
-    return { ...SALESFORCE_DEFAULTS }
-  }
+  if (slug === 'rest') return Object.fromEntries(Object.entries(REST_DEFAULTS).map(([key, value]) => [key, String(value)]))
+  if (slug === 'salesforce') return { ...SALESFORCE_DEFAULTS }
   return {}
 }
 
 export default function DataSourcesLayer() {
+  const { t, formatDateTime } = usePrefs()
+  const toast = useToast()
   const [sources, setSources] = useState<DataSourceRow[]>([])
   const [installedSlugs, setInstalledSlugs] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
-  const [showAddForm, setShowAddForm] = useState(false)
-  const [newSourceRole, setNewSourceRole] = useState<'source' | 'destination'>('source')
-  const [newSourceName, setNewSourceName] = useState('')
-  const [newSourceType, setNewSourceType] = useState('')
-  const [credentialValues, setCredentialValues] = useState<Record<string, string>>({})
-  const [connectionTested, setConnectionTested] = useState(false)
-  const [testingConnection, setTestingConnection] = useState(false)
-  const [connectionError, setConnectionError] = useState('')
-  const [connectionMessage, setConnectionMessage] = useState('')
-  const [pendingSchemaScan, setPendingSchemaScan] = useState<SchemaScanResult | null>(null)
-  const [editingId, setEditingId] = useState<string | null>(null)
+  const [adding, setAdding] = useState<Role | null>(null)
+  const [renaming, setRenaming] = useState<DataSourceRow | null>(null)
   const [editName, setEditName] = useState('')
   const [listError, setListError] = useState('')
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
-  const [retestingId, setRetestingId] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState<DataSourceRow | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
   const [credentialsFor, setCredentialsFor] = useState<{ id: string; name: string } | null>(null)
   const canManage = useCan('sources:manage')
   const canPreview = useCan('data:preview')
   const [explorerOpen, setExplorerOpen] = useState(false)
   const [uploadFor, setUploadFor] = useState<string | null>(null)
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null)
-  const [restPreview, setRestPreview] = useState<RestRequestPreview | null>(null)
-  const [restSending, setRestSending] = useState(false)
 
-  const installedConnectors = useMemo(
-    () => CONNECTOR_CATALOG.filter((c) => installedSlugs.includes(c.slug)),
-    [installedSlugs]
-  )
+  const installedConnectors = useMemo(() => CONNECTOR_CATALOG.filter((c) => installedSlugs.includes(c.slug)), [installedSlugs])
 
-  const selectedConnector = newSourceType ? getConnectorDefinition(newSourceType) : undefined
-  const fieldsValid = newSourceType ? credentialsValid(newSourceType, credentialValues) : false
+  const ago = (value: string | Date | null) => {
+    if (!value) return t('common.never')
+    const d = new Date(value)
+    const minutes = Math.floor((Date.now() - d.getTime()) / 60000)
+    if (minutes < 1) return t('sources.justNow')
+    if (minutes < 60) return t('sources.minutesAgo', { count: minutes })
+    if (minutes < 24 * 60) return t('sources.hoursAgo', { count: Math.floor(minutes / 60) })
+    return formatDateTime(d, { dateStyle: 'medium', timeStyle: undefined })
+  }
 
   // Initial state is loading; later refreshes update the list in place (no flicker).
   const loadAll = useCallback(async () => {
@@ -127,147 +101,46 @@ export default function DataSourcesLayer() {
           name: row.name,
           type: row.type,
           sourceType: row.sourceType,
-          role: (row.config as { role?: 'source' | 'destination' })?.role,
+          role: (row.config as { role?: Role })?.role,
           status: row.status ?? 'disconnected',
           lastConnected: row.lastConnected,
           config: row.config as Record<string, unknown> | null,
-        }))
+        })),
       )
-    } catch {
-      setSources([])
+      setListError('')
+    } catch (err) {
+      setListError(err instanceof Error ? err.message : t('common.somethingWrong'))
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     void loadAll()
   }, [loadAll])
 
-  const resetForm = () => {
-    setNewSourceName('')
-    setNewSourceType('')
-    setCredentialValues({})
-    setConnectionTested(false)
-    setConnectionError('')
-    setConnectionMessage('')
-    setPendingSchemaScan(null)
-    setRestPreview(null)
-  }
-
-  const sendRestPreview = async () => {
-    if (!fieldsValid) {
-      setConnectionError('Fill required fields before sending.')
-      return
-    }
-    setRestSending(true)
-    setConnectionError('')
-    try {
-      const preview = await previewRestConnection(credentialValues)
-      setRestPreview(preview)
-      if (!preview.ok) setConnectionError(preview.message)
-    } catch (err) {
-      setConnectionError(err instanceof Error ? err.message : 'Request failed')
-    } finally {
-      setRestSending(false)
-    }
-  }
-
-  const testNewConnection = async () => {
-    if (!newSourceType || !fieldsValid) {
-      setConnectionError('Fill all required connector fields before testing.')
-      return
-    }
-
-    setTestingConnection(true)
-    setConnectionError('')
-    setConnectionMessage('')
-    setConnectionTested(false)
-    setPendingSchemaScan(null)
-    setRestPreview(null)
-
-    try {
-      const result = await testAndScanDataSource(newSourceType, credentialValues)
-      if ('preview' in result && result.preview) {
-        setRestPreview(result.preview as RestRequestPreview)
-      }
-      if (!result.ok) {
-        setConnectionError(result.message)
-        return
-      }
-
-      setPendingSchemaScan(result.scan)
-      setConnectionMessage(
-        `Connected. Found ${result.scan.tables.length} objects via ${result.scan.method}.`
-      )
-      setConnectionTested(true)
-    } catch (err) {
-      setConnectionError(err instanceof Error ? err.message : 'Connection test failed')
-    } finally {
-      setTestingConnection(false)
-    }
-  }
-
-  const addSource = async () => {
-    if (!newSourceName || !newSourceType || !fieldsValid || !connectionTested) return
-
-    try {
-      const connector = getConnectorDefinition(newSourceType)
-      await createDataSource({
-        name: newSourceName,
-        type: connector?.category.toLowerCase() ?? newSourceType,
-        sourceType: newSourceType,
-        config: {
-          role: newSourceRole,
-          ...(pendingSchemaScan ? { schemaScan: pendingSchemaScan } : {}),
-        },
-        credentials: credentialValues,
-      })
-
-      resetForm()
-      setShowAddForm(false)
-      await loadAll()
-    } catch (err) {
-      setConnectionError(err instanceof Error ? err.message : 'Failed to create data source')
-    }
-  }
-
-  const runListAction = async (action: () => Promise<unknown>, fallback: string) => {
+  const runListAction = async (key: string, action: () => Promise<unknown>, done?: string) => {
     setListError('')
+    setBusy(key)
     try {
       await action()
+      if (done) toast({ message: done })
       await loadAll()
+      return true
     } catch (err) {
-      setListError(err instanceof Error ? err.message : fallback)
+      setListError(err instanceof Error ? err.message : t('common.somethingWrong'))
+      return false
+    } finally {
+      setBusy(null)
     }
   }
 
-  const handleDelete = (id: string) =>
-    runListAction(async () => {
-      await deleteDataSource(id)
-      setConfirmDeleteId(null)
-    }, 'Failed to delete source')
-
-  const handleRename = (id: string) =>
-    runListAction(async () => {
-      await renameDataSource(id, editName)
-      setEditingId(null)
-    }, 'Rename failed')
-
-  const handleRole = (id: string, role: 'source' | 'destination') =>
-    runListAction(() => setDataSourceRole(id, role), 'Could not change role')
-
-  const handleRetest = async (id: string) => {
-    setRetestingId(id)
-    await runListAction(() => testConnection(id), 'Connection test failed')
-    setRetestingId(null)
-  }
-
+  const roleLabel = (role: Role) => (role === 'destination' ? t('sources.roleDestination') : t('sources.roleSource'))
   const selectedSource = selectedSourceId ? sources.find((s) => s.id === selectedSourceId) : null
   const selectedSchemaScan = selectedSource?.config?.schemaScan as SchemaScanResult | undefined
 
   return (
-    <div className="space-y-6">
+    <div>
       {credentialsFor && (
         <EditCredentialsDialog
           sourceId={credentialsFor.id}
@@ -279,18 +152,13 @@ export default function DataSourcesLayer() {
           }}
         />
       )}
-      {uploadFor && (() => {
-        const src = sources.find((x) => x.id === uploadFor)
-        return src ? (
-          <FileUploadDialog
-            sourceId={src.id}
-            sourceName={src.name}
-            files={((src.config?.files ?? []) as UploadedFile[])}
-            onClose={() => setUploadFor(null)}
-            onDone={() => void loadAll()}
-          />
-        ) : null
-      })()}
+      {uploadFor &&
+        (() => {
+          const src = sources.find((x) => x.id === uploadFor)
+          return src ? (
+            <FileUploadDialog sourceId={src.id} sourceName={src.name} files={(src.config?.files ?? []) as UploadedFile[]} onClose={() => setUploadFor(null)} onDone={() => void loadAll()} />
+          ) : null
+        })()}
       <SchemaExplorerModal
         isOpen={explorerOpen}
         sourceId={selectedSourceId || ''}
@@ -304,265 +172,403 @@ export default function DataSourcesLayer() {
         }}
         onProceed={() => setExplorerOpen(false)}
       />
+      {adding && (
+        <AddSourceDialog
+          role={adding}
+          connectors={installedConnectors}
+          onClose={() => setAdding(null)}
+          onCreated={async (name) => {
+            setAdding(null)
+            toast({ message: name })
+            await loadAll()
+          }}
+        />
+      )}
+      {renaming && (
+        <Modal
+          onClose={() => setRenaming(null)}
+          dirty={editName !== renaming.name}
+          size="sm"
+          title={t('sources.rename')}
+          footer={
+            <>
+              <Button variant="outline" onClick={() => setRenaming(null)}>
+                {t('common.cancel')}
+              </Button>
+              <Button
+                type="submit"
+                form="rename-source"
+                disabled={busy === 'rename' || !editName.trim() || editName === renaming.name}
+              >
+                {busy === 'rename' ? <Loader2 className="animate-spin" /> : <Save />} {t('common.save')}
+              </Button>
+            </>
+          }
+        >
+          <form
+            id="rename-source"
+            onSubmit={(e) => {
+              e.preventDefault()
+              void runListAction('rename', () => renameDataSource(renaming.id, editName), t('sources.renamed')).then((ok) => ok && setRenaming(null))
+            }}
+          >
+            <Label htmlFor="rename-source-name" className="mb-1.5 block">
+              {t('sources.renameLabel', { name: renaming.name })}
+            </Label>
+            <Input id="rename-source-name" autoFocus value={editName} onChange={(e) => setEditName(e.target.value)} />
+          </form>
+        </Modal>
+      )}
+      <ConfirmDialog
+        open={deleting !== null}
+        onOpenChange={(open) => !open && setDeleting(null)}
+        title={t('sources.removeTitle', { name: deleting?.name ?? '' })}
+        description={t('sources.removeBody')}
+        confirmLabel={t('sources.remove')}
+        tone="danger"
+        busy={busy === 'delete'}
+        onConfirm={async () => {
+          if (!deleting) return
+          const name = deleting.name
+          await runListAction('delete', () => deleteDataSource(deleting.id), t('sources.removed', { name }))
+          setDeleting(null)
+        }}
+      />
 
-      <div className="rounded-lg border border-border bg-card p-6">
-        <div className="mb-6 flex items-center justify-between">
-          <div>
-            <h2 className="text-2xl font-bold">Layer 1: Data Source Manager</h2>
-            <p className="mt-2 text-muted-foreground">
-              Add sources using installed connectors from the marketplace.
+      <PageHeader
+        title={t('pages.sources.title')}
+        description={t('pages.sources.description')}
+        meta={!loading && sources.length > 0 ? t('sources.summary', { count: sources.length }) : undefined}
+        actions={
+          canManage ? (
+            <>
+              <Button variant="outline" onClick={() => setAdding('destination')}>
+                <Plus /> {t('sources.addDestination')}
+              </Button>
+              <Button onClick={() => setAdding('source')}>
+                <Plus /> {t('sources.addSource')}
+              </Button>
+            </>
+          ) : undefined
+        }
+      />
+
+      <div className="space-y-4">
+        {!canManage && (
+          <Notice tone="info" live={false}>
+            {t('sources.adminOnly')}
+          </Notice>
+        )}
+        {listError && <Notice tone="danger">{listError}</Notice>}
+
+        <section aria-label={t('pages.sources.title')} className="rounded-lg border border-border bg-card">
+          {loading ? (
+            <p className="flex items-center justify-center gap-2 p-10 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" aria-hidden /> {t('common.loading')}
             </p>
-          </div>
-          {!canManage ? (
-            <p className="text-sm text-muted-foreground">Only workspace admins can add or change data sources.</p>
+          ) : sources.length === 0 ? (
+            <EmptyState
+              icon={<Database />}
+              title={t('sources.emptyTitle')}
+              action={
+                canManage ? (
+                  installedConnectors.length ? (
+                    <Button onClick={() => setAdding('source')}>
+                      <Plus /> {t('sources.addSource')}
+                    </Button>
+                  ) : (
+                    <Link href="/dashboard/connectors" className={buttonVariants()}>
+                      {t('sources.openConnectors')}
+                    </Link>
+                  )
+                ) : undefined
+              }
+            >
+              {t('sources.emptyBody')}
+            </EmptyState>
           ) : (
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              onClick={() => {
-                setNewSourceRole('source')
-                setShowAddForm(true)
+            <Table label={t('pages.sources.title')} className="min-w-[760px]">
+              <THead>
+                <tr>
+                  <Th>{t('sources.colName')}</Th>
+                  <Th>{t('sources.colRole')}</Th>
+                  <Th>{t('sources.colStatus')}</Th>
+                  <Th className="text-right">{t('sources.colTables')}</Th>
+                  <Th>{t('sources.colChecked')}</Th>
+                  <Th className="text-right">
+                    <span className="sr-only">{t('common.edit')}</span>
+                  </Th>
+                </tr>
+              </THead>
+              <TBody>
+                {sources.map((source) => {
+                  const role: Role = source.role ?? 'source'
+                  const connected = source.status === 'connected'
+                  const scan = source.config?.schemaScan as SchemaScanResult | undefined
+                  return (
+                    <Tr key={source.id}>
+                      <Td>
+                        <div className="font-medium">{source.name}</div>
+                        <div className="text-xs text-muted-foreground">{getConnectorDefinition(source.sourceType)?.name ?? source.sourceType.toUpperCase()}</div>
+                      </Td>
+                      <Td>
+                        {canManage ? (
+                          <select
+                            value={role}
+                            disabled={busy !== null}
+                            onChange={(e) => {
+                              const next = e.target.value as Role
+                              void runListAction(`role:${source.id}`, () => setDataSourceRole(source.id, next), t('sources.roleChanged', { name: source.name, role: roleLabel(next).toLowerCase() }))
+                            }}
+                            className={nativeSelectClass}
+                            aria-label={t('sources.roleOf', { name: source.name })}
+                          >
+                            <option value="source">{t('sources.roleSource')}</option>
+                            <option value="destination">{t('sources.roleDestination')}</option>
+                          </select>
+                        ) : (
+                          roleLabel(role)
+                        )}
+                      </Td>
+                      <Td>
+                        {busy === `test:${source.id}` ? (
+                          <StateMark state="running">{t('sources.testing')}</StateMark>
+                        ) : (
+                          <StateMark state={connected ? 'live' : source.status === 'error' ? 'tripped' : 'idle'}>{connected ? t('sources.connected') : source.status === 'error' ? t('sources.error') : t('sources.disconnected')}</StateMark>
+                        )}
+                      </Td>
+                      <Td className="text-right font-mono text-xs">{scan ? scan.tables.length : '—'}</Td>
+                      <Td className="font-mono text-xs text-muted-foreground">{ago(source.lastConnected)}</Td>
+                      <Td className="text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          {canManage && source.sourceType === 'file' && (
+                            <Button size="sm" variant="outline" onClick={() => setUploadFor(source.id)} aria-label={t('sources.uploadFor', { name: source.name })}>
+                              <Upload /> {t('sources.upload')}
+                            </Button>
+                          )}
+                          {connected && canPreview && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              aria-label={t('sources.browseFor', { name: source.name })}
+                              onClick={() => {
+                                setSelectedSourceId(source.id)
+                                setExplorerOpen(true)
+                              }}
+                            >
+                              <Eye /> {t('sources.browse')}
+                            </Button>
+                          )}
+                          {canManage && (
+                            <Menu>
+                              <MenuTrigger render={<Button size="icon-sm" variant="ghost" aria-label={t('sources.more', { name: source.name })} />}>
+                                <MoreHorizontal />
+                              </MenuTrigger>
+                              <MenuContent>
+                                <MenuItem disabled={busy !== null} onClick={() => void runListAction(`test:${source.id}`, () => testConnection(source.id), t('sources.retested', { name: source.name }))}>
+                                  <RefreshCw aria-hidden /> {t('sources.test')}
+                                </MenuItem>
+                                {source.sourceType !== 'file' && (
+                                  <MenuItem onClick={() => setCredentialsFor({ id: source.id, name: source.name })}>
+                                    <KeyRound aria-hidden /> {t('sources.editCredentials')}
+                                  </MenuItem>
+                                )}
+                                <MenuItem
+                                  onClick={() => {
+                                    setEditName(source.name)
+                                    setRenaming(source)
+                                  }}
+                                >
+                                  <Pencil aria-hidden /> {t('sources.rename')}
+                                </MenuItem>
+                                <MenuSeparator />
+                                <MenuItem onClick={() => setDeleting(source)} className="text-danger-text [&_svg]:text-danger-text!">
+                                  <Trash2 aria-hidden /> {t('sources.remove')}
+                                </MenuItem>
+                              </MenuContent>
+                            </Menu>
+                          )}
+                        </div>
+                      </Td>
+                    </Tr>
+                  )
+                })}
+              </TBody>
+            </Table>
+          )}
+        </section>
+      </div>
+    </div>
+  )
+}
+
+/** Name → connector → credentials → test → create. Creating needs a passing test. */
+function AddSourceDialog({
+  role,
+  connectors,
+  onClose,
+  onCreated,
+}: {
+  role: Role
+  connectors: typeof CONNECTOR_CATALOG
+  onClose: () => void
+  onCreated: (message: string) => void | Promise<void>
+}) {
+  const { t } = usePrefs()
+  const [name, setName] = useState('')
+  const [type, setType] = useState('')
+  const [values, setValues] = useState<Record<string, string>>({})
+  const [tested, setTested] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [error, setError] = useState('')
+  const [message, setMessage] = useState('')
+  const [scan, setScan] = useState<SchemaScanResult | null>(null)
+  const [restPreview, setRestPreview] = useState<RestRequestPreview | null>(null)
+  const [restSending, setRestSending] = useState(false)
+  const connector = type ? getConnectorDefinition(type) : undefined
+  const valid = type ? credentialsValid(type, values) : false
+  const dirty = Boolean(name || type)
+
+  const sendRestPreview = async () => {
+    if (!valid) return setError(t('sources.fillBeforeSend'))
+    setRestSending(true)
+    setError('')
+    try {
+      const preview = await previewRestConnection(values)
+      setRestPreview(preview)
+      if (!preview.ok) setError(preview.message)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('sources.requestFailed'))
+    } finally {
+      setRestSending(false)
+    }
+  }
+
+  const test = async () => {
+    if (!type || !valid) return setError(t('sources.fillRequired'))
+    setTesting(true)
+    setError('')
+    setMessage('')
+    setTested(false)
+    setScan(null)
+    setRestPreview(null)
+    try {
+      const result = await testAndScanDataSource(type, values)
+      if ('preview' in result && result.preview) setRestPreview(result.preview as RestRequestPreview)
+      if (!result.ok) return setError(result.message)
+      setScan(result.scan)
+      setMessage(t('sources.connectedFound', { count: result.scan.tables.length, method: result.scan.method }))
+      setTested(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('sources.testFailed'))
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  const create = async () => {
+    if (!name || !type || !valid || !tested) return
+    setCreating(true)
+    try {
+      await createDataSource({
+        name,
+        type: connector?.category.toLowerCase() ?? type,
+        sourceType: type,
+        config: { role, ...(scan ? { schemaScan: scan } : {}) },
+        credentials: values,
+      })
+      await onCreated(name)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('sources.createFailed'))
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  return (
+    <Modal
+      onClose={onClose}
+      dirty={dirty && !creating}
+      size={type === 'rest' ? 'xl' : 'md'}
+      title={role === 'destination' ? t('sources.addTitleDestination') : t('sources.addTitleSource')}
+      description={t('sources.addDescription')}
+      footer={
+        <>
+          <Button variant="outline" disabled={testing || !type} onClick={() => void test()}>
+            {testing ? <Loader2 className="animate-spin" /> : <RefreshCw />} {testing ? t('sources.testing') : t('sources.test')}
+          </Button>
+          <Button disabled={!tested || !name.trim() || creating} onClick={() => void create()}>
+            {creating ? <Loader2 className="animate-spin" /> : <Save />} {t('sources.create')}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <div>
+          <Label htmlFor="new-source-name" className="mb-1.5 block">
+            {t('sources.name')}
+          </Label>
+          <Input id="new-source-name" autoFocus placeholder={t('sources.namePlaceholder')} value={name} onChange={(e) => setName(e.target.value)} />
+        </div>
+        <div>
+          <Label htmlFor="new-source-type" className="mb-1.5 block">
+            {t('sources.connector')}
+          </Label>
+          {connectors.length === 0 ? (
+            <Notice tone="info" live={false} action={<Link href="/dashboard/connectors" className={buttonVariants({ size: 'sm', variant: 'outline' })}>{t('sources.openConnectors')}</Link>}>
+              {t('sources.noConnectors')}
+            </Notice>
+          ) : (
+            <Select
+              value={type}
+              onValueChange={(value) => {
+                const next = (value as string) || ''
+                setType(next)
+                setValues(next ? defaultCredentialsForConnector(next) : {})
+                setTested(false)
+                setError('')
+                setMessage('')
+                setScan(null)
+                setRestPreview(null)
               }}
             >
-              <Plus className="mr-2 h-4 w-4" /> Add Source
-            </Button>
-            <Button
-              onClick={() => {
-                setNewSourceRole('destination')
-                setShowAddForm(true)
-              }}
-            >
-              <Plus className="mr-2 h-4 w-4" /> Add Destination
-            </Button>
-          </div>
+              <SelectTrigger id="new-source-type" className="w-full">
+                <SelectValue placeholder={t('sources.connectorPlaceholder')} />
+              </SelectTrigger>
+              <SelectContent>
+                {connectors.map((c) => (
+                  <SelectItem key={c.slug} value={c.slug}>
+                    {c.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           )}
         </div>
 
-        {showAddForm && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="Add data source">
-            <div
-              className={`max-h-[90vh] w-full space-y-4 overflow-y-auto rounded-lg border border-border bg-card p-6 ${
-                newSourceType === 'rest' ? 'max-w-4xl' : newSourceType === 'salesforce' ? 'max-w-xl' : 'max-w-lg'
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <h3 className="text-lg font-semibold">
-                  Add New {newSourceRole === 'destination' ? 'Destination' : 'Data'} Source
-                </h3>
-                <Button size="sm" variant="ghost" onClick={() => { setShowAddForm(false); resetForm() }}>
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
-
-              <Input
-                placeholder="Source name"
-                value={newSourceName}
-                onChange={(e) => setNewSourceName(e.target.value)}
-              />
-
-              <Select
-                value={newSourceType}
-                onValueChange={(value) => {
-                  setNewSourceType(value || '')
-                  setCredentialValues(value ? defaultCredentialsForConnector(value) : {})
-                  setConnectionTested(false)
-                  setConnectionError('')
-                  setConnectionMessage('')
-                  setPendingSchemaScan(null)
-                  setRestPreview(null)
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Connector / source type" />
-                </SelectTrigger>
-                <SelectContent>
-                  {installedConnectors.map((c) => (
-                    <SelectItem key={c.slug} value={c.slug}>
-                      {c.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              {installedConnectors.length === 0 && (
-                <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Lock className="h-4 w-4" />
-                  Install connectors from Layer 2: Connector Marketplace first.
-                </p>
-              )}
-
-              {selectedConnector && (
-                <div className="space-y-3 rounded-lg border border-border/60 bg-muted/20 p-4">
-                  <p className="text-sm font-medium">
-                    {selectedConnector.name}
-                    {newSourceType === 'rest'
-                      ? ' — scheme, auth & connection'
-                      : newSourceType === 'salesforce'
-                        ? ' — OAuth web login'
-                        : ' credentials'}
-                  </p>
-                  <ConnectorCredentialForm
-                    connectorSlug={newSourceType}
-                    fields={selectedConnector.credentialFields}
-                    values={credentialValues}
-                    onChange={(key, value) => {
-                      setCredentialValues((prev) => ({ ...prev, [key]: value }))
-                      setConnectionTested(false)
-                      setRestPreview(null)
-                    }}
-                    restPreview={restPreview}
-                    restSending={restSending}
-                    onRestSend={newSourceType === 'rest' ? () => void sendRestPreview() : undefined}
-                  />
-                </div>
-              )}
-
-              {connectionError && <p className="text-sm text-destructive">{connectionError}</p>}
-              {connectionTested && connectionMessage && (
-                <p className="text-sm text-green-600">{connectionMessage}</p>
-              )}
-
-              <div className="flex gap-2 pt-2">
-                <Button
-                  variant="outline"
-                  className="flex-1"
-                  disabled={testingConnection || !newSourceType}
-                  onClick={() => void testNewConnection()}
-                >
-                  {testingConnection ? 'Testing…' : 'Test Connection'}
-                </Button>
-                <Button className="flex-1" disabled={!connectionTested} onClick={() => void addSource()}>
-                  <Save className="mr-2 h-4 w-4" />
-                  Create
-                </Button>
-                <Button variant="outline" className="flex-1" onClick={() => { setShowAddForm(false); resetForm() }}>
-                  Cancel
-                </Button>
-              </div>
-            </div>
-          </div>
+        {connector && (
+          <fieldset className="space-y-3 rounded-md border border-border bg-muted/40 p-4">
+            <legend className="px-1 text-sm font-medium">{t('sources.credentialsFor', { connector: connector.name })}</legend>
+            <ConnectorCredentialForm
+              connectorSlug={type}
+              fields={connector.credentialFields}
+              values={values}
+              onChange={(key, value) => {
+                setValues((prev) => ({ ...prev, [key]: value }))
+                setTested(false)
+                setRestPreview(null)
+              }}
+              restPreview={restPreview}
+              restSending={restSending}
+              onRestSend={type === 'rest' ? () => void sendRestPreview() : undefined}
+            />
+          </fieldset>
         )}
 
-        {loading ? (
-          <p className="py-8 text-center text-sm text-muted-foreground">Loading data sources…</p>
-        ) : sources.length === 0 ? (
-          <p className="py-8 text-center text-sm text-muted-foreground">
-            No data sources yet. Install a connector, then add your first source.
-          </p>
-        ) : (
-          <div className="grid gap-3">
-            {listError && (
-              <p className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{listError}</p>
-            )}
-            {sources.map((source) => (
-              <div
-                key={source.id}
-                className="flex flex-col gap-3 rounded-lg border border-border/50 bg-muted/30 p-4 lg:flex-row lg:items-center lg:justify-between"
-              >
-                <div className="min-w-0 flex-1">
-                  {editingId === source.id ? (
-                    <div className="flex items-center gap-2">
-                      <Input value={editName} onChange={(e) => setEditName(e.target.value)} className="h-8 max-w-xs" aria-label="Data source name" />
-                      <Button size="sm" onClick={() => void handleRename(source.id)}>
-                        <Save className="mr-1 h-4 w-4" /> Save
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>Cancel</Button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-2 font-medium">
-                      {source.name}
-                      <Badge variant={source.role === 'destination' ? 'default' : 'outline'}>
-                        {source.role === 'destination' ? 'Destination' : 'Source'}
-                      </Badge>
-                    </div>
-                  )}
-                  <div className="text-sm text-muted-foreground">
-                    {getConnectorDefinition(source.sourceType)?.name ?? source.sourceType.toUpperCase()} · Last:{' '}
-                    {formatLastConnected(source.lastConnected)}
-                    {source.config?.schemaScan
-                      ? ` · ${(source.config.schemaScan as SchemaScanResult).tables.length} objects`
-                      : null}
-                  </div>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  {canManage && (
-                    <>
-                      <select
-                        value={source.role ?? 'source'}
-                        onChange={(e) => void handleRole(source.id, e.target.value as 'source' | 'destination')}
-                        className="h-8 rounded-md border border-input bg-background px-2 text-xs"
-                        aria-label={`Role of ${source.name}`}
-                        title="Pipelines only write to destinations"
-                      >
-                        <option value="source">Use as source</option>
-                        <option value="destination">Use as destination</option>
-                      </select>
-                      <Button size="sm" variant="outline" disabled={retestingId === source.id} onClick={() => void handleRetest(source.id)}>
-                        {retestingId === source.id ? 'Testing…' : 'Re-test'}
-                      </Button>
-                      {source.sourceType === 'file' ? (
-                        <Button size="sm" variant="outline" onClick={() => setUploadFor(source.id)}>
-                          <Upload className="mr-1 h-4 w-4" /> Upload file
-                        </Button>
-                      ) : (
-                        <Button size="sm" variant="outline" onClick={() => setCredentialsFor({ id: source.id, name: source.name })}>
-                          <KeyRound className="mr-1 h-4 w-4" /> Credentials
-                        </Button>
-                      )}
-                    </>
-                  )}
-                  {source.status === 'connected' ? (
-                    <span className="flex items-center gap-1 text-xs text-green-600">
-                      <CheckCircle2 className="h-4 w-4" /> Connected
-                    </span>
-                  ) : (
-                    <span className="flex items-center gap-1 text-xs text-orange-600">
-                      <AlertCircle className="h-4 w-4" /> Disconnected
-                    </span>
-                  )}
-                  {source.status === 'connected' && canPreview && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => {
-                        setSelectedSourceId(source.id)
-                        setExplorerOpen(true)
-                      }}
-                    >
-                      <Eye className="mr-1 h-4 w-4" />
-                      Schema & Data
-                    </Button>
-                  )}
-                  {canManage && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => {
-                        setEditingId(source.id)
-                        setEditName(source.name)
-                      }}
-                      aria-label={`Rename ${source.name}`}
-                    >
-                      <Edit className="h-4 w-4" />
-                    </Button>
-                  )}
-                  {!canManage ? null : confirmDeleteId === source.id ? (
-                    <span className="flex items-center gap-1 text-xs">
-                      Delete &ldquo;{source.name}&rdquo;?
-                      <Button size="sm" variant="destructive" onClick={() => void handleDelete(source.id)}>Delete</Button>
-                      <Button size="sm" variant="ghost" onClick={() => setConfirmDeleteId(null)}>Cancel</Button>
-                    </span>
-                  ) : (
-                    <Button size="sm" variant="ghost" onClick={() => setConfirmDeleteId(source.id)} aria-label={`Delete ${source.name}`}>
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+        {error && <Notice tone="danger">{error}</Notice>}
+        {tested && message && <Notice tone="success">{message}</Notice>}
       </div>
-    </div>
+    </Modal>
   )
 }

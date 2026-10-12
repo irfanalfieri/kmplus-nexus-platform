@@ -104,7 +104,7 @@ async function saveRuleImpl(input: z.input<typeof ruleInputSchema>) {
     createdBy: ctx.userId,
   })
   await recordAudit(ctx, { action: version === 1 ? 'CREATE' : 'UPDATE', resource: 'business_rule', resourceId: id, changes: { name: data.name, version }, diff: before ? diffObjects(before, { name: data.name, description: data.description, body: data.body }) : undefined })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return { id, version }
 }
 
@@ -117,7 +117,7 @@ async function deleteRuleImpl(rawId: string) {
   await db.delete(businessRuleVersions).where(and(eq(businessRuleVersions.ruleId, id), eq(businessRuleVersions.workspaceId, ctx.workspaceId)))
   await db.delete(businessRules).where(and(eq(businessRules.id, id), eq(businessRules.workspaceId, ctx.workspaceId)))
   await recordAudit(ctx, { action: 'DELETE', resource: 'business_rule', resourceId: id, changes: { name: rule.name } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 const testInput = z.object({

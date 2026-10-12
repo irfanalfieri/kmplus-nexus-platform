@@ -68,7 +68,7 @@ async function createAgentImpl(rawName: string) {
   const id = newId('agent')
   await db.insert(agents).values({ id, workspaceId: ctx.workspaceId, name, prefix: token.slice(0, 10), tokenHash: hashAgentToken(token), createdBy: ctx.userId })
   await recordAudit(ctx, { action: 'CREATE', resource: 'agent', resourceId: id, changes: { name } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   const url = await nexusUrl()
   const config = {
     url,
@@ -88,7 +88,7 @@ async function revokeAgentImpl(rawId: string) {
     .returning({ name: agents.name })
   if (!res.length) throw new Error('Agent not found or already revoked')
   await recordAudit(ctx, { action: 'REVOKE', resource: 'agent', resourceId: id, changes: { name: res[0].name } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 const addInput = z.object({
@@ -123,7 +123,7 @@ async function addAgentDataSourceImpl(input: z.input<typeof addInput>) {
     status: 'disconnected',
   })
   await recordAudit(ctx, { action: 'CREATE', resource: 'data_source', resourceId: id, changes: { sourceType: conn.type, role: data.role, agent: agent.name, connection: conn.name } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return { id, name }
 }
 

@@ -2,81 +2,80 @@ import { auth } from '@/lib/auth'
 import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Button } from '@/components/ui/button'
-import { Workflow } from 'lucide-react'
+import { buttonVariants } from '@/components/ui/button'
+import { KmWordmark } from '@/components/brand/km-wordmark'
+import { FlowLine } from '@/components/ui/flow-line'
+import { cn } from '@/lib/utils'
+
+const CAPABILITIES = [
+  ['Data Source Manager', 'Connect databases, files and apps'],
+  ['Connector Marketplace', 'Install the connectors you need'],
+  ['Pipeline Designer', 'Map and transform data step by step'],
+  ['Scheduler & Monitoring', 'Run on a schedule, follow every run'],
+  ['Data Mapping & Catalog', 'One model for employees and org data'],
+  ['Business Rules & Quality', 'Check data before it moves on'],
+  ['Analytics & Dashboards', 'Charts on governed datasets'],
+  ['Governance & AI', 'Masking, row access and an open-source assistant'],
+] as const
 
 export default async function Page() {
   const session = await auth.api.getSession({ headers: await headers() })
-  
+
   if (session?.user) {
     redirect('/dashboard')
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
-      <div className="max-w-2xl mx-auto px-6 text-center">
-        <div className="flex justify-center mb-6">
-          <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
-            <Workflow className="w-8 h-8 text-white" />
+    <main className="flex min-h-screen flex-col bg-background text-foreground">
+      <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-4 py-5 sm:px-6">
+        <span className="flex items-center gap-2.5">
+          <KmWordmark className="h-5" />
+          <span className="text-base font-semibold tracking-tight">Nexus</span>
+        </span>
+        <Link href="/sign-in" className={buttonVariants({ variant: 'ghost' })}>
+          Sign in
+        </Link>
+      </header>
+
+      <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col justify-center gap-10 px-4 pt-6 pb-16 sm:px-6">
+        <section className="max-w-2xl">
+          <p className="font-mono text-xs tracking-wide text-muted-foreground uppercase">Enterprise data integration platform</p>
+          <h1 className="mt-3 text-4xl font-semibold tracking-tight text-balance sm:text-5xl">KMPlus Nexus</h1>
+          <p className="mt-4 text-lg text-pretty text-muted-foreground">
+            Connect, check, govern and deliver enterprise data, HR first, to KMPlus products and the other systems you run. One platform for data pipelines, integrations and intelligence.
+          </p>
+          <div className="mt-8 flex flex-wrap gap-3">
+            <Link href="/sign-up" className={buttonVariants({ size: 'lg', className: 'px-4' })}>
+              Get started
+            </Link>
+            <Link href="/sign-in" className={buttonVariants({ size: 'lg', variant: 'outline', className: 'px-4' })}>
+              Sign in
+            </Link>
           </div>
-        </div>
+        </section>
 
-        <h1 className="text-5xl font-bold text-white mb-4">KMPlus Nexus</h1>
-        <p className="text-xl text-slate-400 mb-2">Enterprise Data Integration Platform</p>
-        <p className="text-slate-500 mb-8">
-          A comprehensive 14-layer platform for managing enterprise data pipelines, integrations, and intelligence.
-        </p>
-
-        <div className="bg-slate-800/50 backdrop-blur border border-slate-700 rounded-lg p-8 mb-8">
-          <h2 className="text-2xl font-semibold text-white mb-4">14 Integrated Layers</h2>
-          <div className="grid grid-cols-2 gap-3 text-left mb-6">
-            <div className="flex items-start gap-2">
-              <div className="w-2 h-2 bg-blue-500 rounded-full mt-1.5 flex-shrink-0" />
-              <div className="text-sm text-slate-400">Data Source Manager</div>
-            </div>
-            <div className="flex items-start gap-2">
-              <div className="w-2 h-2 bg-blue-500 rounded-full mt-1.5 flex-shrink-0" />
-              <div className="text-sm text-slate-400">Connector Marketplace</div>
-            </div>
-            <div className="flex items-start gap-2">
-              <div className="w-2 h-2 bg-blue-500 rounded-full mt-1.5 flex-shrink-0" />
-              <div className="text-sm text-slate-400">Pipeline Designer</div>
-            </div>
-            <div className="flex items-start gap-2">
-              <div className="w-2 h-2 bg-blue-500 rounded-full mt-1.5 flex-shrink-0" />
-              <div className="text-sm text-slate-400">Scheduler & Monitoring</div>
-            </div>
-            <div className="flex items-start gap-2">
-              <div className="w-2 h-2 bg-purple-500 rounded-full mt-1.5 flex-shrink-0" />
-              <div className="text-sm text-slate-400">Data Mapping & Catalog</div>
-            </div>
-            <div className="flex items-start gap-2">
-              <div className="w-2 h-2 bg-purple-500 rounded-full mt-1.5 flex-shrink-0" />
-              <div className="text-sm text-slate-400">Business Rules & Quality</div>
-            </div>
-            <div className="flex items-start gap-2">
-              <div className="w-2 h-2 bg-purple-500 rounded-full mt-1.5 flex-shrink-0" />
-              <div className="text-sm text-slate-400">Analytics & Dashboards</div>
-            </div>
-            <div className="flex items-start gap-2">
-              <div className="w-2 h-2 bg-purple-500 rounded-full mt-1.5 flex-shrink-0" />
-              <div className="text-sm text-slate-400">Governance & AI</div>
-            </div>
+        <section aria-labelledby="capabilities" className="rounded-lg border border-border bg-card">
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-3 border-b border-border px-5 py-4">
+            <h2 id="capabilities" className="text-base font-semibold">
+              What it covers
+            </h2>
+            <FlowLine from="HR system" to="KMS · LMS · TMS" state="live" srLabel="From your HR system to KMPlus products" className="min-w-56 flex-1 sm:max-w-md" />
           </div>
-        </div>
-
-        <div className="flex gap-4 justify-center">
-          <Link href="/sign-up">
-            <Button size="lg" className="bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-700 hover:to-blue-600">
-              Get Started
-            </Button>
-          </Link>
-          <Link href="/sign-in">
-            <Button size="lg" variant="outline" className="border-slate-600 text-slate-300 hover:bg-slate-800">
-              Sign In
-            </Button>
-          </Link>
-        </div>
+          <ul className="grid sm:grid-cols-2 lg:grid-cols-4">
+            {CAPABILITIES.map(([name, detail], i) => (
+              <li
+                key={name}
+                className={cn('border-border px-5 py-4', i > 0 && 'border-t', 'sm:border-t-0 sm:[&:nth-child(n+3)]:border-t lg:[&:nth-child(n+3)]:border-t-0 lg:[&:nth-child(n+5)]:border-t', 'sm:odd:border-r lg:border-r lg:[&:nth-child(4n)]:border-r-0')}
+              >
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <span aria-hidden className="inline-block size-2 shrink-0 rounded-[1px] bg-live" />
+                  {name}
+                </div>
+                <p className="mt-1 pl-4 text-sm text-muted-foreground">{detail}</p>
+              </li>
+            ))}
+          </ul>
+        </section>
       </div>
     </main>
   )

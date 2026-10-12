@@ -1,8 +1,14 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useId, useState } from 'react'
 import { History, Loader2, RefreshCw } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import { Label } from '@/components/ui/label'
+import { Notice } from '@/components/ui/notice'
+import { EmptyState } from '@/components/ui/empty-state'
+import { Table, TBody, Td, Th, THead, Tr } from '@/components/ui/data-table'
+import { SettingsPanel, nativeSelectClass } from '@/components/workspace/settings-panel'
 import { listAuditLogs } from '@/lib/actions/audit'
 import { describeDiff } from '@/lib/audit-diff'
 
@@ -30,6 +36,7 @@ function summary(changes: unknown) {
 
 /** Workspace audit trail (roles with audit:view). */
 export function AuditLog() {
+  const filterId = useId()
   const [rows, setRows] = useState<Row[]>([])
   const [hasMore, setHasMore] = useState(false)
   const [action, setAction] = useState('')
@@ -51,7 +58,7 @@ export function AuditLog() {
         setLoading(false)
       }
     },
-    [action]
+    [action],
   )
 
   useEffect(() => {
@@ -59,80 +66,101 @@ export function AuditLog() {
   }, [load])
 
   return (
-    <section className="rounded-xl border border-border bg-card p-5">
+    <SettingsPanel
+      title="Audit log"
+      description="Every change, data view (previews, samples, rejected rows, test runs) and pipeline run in this workspace, with who did it and from where. Credential values are never recorded."
+    >
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <History className="h-4 w-4 text-primary" />
-        <h3 className="font-semibold">Audit log</h3>
-        <div className="ml-auto flex items-center gap-2">
-          <select className="h-8 rounded-md border border-input bg-background px-2 text-sm" value={action} onChange={(e) => setAction(e.target.value)} aria-label="Filter by action">
-            <option value="">All actions</option>
-            {ACTIONS.map((a) => (
-              <option key={a} value={a}>
-                {a}
-              </option>
-            ))}
-          </select>
-          <Button size="sm" variant="outline" onClick={() => void load()} disabled={loading} aria-label="Refresh audit log">
-            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-          </Button>
-        </div>
+        <Label htmlFor={filterId}>Action</Label>
+        <select id={filterId} className={nativeSelectClass} value={action} onChange={(e) => setAction(e.target.value)}>
+          <option value="">All actions</option>
+          {ACTIONS.map((a) => (
+            <option key={a} value={a}>
+              {a}
+            </option>
+          ))}
+        </select>
+        <Button size="icon" variant="outline" onClick={() => void load()} disabled={loading} aria-label="Refresh audit log">
+          <RefreshCw className={cn(loading && 'animate-spin')} aria-hidden />
+        </Button>
       </div>
-      <p className="mb-3 text-xs text-muted-foreground">
-        Every change, data view (previews, samples, rejected rows, test runs) and pipeline run in this workspace, with who did it and from where. Credential values are never recorded.
-      </p>
-      {error && <p className="mb-3 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[760px] text-sm">
-          <thead>
-            <tr className="border-b border-border text-left text-xs uppercase text-muted-foreground">
-              <th className="px-2 py-2">When (WIB)</th>
-              <th className="px-2 py-2">Who</th>
-              <th className="px-2 py-2">Action</th>
-              <th className="px-2 py-2">Resource</th>
-              <th className="px-2 py-2">Details</th>
-              <th className="px-2 py-2">IP</th>
+      {error && <Notice tone="danger" className="mb-3">{error}</Notice>}
+      <div className="-mx-5 border-y border-border">
+        <Table label="Audit log" className="min-w-[760px]" aria-busy={loading || undefined}>
+          <THead>
+            <tr>
+              <Th className="pl-5">When (WIB)</Th>
+              <Th>Who</Th>
+              <Th>Action</Th>
+              <Th>Resource</Th>
+              <Th>Details</Th>
+              <Th className="pr-5">IP</Th>
             </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.id} className="border-b border-border/60 align-top">
-                <td className="whitespace-nowrap px-2 py-2 text-muted-foreground">{stamp(r.createdAt)}</td>
-                <td className="px-2 py-2">{r.email ?? 'deleted user'}</td>
-                <td className="px-2 py-2 font-mono text-xs">{r.action}</td>
-                <td className="px-2 py-2">
-                  {r.resource}
-                  {r.resourceId && <div className="max-w-[180px] truncate font-mono text-xs text-muted-foreground" title={r.resourceId}>{r.resourceId}</div>}
-                </td>
-                <td className="max-w-[320px] px-2 py-2 text-xs text-muted-foreground">
-                  <span className="line-clamp-2" title={summary(r.changes)}>{summary(r.changes)}</span>
-                  {diffLines(r.changes).length > 0 && (
-                    <details className="mt-1">
-                      <summary className="cursor-pointer text-primary">{diffLines(r.changes).length} field change{diffLines(r.changes).length === 1 ? '' : 's'}</summary>
-                      <ul className="mt-1 space-y-0.5 font-mono text-[11px]">
-                        {diffLines(r.changes).map((l, i) => (
-                          <li key={i} className="break-all">{l}</li>
-                        ))}
-                      </ul>
-                    </details>
-                  )}
-                </td>
-                <td className="whitespace-nowrap px-2 py-2 font-mono text-xs text-muted-foreground" title={r.userAgent ?? ''}>{r.ipAddress ?? '-'}</td>
-              </tr>
-            ))}
+          </THead>
+          <TBody>
+            {rows.map((r) => {
+              const diff = diffLines(r.changes)
+              return (
+                <Tr key={r.id} className="align-top">
+                  <Td className="pl-5 align-top font-mono text-xs whitespace-nowrap text-muted-foreground">{stamp(r.createdAt)}</Td>
+                  <Td className="align-top">{r.email ?? 'deleted user'}</Td>
+                  <Td className="align-top font-mono text-xs">{r.action}</Td>
+                  <Td className="align-top">
+                    {r.resource}
+                    {r.resourceId && (
+                      <div className="max-w-[180px] truncate font-mono text-xs text-muted-foreground" title={r.resourceId}>
+                        {r.resourceId}
+                      </div>
+                    )}
+                  </Td>
+                  <Td className="max-w-[320px] align-top text-xs text-muted-foreground">
+                    <span className="line-clamp-2" title={summary(r.changes)}>
+                      {summary(r.changes)}
+                    </span>
+                    {diff.length > 0 && (
+                      <details className="mt-1">
+                        <summary className="cursor-pointer text-info-text">
+                          {diff.length} field change{diff.length === 1 ? '' : 's'}
+                        </summary>
+                        <ul className="mt-1 space-y-0.5 font-mono text-[11px]">
+                          {diff.map((l, i) => (
+                            <li key={i} className="break-all">
+                              {l}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    )}
+                  </Td>
+                  <Td className="pr-5 align-top font-mono text-xs whitespace-nowrap text-muted-foreground" title={r.userAgent ?? ''}>
+                    {r.ipAddress ?? '-'}
+                  </Td>
+                </Tr>
+              )
+            })}
             {!loading && rows.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-2 py-6 text-center text-muted-foreground">No audit events{action ? ` for ${action}` : ''} yet.</td>
+                <td colSpan={6}>
+                  <EmptyState compact icon={<History />} title={`No audit events${action ? ` for ${action}` : ''} yet.`} />
+                </td>
               </tr>
             )}
-          </tbody>
-        </table>
+            {loading && rows.length === 0 && (
+              <tr>
+                <td colSpan={6} className="py-8 text-center text-muted-foreground">
+                  <Loader2 className="mx-auto size-5 animate-spin" aria-hidden />
+                  <span className="sr-only">Loading…</span>
+                </td>
+              </tr>
+            )}
+          </TBody>
+        </Table>
       </div>
-      {loading && rows.length === 0 && <Loader2 className="mx-auto mt-4 h-5 w-5 animate-spin text-muted-foreground" />}
       {hasMore && (
         <Button size="sm" variant="outline" className="mt-3" disabled={loading} onClick={() => void load(rows)}>
           Load older
         </Button>
       )}
-    </section>
+    </SettingsPanel>
   )
 }

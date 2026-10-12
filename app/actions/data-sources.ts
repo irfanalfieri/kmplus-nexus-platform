@@ -89,7 +89,7 @@ async function createDataSourceImpl(input: z.input<typeof createInput>) {
     lastConnected: hasSchemaScan ? new Date() : undefined,
   })
   await audit(ctx, 'CREATE', id, { sourceType: data.sourceType, role: data.config.role })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return id
 }
 
@@ -115,7 +115,7 @@ async function testConnectionImpl(rawId: string) {
     .update(dataSources)
     .set({ status: 'connected', lastConnected: new Date(), updatedAt: new Date(), config: { ...(source.config as Record<string, unknown>), schemaScan: scan } })
     .where(and(eq(dataSources.id, source.id), eq(dataSources.workspaceId, ctx.workspaceId)))
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return { tables: scan.tables.length }
 }
 
@@ -214,7 +214,7 @@ async function testAndSave(ctx: WorkspaceContext, source: typeof dataSources.$in
     .where(and(eq(dataSources.id, source.id), eq(dataSources.workspaceId, ctx.workspaceId)))
   // Record which fields changed, never their values.
   await audit(ctx, 'UPDATE_CREDENTIALS', source.id, { fields: changedFields })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return { ok: true as const, message: `${test.message} Found ${scan.tables.length} objects.` }
 }
 
@@ -228,7 +228,7 @@ async function renameDataSourceImpl(rawId: string, rawName: string) {
     .set({ name, updatedAt: new Date() })
     .where(and(eq(dataSources.id, id), eq(dataSources.workspaceId, ctx.workspaceId)))
   await recordAudit(ctx, { action: 'UPDATE', resource: 'data_source', resourceId: id, changes: { name }, diff: diffObjects({ name: before.name }, { name }) })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 /** Switches a data source between source and destination (pipelines only write to destinations). */
@@ -241,7 +241,7 @@ async function setDataSourceRoleImpl(rawId: string, rawRole: string) {
     .set({ config: { ...(source.config as Record<string, unknown>), role }, updatedAt: new Date() })
     .where(and(eq(dataSources.id, source.id), eq(dataSources.workspaceId, ctx.workspaceId)))
   await recordAudit(ctx, { action: 'UPDATE', resource: 'data_source', resourceId: source.id, changes: { role }, diff: diffObjects({ role: (source.config as { role?: string })?.role ?? 'source' }, { role }) })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 async function deleteDataSourceImpl(rawId: string) {
@@ -265,7 +265,7 @@ async function deleteDataSourceImpl(rawId: string) {
   }
   await db.delete(dataSources).where(and(eq(dataSources.id, id), eq(dataSources.workspaceId, ctx.workspaceId)))
   await audit(ctx, 'DELETE', id)
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 // ── Server actions: thin wrappers that return errors as values so their messages

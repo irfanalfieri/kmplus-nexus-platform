@@ -37,7 +37,7 @@ async function saveMappingTemplateImpl(input: z.input<typeof saveInput>) {
     await db.insert(mappingTemplates).values({ id, workspaceId: ctx.workspaceId, name: data.name, description: data.description, fields: data.fields, keepUnmapped: data.keepUnmapped, createdBy: ctx.userId })
   }
   await recordAudit(ctx, { action: existing ? 'UPDATE' : 'CREATE', resource: 'mapping_template', resourceId: id, changes: { name: data.name, fields: data.fields.length } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return { id, replaced: Boolean(existing) }
 }
 
@@ -47,7 +47,7 @@ async function deleteMappingTemplateImpl(rawId: string) {
   const res = await db.delete(mappingTemplates).where(and(eq(mappingTemplates.id, id), eq(mappingTemplates.workspaceId, ctx.workspaceId))).returning({ name: mappingTemplates.name })
   if (!res.length) throw new Error('Template not found')
   await recordAudit(ctx, { action: 'DELETE', resource: 'mapping_template', resourceId: id, changes: { name: res[0].name } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 export async function saveMappingTemplate(...args: Parameters<typeof saveMappingTemplateImpl>) {

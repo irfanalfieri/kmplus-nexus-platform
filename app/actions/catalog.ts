@@ -276,7 +276,7 @@ async function saveCatalogEntryImpl(input: z.input<typeof catalogInputSchema>) {
     changes: { classification: data.classification, tags: values.tags, ...(ref.kind === 'source_table' ? { accessMode: data.accessMode, alias: data.alias, refresh: data.refresh } : {}) },
     diff: existing ? diffObjects(existing as unknown as Record<string, unknown>, { ...existing, ...values } as Record<string, unknown>, { ignore: ['updatedBy', 'id', 'workspaceId', 'key', 'kind'] }) : undefined,
   })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   // A newly cached table gets its first copy right away.
   if (ref.kind === 'source_table' && data.accessMode === 'cached' && values.cachePipelineId && existing?.accessMode !== 'cached') {
     const outcome = await enqueueRun(values.cachePipelineId, { workspaceId: ctx.workspaceId, actorId: ctx.userId }, 'manual')
@@ -365,7 +365,7 @@ async function saveDomainMappingImpl(input: z.input<typeof mappingInput>) {
     .values({ id: newId('dom'), workspaceId: ctx.workspaceId, entity: entity.name, datasetName: data.datasetName, fields, updatedBy: ctx.userId })
     .onConflictDoUpdate({ target: [domainMappings.workspaceId, domainMappings.entity], set: { datasetName: data.datasetName, fields, updatedBy: ctx.userId, updatedAt: new Date() } })
   await recordAudit(ctx, { action: 'UPDATE', resource: 'domain_mapping', resourceId: entity.name, changes: { datasetName: data.datasetName, fields: Object.keys(fields) } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 async function deleteDomainMappingImpl(rawEntity: string) {
@@ -373,7 +373,7 @@ async function deleteDomainMappingImpl(rawEntity: string) {
   const entity = z.string().min(1).max(40).parse(rawEntity)
   await db.delete(domainMappings).where(and(eq(domainMappings.workspaceId, ctx.workspaceId), eq(domainMappings.entity, entity)))
   await recordAudit(ctx, { action: 'DELETE', resource: 'domain_mapping', resourceId: entity })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 export async function listCatalog(...args: Parameters<typeof listCatalogImpl>) {

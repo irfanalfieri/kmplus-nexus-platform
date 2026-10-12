@@ -1,9 +1,13 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { X, Database, RefreshCw, Loader, Copy, CheckCircle2 } from 'lucide-react'
+import { Database, RefreshCw, Loader } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Modal } from '@/components/ui/dialog'
+import { Notice } from '@/components/ui/notice'
+import { Table, THead, TBody, Tr, Th, Td } from '@/components/ui/data-table'
+import { cn } from '@/lib/utils'
 import {
   getDataSourceTableSample,
   scanDataSourceSchema,
@@ -39,11 +43,10 @@ export default function SchemaExplorerModal({
   const [selectedTable, setSelectedTable] = useState<SchemaTable | null>(null)
   const [sampleColumns, setSampleColumns] = useState<string[]>([])
   const [sampleRows, setSampleRows] = useState<Record<string, unknown>[]>([])
-  const [totalRows, setTotalRows] = useState<number | null>(null)
+  const [, setTotalRows] = useState<number | null>(null)
   const [loadingScan, setLoadingScan] = useState(false)
   const [loadingSample, setLoadingSample] = useState(false)
   const [error, setError] = useState('')
-  const [copied, setCopied] = useState(false)
 
   const loadScan = useCallback(async () => {
     setLoadingScan(true)
@@ -95,175 +98,164 @@ export default function SchemaExplorerModal({
     void loadSample(selectedTable.name)
   }, [isOpen, selectedTable, loadSample])
 
-  const jsonPreview = JSON.stringify(sampleRows, null, 2)
-
-  if (!isOpen) return null
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="Schema explorer">
-      <div className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-border bg-card">
-        <div className="flex items-center justify-between border-b border-border p-6">
-          <div>
-            <h3 className="text-lg font-semibold">Schema Explorer</h3>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {sourceName} · {sourceType.toUpperCase()}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button size="sm" variant="outline" onClick={() => void loadScan()} disabled={loadingScan}>
-              <RefreshCw className={`mr-1 h-4 w-4 ${loadingScan ? 'animate-spin' : ''}`} />
-              Rescan
-            </Button>
-            <Button size="sm" variant="ghost" onClick={onClose}>
-              <X className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-
-        <div className="grid flex-1 overflow-hidden lg:grid-cols-[320px_1fr]">
-          <div className="overflow-y-auto border-r border-border p-4">
-            <div className="mb-3 flex items-center justify-between">
-              <h4 className="text-sm font-semibold">Objects ({scan?.tables.length ?? 0})</h4>
-              {scan && <Badge variant="outline">{scan.method}</Badge>}
-            </div>
-            {loadingScan && !scan && (
-              <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
-                <Loader className="h-4 w-4 animate-spin" />
-                Scanning…
-              </div>
-            )}
-            <div className="space-y-2">
-              {scan?.tables.map((table) => (
-                <button
-                  key={`${table.schema}.${table.name}`}
-                  type="button"
-                  onClick={() => setSelectedTable(table)}
-                  className={`w-full rounded-lg border p-3 text-left transition-colors ${
-                    selectedTable?.name === table.name
-                      ? 'border-primary bg-primary/10'
-                      : 'border-border/60 bg-muted/20 hover:bg-muted/40'
-                  }`}
-                >
-                  <div className="flex items-center gap-2 font-medium">
-                    <Database className="h-4 w-4 text-primary" />
-                    {table.name}
-                  </div>
-                  <div className="mt-1 text-xs text-muted-foreground">
-                    {table.columns.length} columns
-                    {table.rowCount != null ? ` · ${table.rowCount.toLocaleString()} rows` : ''}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="overflow-y-auto p-6">
-            {error && (
-              <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-                {error}
-              </div>
-            )}
-            {selectedTable ? (
-              <div className="space-y-6">
-                <div>
-                  <h4 className="text-lg font-semibold">{selectedTable.name}</h4>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {selectedTable.columns.length} columns
-                    {selectedTable.rowCount != null
-                      ? ` · ${selectedTable.rowCount.toLocaleString()} total rows`
-                      : ''}
-                  </p>
-                </div>
-
-                <div className="overflow-x-auto rounded-lg border border-border/50">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-border/50 bg-muted/30">
-                        <th className="px-4 py-2 text-left">Column</th>
-                        <th className="px-4 py-2 text-left">Type</th>
-                        <th className="px-4 py-2 text-left">Nullable</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {selectedTable.columns.map((col) => (
-                        <tr key={col.name} className="border-b border-border/50">
-                          <td className="px-4 py-2 font-mono text-xs">{col.name}</td>
-                          <td className="px-4 py-2 text-muted-foreground">{col.type}</td>
-                          <td className="px-4 py-2 text-muted-foreground">{col.nullable ? 'Yes' : 'No'}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h4 className="font-semibold">Sample data</h4>
-                    {loadingSample && <Loader className="h-4 w-4 animate-spin" />}
-                  </div>
-                  {sampleRows.length > 0 ? (
-                    <div className="overflow-x-auto rounded-lg border border-border/50">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="border-b border-border/50 bg-muted/30">
-                            {sampleColumns.map((col) => (
-                              <th key={col} className="px-4 py-2 text-left">
-                                {col}
-                              </th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {sampleRows.map((row, idx) => (
-                            <tr key={idx} className="border-b border-border/50">
-                              {sampleColumns.map((col) => (
-                                <td key={`${idx}-${col}`} className="max-w-xs truncate px-4 py-2 text-muted-foreground">
-                                  {formatCell(row[col])}
-                                </td>
-                              ))}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    !loadingSample && (
-                      <p className="text-sm text-muted-foreground">No rows returned for this object.</p>
-                    )
-                  )}
-                </div>
-
-                <div className="rounded-lg border border-blue-200 bg-blue-100/50 p-4">
-                  <div className="flex gap-2">
-                    <CheckCircle2 className="mt-0.5 h-5 w-5 text-blue-600" />
-                    <div className="text-sm">
-                      <div className="font-semibold text-blue-900">Live connection</div>
-                      <p className="mt-1 text-blue-800">
-                        Schema and samples are loaded from your production {sourceType} connection.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              !loadingScan && (
-                <p className="py-12 text-center text-sm text-muted-foreground">No schema objects found.</p>
-              )
-            )}
-          </div>
-        </div>
-
-        <div className="flex gap-2 border-t border-border p-4">
-          {onProceed && (
-            <Button onClick={onProceed} className="flex-1">
-              Proceed to Pipeline Design
-            </Button>
-          )}
-          <Button onClick={onClose} variant="outline" className="flex-1">
+    <Modal
+      open={isOpen}
+      onClose={onClose}
+      size="full"
+      title="Schema Explorer"
+      description={
+        <>
+          {sourceName} · <span className="font-mono">{sourceType.toUpperCase()}</span>
+        </>
+      }
+      headerActions={
+        <Button size="sm" variant="outline" onClick={() => void loadScan()} disabled={loadingScan}>
+          <RefreshCw className={cn(loadingScan && 'animate-spin')} aria-hidden />
+          Rescan
+        </Button>
+      }
+      bodyClassName="p-0 lg:overflow-hidden"
+      footer={
+        <>
+          <Button onClick={onClose} variant="outline">
             Close
           </Button>
+          {onProceed && <Button onClick={onProceed}>Proceed to Pipeline Design</Button>}
+        </>
+      }
+    >
+      <div className="grid lg:h-full lg:grid-cols-[320px_1fr]">
+        <nav aria-label="Schema objects" className="border-b border-border p-4 lg:overflow-y-auto lg:border-r lg:border-b-0">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-sm font-semibold">
+              Objects <span className="font-mono text-muted-foreground">({scan?.tables.length ?? 0})</span>
+            </h3>
+            {scan && (
+              <Badge variant="outline" className="font-mono">
+                {scan.method}
+              </Badge>
+            )}
+          </div>
+          {loadingScan && !scan && (
+            <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground" role="status">
+              <Loader className="size-4 animate-spin" aria-hidden />
+              Scanning…
+            </div>
+          )}
+          <ul className="space-y-2">
+            {scan?.tables.map((table) => {
+              const selected = selectedTable?.name === table.name
+              return (
+                <li key={`${table.schema}.${table.name}`}>
+                  <button
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => setSelectedTable(table)}
+                    className={cn(
+                      'w-full rounded-md border p-3 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
+                      selected ? 'border-primary/60 bg-accent text-accent-foreground' : 'border-border bg-card hover:bg-muted'
+                    )}
+                  >
+                    <span className="flex items-center gap-2 font-medium">
+                      <Database className="size-4 shrink-0 text-primary" aria-hidden />
+                      <span className="min-w-0 truncate font-mono text-sm">{table.name}</span>
+                    </span>
+                    <span className="mt-1 block font-mono text-xs text-muted-foreground">
+                      {table.columns.length} columns
+                      {table.rowCount != null ? ` · ${table.rowCount.toLocaleString()} rows` : ''}
+                    </span>
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        </nav>
+
+        <div className="p-5 lg:overflow-y-auto">
+          {error && (
+            <Notice tone="danger" className="mb-4">
+              {error}
+            </Notice>
+          )}
+          {selectedTable ? (
+            <div className="space-y-6">
+              <div>
+                <h3 className="font-mono text-base font-semibold">{selectedTable.name}</h3>
+                <p className="mt-1 font-mono text-xs text-muted-foreground">
+                  {selectedTable.columns.length} columns
+                  {selectedTable.rowCount != null ? ` · ${selectedTable.rowCount.toLocaleString()} total rows` : ''}
+                </p>
+              </div>
+
+              <div className="overflow-hidden rounded-lg border border-border">
+                <Table label={`Columns of ${selectedTable.name}`}>
+                  <THead>
+                    <tr>
+                      <Th>Column</Th>
+                      <Th>Type</Th>
+                      <Th>Nullable</Th>
+                    </tr>
+                  </THead>
+                  <TBody>
+                    {selectedTable.columns.map((col) => (
+                      <Tr key={col.name}>
+                        <Td className="font-mono text-xs">{col.name}</Td>
+                        <Td className="font-mono text-xs text-muted-foreground">{col.type}</Td>
+                        <Td className="text-muted-foreground">{col.nullable ? 'Yes' : 'No'}</Td>
+                      </Tr>
+                    ))}
+                  </TBody>
+                </Table>
+              </div>
+
+              <section className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-semibold">Sample data</h4>
+                  {loadingSample && (
+                    <span role="status" className="text-muted-foreground">
+                      <Loader className="size-4 animate-spin" aria-hidden />
+                      <span className="sr-only">Loading sample rows</span>
+                    </span>
+                  )}
+                </div>
+                {sampleRows.length > 0 ? (
+                  <div className="overflow-hidden rounded-lg border border-border">
+                    <Table label={`Sample rows of ${selectedTable.name}`}>
+                      <THead>
+                        <tr>
+                          {sampleColumns.map((col) => (
+                            <Th key={col}>{col}</Th>
+                          ))}
+                        </tr>
+                      </THead>
+                      <TBody>
+                        {sampleRows.map((row, idx) => (
+                          <Tr key={idx}>
+                            {sampleColumns.map((col) => (
+                              <Td key={`${idx}-${col}`} className="max-w-xs truncate text-muted-foreground">
+                                {formatCell(row[col])}
+                              </Td>
+                            ))}
+                          </Tr>
+                        ))}
+                      </TBody>
+                    </Table>
+                  </div>
+                ) : (
+                  !loadingSample && <p className="text-sm text-muted-foreground">No rows returned for this object.</p>
+                )}
+              </section>
+
+              <Notice tone="info" title="Live connection" live={false}>
+                Schema and samples are loaded from your production {sourceType} connection.
+              </Notice>
+            </div>
+          ) : (
+            !loadingScan && <p className="py-12 text-center text-sm text-muted-foreground">No schema objects found.</p>
+          )}
         </div>
       </div>
-    </div>
+    </Modal>
   )
 }

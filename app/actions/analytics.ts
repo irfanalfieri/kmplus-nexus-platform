@@ -82,7 +82,7 @@ async function saveDashboardImpl(input: z.input<typeof dashboardInputSchema>) {
     await db.insert(dashboards).values({ id, workspaceId: ctx.workspaceId, name: data.name, description: data.description, widgets: data.widgets, createdBy: ctx.userId })
   }
   await recordAudit(ctx, { action: data.id ? 'UPDATE' : 'CREATE', resource: 'dashboard', resourceId: id, changes: { name: data.name, widgets: data.widgets.length } })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return { id }
 }
 
@@ -91,7 +91,7 @@ async function deleteDashboardImpl(rawId: string) {
   const id = idSchema.parse(rawId)
   await db.delete(dashboards).where(and(eq(dashboards.id, id), eq(dashboards.workspaceId, ctx.workspaceId)))
   await recordAudit(ctx, { action: 'DELETE', resource: 'dashboard', resourceId: id })
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
 }
 
 async function previewWidgetImpl(rawWidget: unknown) {

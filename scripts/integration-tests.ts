@@ -44,7 +44,7 @@ import { POST as postHook } from '@/app/api/hooks/pipelines/[id]/[token]/route'
 import { POST as postRuns } from '@/app/api/v1/pipelines/[id]/runs/route'
 import { GET as getRun } from '@/app/api/v1/runs/[id]/route'
 import { deleteRule, listRuleVersions, listRules, saveRule, testRule } from '@/lib/actions/rules'
-import { approveRows, dismissRows, fixRow, getQualityOverview, listQuarantine, replayRows } from '@/lib/actions/quality'
+import { approveRows, dismissRows, fixRow, getQualityOverview, listQuarantine, replayRows, restoreRows } from '@/lib/actions/quality'
 import { getCatalogSample, getLineage, getQualityHistory, listCatalog, saveCatalogEntry, saveDomainMapping } from '@/lib/actions/catalog'
 import { createApiKey, revokeApiKey } from '@/lib/actions/api-keys'
 import { uploadFilePart } from '@/lib/actions/files'
@@ -492,6 +492,20 @@ async function main() {
       const masked = await listQuarantine({ pipelineId, kind: 'invalid' })
       assert.ok(masked.rows.every((r) => !r.editable), 'masked rows are not editable')
       await rejectsWith(() => dismissRows([masked.rows[0].id]), /Your role/)
+    })
+
+    await test('data quality: dismiss can be undone; rows say where a replay writes', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const open = await listQuarantine({ pipelineId, status: 'open' })
+      const row = open.rows[0]
+      assert.ok(row, 'an open row to dismiss')
+      assert.ok(row.destinations.includes(`dataset ${DATASET}`), 'destinations name the dataset')
+      assert.equal((await dismissRows([row.id])).dismissed, 1)
+      assert.ok(!(await listQuarantine({ pipelineId, status: 'open' })).rows.some((r) => r.id === row.id))
+      assert.equal((await restoreRows([row.id])).restored, 1)
+      const back = await listQuarantine({ pipelineId, status: row.fixedRow ? 'fixed' : 'open' })
+      assert.ok(back.rows.some((r) => r.id === row.id), 'undo puts the row back in the inbox')
     })
 
     await test('row-level access: analysts only see rows their filter allows', async () => {

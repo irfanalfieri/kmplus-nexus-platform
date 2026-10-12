@@ -116,7 +116,7 @@ async function scanDataSourceSchemaImpl(rawSourceId: string) {
     })
     .where(and(eq(dataSources.id, sourceId), eq(dataSources.workspaceId, workspaceId)))
 
-  revalidatePath('/dashboard')
+  revalidatePath('/dashboard', 'layout')
   return scan
 }
 
