@@ -3,4 +3,4 @@
 import * as actions from '@/app/actions/sso'
 import { unwrapActions } from '@/lib/action-result'
 
-export const { listSsoProviders, createSsoProvider, verifySsoDomain, updateSsoProvider, deleteSsoProvider } = unwrapActions(actions)
+export const { createSamlProvider, setSamlIdp, listSsoProviders, createSsoProvider, verifySsoDomain, updateSsoProvider, deleteSsoProvider } = unwrapActions(actions)

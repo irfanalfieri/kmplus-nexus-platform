@@ -13,12 +13,14 @@ import { ROLES } from '@/lib/auth/permissions'
 import { recordAudit } from '@/lib/audit'
 import { DOMAIN_RE, PUBLIC_EMAIL_DOMAINS, SSO_PRESETS, issuerFor } from '@/lib/auth/sso-presets'
 import { safeFetch, UnsafeUrlError } from '@/lib/net/safe-url'
+import { openSsoConfig, sealSsoConfig } from '@/lib/security/credentials'
+import { SAML_PRESETS, manualIdpSettings, parseIdpMetadata, samlConfigFor, spEndpoints, type IdpSettings, type SamlPreset } from '@/lib/auth/saml'
 import { guard } from '@/lib/server-action'
 
 /**
- * Workspace SSO providers (GV-8): admins register an OpenID Connect app of
- * their identity provider, prove the email domain with a DNS TXT record, and
- * choose the role new SSO users get. The Better Auth SSO plugin performs the
+ * Workspace SSO providers (GV-8): admins register an OpenID Connect app or a
+ * SAML 2.0 application of their identity provider, prove the email domain with
+ * a DNS TXT record, and choose the role new SSO users get. The Better Auth SSO plugin performs the
  * sign-in; its own provider-management endpoints are disabled (lib/auth.ts).
  */
 
@@ -41,25 +43,31 @@ async function owned(ctx: WorkspaceContext, providerId: string) {
 async function listSsoProvidersImpl() {
   const ctx = await requireWorkspace('workspace:manage')
   const rows = await db
-    .select({ w: workspaceSso, verified: ssoProvider.domainVerified, issuer: ssoProvider.issuer })
+    .select({ w: workspaceSso, verified: ssoProvider.domainVerified, issuer: ssoProvider.issuer, samlConfig: ssoProvider.samlConfig })
     .from(workspaceSso)
     .innerJoin(ssoProvider, eq(ssoProvider.providerId, workspaceSso.providerId))
     .where(eq(workspaceSso.workspaceId, ctx.workspaceId))
   const base = await baseUrl()
-  return rows.map(({ w, verified, issuer }) => ({
+  return rows.map(({ w, verified, issuer, samlConfig }) => {
+    const saml = w.protocol === 'saml' ? (JSON.parse(samlConfig ?? '{}') as { entryPoint?: string; certificateExpires?: string | null }) : null
+    return {
     providerId: w.providerId,
     label: w.label,
+    protocol: w.protocol as 'oidc' | 'saml',
     preset: w.preset,
     domain: w.domain,
     issuer,
     defaultRole: w.defaultRole,
     enforce: w.enforce,
+    jitProvisioning: w.jitProvisioning,
+    saml: saml ? { ...spEndpoints(base, w.providerId), idpConfigured: Boolean(saml.entryPoint), certificateExpires: saml.certificateExpires ?? null } : null,
     verified: Boolean(verified),
     verifiedAt: w.verifiedAt,
     dnsRecord: { name: `${TXT_PREFIX}.${w.domain}`, type: 'TXT', value: txtValue(w.verificationToken) },
     redirectUri: `${base}/api/auth/sso/callback/${w.providerId}`,
     createdAt: w.createdAt,
-  }))
+    }
+  })
 }
 
 const createInput = z.object({
@@ -114,7 +122,7 @@ async function createSsoProviderImpl(input: z.input<typeof createInput>) {
     mapping: { id: 'sub', email: 'email', emailVerified: 'email_verified', name: 'name', image: 'picture' },
   }
   await db.transaction(async (tx) => {
-    await tx.insert(ssoProvider).values({ id: newId('ssop'), issuer, oidcConfig: JSON.stringify(oidcConfig), userId: ctx.userId, providerId, domain: data.domain, domainVerified: false })
+    await tx.insert(ssoProvider).values({ id: newId('ssop'), issuer, oidcConfig: sealSsoConfig(providerId, ctx.workspaceId, oidcConfig), userId: ctx.userId, providerId, domain: data.domain, domainVerified: false })
     await tx.insert(workspaceSso).values({ id: newId('wsso'), workspaceId: ctx.workspaceId, providerId, label: data.label, preset: data.preset, domain: data.domain, defaultRole: data.defaultRole, verificationToken: token, createdBy: ctx.userId })
   })
   await recordAudit(ctx, { action: 'CREATE', resource: 'sso_provider', resourceId: providerId, changes: { label: data.label, preset: data.preset, domain: data.domain, issuer, defaultRole: data.defaultRole } })
@@ -149,6 +157,8 @@ const updateInput = z.object({
   enforce: z.boolean().optional(),
   /** New client secret (rotation); omitted = keep. */
   clientSecret: z.string().trim().min(1).max(1000).optional(),
+  /** Add users on first sign-in; off = only SCIM-provisioned users get access. */
+  jitProvisioning: z.boolean().optional(),
 })
 
 async function updateSsoProviderImpl(input: z.input<typeof updateInput>) {
@@ -161,16 +171,92 @@ async function updateSsoProviderImpl(input: z.input<typeof updateInput>) {
   }
   await db
     .update(workspaceSso)
-    .set({ ...(data.defaultRole ? { defaultRole: data.defaultRole } : {}), ...(data.enforce !== undefined ? { enforce: data.enforce } : {}), updatedAt: new Date() })
+    .set({ ...(data.defaultRole ? { defaultRole: data.defaultRole } : {}), ...(data.enforce !== undefined ? { enforce: data.enforce } : {}), ...(data.jitProvisioning !== undefined ? { jitProvisioning: data.jitProvisioning } : {}), updatedAt: new Date() })
     .where(eq(workspaceSso.id, row.id))
   if (data.clientSecret) {
     const [p] = await db.select({ oidcConfig: ssoProvider.oidcConfig }).from(ssoProvider).where(eq(ssoProvider.providerId, row.providerId)).limit(1)
-    const cfg = JSON.parse(p.oidcConfig ?? '{}') as Record<string, unknown>
-    await db.update(ssoProvider).set({ oidcConfig: JSON.stringify({ ...cfg, clientSecret: data.clientSecret }) }).where(eq(ssoProvider.providerId, row.providerId))
+    const cfg = openSsoConfig(row.providerId, p.oidcConfig ?? '{}')
+    // Sealed with the workspace key (TD-25), like data source credentials.
+    await db.update(ssoProvider).set({ oidcConfig: sealSsoConfig(row.providerId, ctx.workspaceId, { ...cfg, clientSecret: data.clientSecret }) }).where(eq(ssoProvider.providerId, row.providerId))
   }
   // Field names only: never the secret.
-  await recordAudit(ctx, { action: 'UPDATE', resource: 'sso_provider', resourceId: row.providerId, changes: { defaultRole: data.defaultRole, enforce: data.enforce, rotatedSecret: Boolean(data.clientSecret) } })
+  await recordAudit(ctx, { action: 'UPDATE', resource: 'sso_provider', resourceId: row.providerId, changes: { defaultRole: data.defaultRole, enforce: data.enforce, jitProvisioning: data.jitProvisioning, rotatedSecret: Boolean(data.clientSecret) } })
   revalidatePath('/dashboard')
+}
+
+// ── SAML 2.0 ─────────────────────────────────────────────────────────────────
+
+const idpInput = z.object({
+  /** IdP metadata XML, or an https URL that serves it (e.g. Entra's App Federation Metadata URL). */
+  metadata: z.string().trim().max(1_000_000).optional(),
+  /** Or the three values typed in. */
+  manual: z.object({ entityId: z.string().trim().min(1).max(500), ssoUrl: z.string().trim().min(1).max(1000), certificate: z.string().trim().min(1).max(20_000) }).optional(),
+})
+
+/** IdP settings from metadata (XML or https URL) or manual values; null when neither is given. */
+async function idpSettings(input: z.infer<typeof idpInput>): Promise<IdpSettings | null> {
+  if (input.manual) return manualIdpSettings(input.manual)
+  const raw = input.metadata?.trim()
+  if (!raw) return null
+  if (!/^https?:\/\//i.test(raw)) return parseIdpMetadata(raw)
+  let xml: string
+  try {
+    const res = await safeFetch(raw, { timeoutMs: 8000, headers: { accept: 'application/samlmetadata+xml, application/xml, text/xml' } })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    xml = await res.text()
+  } catch (err) {
+    if (err instanceof UnsafeUrlError) throw new Error(err.message)
+    throw new Error(`Could not download the metadata (${err instanceof Error ? err.message : 'failed'}). Paste the XML instead.`)
+  }
+  return parseIdpMetadata(xml)
+}
+
+const samlCreateInput = idpInput.extend({
+  label: z.string().trim().min(1).max(80),
+  preset: z.enum(SAML_PRESETS),
+  domain: z.string().trim().toLowerCase().regex(DOMAIN_RE, 'Enter your email domain, e.g. kmplus.co.id'),
+  defaultRole: z.enum(ROLES).default('viewer'),
+})
+
+/**
+ * Adds a SAML provider. The IdP metadata can come later (setSamlIdp): admins
+ * usually need the SP entity ID and ACS URL shown here to create the app first.
+ */
+async function createSamlProviderImpl(input: z.input<typeof samlCreateInput>) {
+  const ctx = await requireWorkspace('workspace:manage')
+  const data = samlCreateInput.parse(input)
+  if (PUBLIC_EMAIL_DOMAINS.has(data.domain)) throw new Error(`${data.domain} is a public email provider; SSO needs your organization's own domain.`)
+  const idp = await idpSettings(data)
+  const providerId = `sso-${randomUUID().slice(0, 12)}`
+  const sp = spEndpoints(await baseUrl(), providerId)
+  const token = randomBytes(18).toString('base64url')
+  const samlConfig = samlConfigFor({ preset: data.preset, sp, idp })
+  await db.transaction(async (tx) => {
+    await tx.insert(ssoProvider).values({ id: newId('ssop'), issuer: idp?.entityId ?? '', samlConfig: sealSsoConfig(providerId, ctx.workspaceId, samlConfig), userId: ctx.userId, providerId, domain: data.domain, domainVerified: false })
+    await tx.insert(workspaceSso).values({ id: newId('wsso'), workspaceId: ctx.workspaceId, providerId, label: data.label, preset: data.preset, protocol: 'saml', domain: data.domain, defaultRole: data.defaultRole, verificationToken: token, createdBy: ctx.userId })
+  })
+  await recordAudit(ctx, { action: 'CREATE', resource: 'sso_provider', resourceId: providerId, changes: { label: data.label, protocol: 'saml', preset: data.preset, domain: data.domain, idpEntityId: idp?.entityId ?? null, defaultRole: data.defaultRole } })
+  revalidatePath('/dashboard')
+  return { providerId, ...sp }
+}
+
+const samlIdpInput = idpInput.extend({ providerId: z.string().min(1).max(60) })
+
+/** Sets or replaces the IdP side of a SAML provider (also how a new signing certificate is rolled over). */
+async function setSamlIdpImpl(input: z.input<typeof samlIdpInput>) {
+  const ctx = await requireWorkspace('workspace:manage')
+  const data = samlIdpInput.parse(input)
+  const row = await owned(ctx, data.providerId)
+  if (row.protocol !== 'saml') throw new Error('This provider uses OpenID Connect, not SAML.')
+  const idp = await idpSettings(data)
+  if (!idp) throw new Error('Paste the identity provider metadata (XML or URL), or enter the entity ID, sign-in URL and certificate.')
+  const [p] = await db.select({ samlConfig: ssoProvider.samlConfig, issuer: ssoProvider.issuer }).from(ssoProvider).where(eq(ssoProvider.providerId, row.providerId)).limit(1)
+  const sp = spEndpoints(await baseUrl(), row.providerId)
+  const samlConfig = samlConfigFor({ preset: (SAML_PRESETS as readonly string[]).includes(row.preset) ? (row.preset as SamlPreset) : 'saml', sp, idp })
+  await db.update(ssoProvider).set({ issuer: idp.entityId, samlConfig: sealSsoConfig(row.providerId, ctx.workspaceId, samlConfig) }).where(eq(ssoProvider.providerId, row.providerId))
+  await recordAudit(ctx, { action: 'UPDATE', resource: 'sso_provider', resourceId: row.providerId, changes: { idpEntityId: idp.entityId, certificateExpires: idp.certificateExpires }, diff: { issuer: { from: p?.issuer ?? '', to: idp.entityId }, ...(p?.samlConfig && JSON.parse(p.samlConfig).entryPoint !== idp.ssoUrl ? { ssoUrl: { from: JSON.parse(p.samlConfig).entryPoint ?? '', to: idp.ssoUrl } } : {}) } })
+  revalidatePath('/dashboard')
+  return { entityId: idp.entityId, ssoUrl: idp.ssoUrl, certificateExpires: idp.certificateExpires }
 }
 
 async function deleteSsoProviderImpl(rawProviderId: string) {
@@ -196,6 +282,14 @@ export async function verifySsoDomain(...args: Parameters<typeof verifySsoDomain
 
 export async function updateSsoProvider(...args: Parameters<typeof updateSsoProviderImpl>) {
   return guard(() => updateSsoProviderImpl(...args))
+}
+
+export async function createSamlProvider(...args: Parameters<typeof createSamlProviderImpl>) {
+  return guard(() => createSamlProviderImpl(...args))
+}
+
+export async function setSamlIdp(...args: Parameters<typeof setSamlIdpImpl>) {
+  return guard(() => setSamlIdpImpl(...args))
 }
 
 export async function deleteSsoProvider(...args: Parameters<typeof deleteSsoProviderImpl>) {

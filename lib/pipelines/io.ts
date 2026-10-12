@@ -230,6 +230,8 @@ export async function writeDataset(opts: {
   runId?: string
   /** Chunk number within the run: appends of the same run+chunk replace each other, so a resumed chunk is written once. */
   chunk?: number
+  /** Append only: first delete live rows whose values in these columns match an incoming row (replays into "replace" datasets, TD-24). */
+  replaceKeys?: string[]
 }): Promise<{ written: number; tableName: string; rowCount: number }> {
   const tableName = opts.existingTableName ?? datasetTableName(opts.workspaceId, opts.datasetName)
   const target = `"nexus_data".${qIdent(tableName)}`
@@ -254,6 +256,15 @@ export async function writeDataset(opts: {
       const idx = `ix_${createHash('sha1').update(`${tableName}:run_chunk`).digest('hex').slice(0, 12)}`
       await client.query(`CREATE INDEX IF NOT EXISTS ${qIdent(idx)} ON ${target} ("_nexus_run_id", "_nexus_chunk")`)
       await client.query(`DELETE FROM ${target} WHERE "_nexus_run_id" = $1 AND "_nexus_chunk" = $2`, [opts.runId, opts.chunk])
+    }
+    if (opts.mode === 'append' && opts.replaceKeys?.length && opts.rows.length) {
+      const keys = opts.replaceKeys
+      const text = (v: unknown) => (v === null || v === undefined ? '' : v instanceof Date ? v.toISOString() : String(v))
+      for (let i = 0; i < opts.rows.length; i += 1000) {
+        const params: string[] = []
+        const tuples = opts.rows.slice(i, i + 1000).map((r) => `(${keys.map((k) => (params.push(text(r[k])), `$${params.length}`)).join(', ')})`)
+        await client.query(`DELETE FROM ${target} WHERE (${keys.map((k) => `coalesce(${qIdent(k)}::text, '')`).join(', ')}) IN (${tuples.join(', ')})`, params)
+      }
     }
     if (opts.mode === 'upsert') {
       const idx = `ux_${createHash('sha1').update(tableName + opts.keys.join(',')).digest('hex').slice(0, 12)}`

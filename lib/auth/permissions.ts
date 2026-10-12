@@ -47,6 +47,8 @@ const MATRIX = {
   'catalog:edit': ['admin', 'steward'],
   /** Create and revoke Data API keys. */
   'api:manage': ['admin'],
+  /** Approve or reject pipeline versions waiting for a second person (GV-6). */
+  'pipelines:approve': ['admin', 'steward'],
 } as const satisfies Record<string, readonly Role[]>
 
 export type Permission = keyof typeof MATRIX

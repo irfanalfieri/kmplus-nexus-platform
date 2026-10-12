@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Database, Edit, History, Loader2, Play, Plus, Rocket, RotateCcw, Trash2, Undo2, Workflow } from 'lucide-react'
+import { ArrowUpRight, Clock, Database, Edit, Eye, History, Lock, Loader2, Play, Plus, Rocket, RotateCcw, Trash2, Undo2, Workflow } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { deletePipeline, discardDraft, getBuilderOptions, publishPipeline, getDatasetPreview, getRunStatus, listPipelines, resetSyncPosition, runPipelineNow, setPipelineEnabled } from '@/lib/actions/pipelines'
@@ -12,7 +12,12 @@ import TemplatePicker from '@/components/pipelines/template-picker'
 import RunHistory, { formatWhen, statusBadge } from '@/components/pipelines/run-history'
 import type { BuilderOptions } from '@/components/pipelines/step-editors'
 import { NOTIFICATIONS_CHANGED } from '@/components/dashboard/notification-bell'
-import { useCan } from '@/components/workspace/workspace-context'
+import { useCan, useWorkspace } from '@/components/workspace/workspace-context'
+import { EnvironmentBadge } from '@/components/workspace/environment-badge'
+import ApprovalsPanel from '@/components/pipelines/approvals-panel'
+import PromoteDialog from '@/components/pipelines/promote-dialog'
+import { listPromotionStatus } from '@/lib/actions/environments'
+import { ENVIRONMENT_INFO, isEnvironment } from '@/lib/pipelines/promote'
 
 type PipelineRow = Awaited<ReturnType<typeof listPipelines>>[number]
 
@@ -60,14 +65,22 @@ export default function PipelineDesignerLayer() {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [preview, setPreview] = useState<{ name: string; rows: Record<string, unknown>[] } | null>(null)
   const canEdit = useCan('pipelines:edit')
+  const { workspace } = useWorkspace()
+  // Locked environments (Production) change only by promotion (GV-7).
+  const editable = canEdit && !workspace.locked
+  const [promoting, setPromoting] = useState<string | null>(null)
+  const [deployed, setDeployed] = useState<Record<string, { environment: string | null; version: number | null }[]>>({})
+  const [approvalsKey, setApprovalsKey] = useState(0)
   const canRun = useCan('pipelines:run')
   const canPreview = useCan('data:preview')
 
   const load = useCallback(async () => {
     try {
-      const [rows, opts] = await Promise.all([listPipelines(), getBuilderOptions()])
+      const [rows, opts, promo] = await Promise.all([listPipelines(), getBuilderOptions(), workspace.environment ? listPromotionStatus().catch(() => []) : Promise.resolve([])])
       setItems(rows)
       setOptions(opts)
+      setDeployed(Object.fromEntries(promo.map((x) => [x.pipelineId, x.deployed])))
+      setApprovalsKey((k) => k + 1)
       setError('')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load pipelines')
@@ -159,8 +172,8 @@ export default function PipelineDesignerLayer() {
 
   const publish = async (p: PipelineRow) => {
     try {
-      const { version } = await publishPipeline(p.id)
-      setNotice({ id: p.id, kind: 'ok', text: `Published v${version}. Scheduled and manual runs now use it.` })
+      const res = await publishPipeline(p.id)
+      setNotice(res.published ? { id: p.id, kind: 'ok', text: `Published v${res.version}. Scheduled and manual runs now use it.` } : { id: p.id, kind: 'warn', text: `v${res.version} is waiting for approval by an admin or data steward (see Approvals). The current version keeps running.` })
       await load()
     } catch (err) {
       setNotice({ id: p.id, kind: 'err', text: err instanceof Error ? err.message : 'Publish failed' })
@@ -193,8 +206,10 @@ export default function PipelineDesignerLayer() {
           initial={editing}
           options={options}
           onClose={() => setEditing(null)}
-          onSaved={async () => {
+          onSaved={async (id, res) => {
             setEditing(null)
+            if (res.approvalId) setNotice({ id, kind: 'warn', text: `v${res.version} is waiting for approval by an admin or data steward (see Approvals). The current version keeps running.` })
+            else if (res.published) setNotice({ id, kind: 'ok', text: `Published v${res.version}.` })
             await load()
           }}
         />
@@ -206,6 +221,18 @@ export default function PipelineDesignerLayer() {
           onPick={(p) => {
             setPicking(false)
             setEditing(p)
+          }}
+        />
+      )}
+      {promoting && (
+        <PromoteDialog
+          pipelineId={promoting}
+          onClose={() => setPromoting(null)}
+          onDone={async (text) => {
+            const id = promoting
+            setPromoting(null)
+            setNotice({ id, kind: 'ok', text })
+            await load()
           }}
         />
       )}
@@ -226,10 +253,12 @@ export default function PipelineDesignerLayer() {
               <Workflow className="h-5 w-5 text-primary" />
               <Badge variant="outline">Layer 4</Badge>
             </div>
-            <h2 className="text-2xl font-bold">Pipelines</h2>
+            <h2 className="flex items-center gap-2 text-2xl font-bold">
+              Pipelines <EnvironmentBadge environment={workspace.environment} className="text-xs" />
+            </h2>
             <p className="mt-1 text-muted-foreground">Read from a data source, filter, map, validate and route rows through business rules, then write to one or more Nexus datasets or databases. Edits are saved as drafts; runs use the published version.</p>
           </div>
-          {canEdit && (
+          {editable && (
             <Button onClick={() => setPicking(true)} disabled={loading}>
               <Plus className="mr-2 h-4 w-4" /> New pipeline
             </Button>
@@ -253,6 +282,15 @@ export default function PipelineDesignerLayer() {
 
       {error && <p className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
 
+      {workspace.locked && (
+        <p className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 p-3 text-sm">
+          <Lock className="h-4 w-4 shrink-0 text-red-600" />
+          This environment is locked: pipelines change only by promotion from the previous environment. Runs, schedules and approvals work as usual.
+        </p>
+      )}
+
+      <ApprovalsPanel refreshKey={approvalsKey} onDecided={() => void load()} />
+
       <div className="space-y-3">
         {loading ? (
           <div className="flex items-center justify-center rounded-xl border border-border bg-card p-10 text-muted-foreground">
@@ -267,7 +305,7 @@ export default function PipelineDesignerLayer() {
                 ? 'Create your first pipeline to move data from a connected source into a Nexus dataset or another database.'
                 : 'Connect a data source first (Data Sources tab), then create a pipeline that reads from it.'}
             </p>
-            {canEdit ? (
+            {editable ? (
               <Button className="mt-4" onClick={() => setPicking(true)}>
                 <Plus className="mr-2 h-4 w-4" /> New pipeline
               </Button>
@@ -291,6 +329,18 @@ export default function PipelineDesignerLayer() {
                       {statusBadge(p.lastRunStatus)}
                       {published ? <Badge variant="outline">v{p.version}</Badge> : <Badge variant="secondary">never published</Badge>}
                       {p.draftVersion && <Badge variant="secondary">draft v{p.draftVersion}</Badge>}
+                      {p.pendingApproval && (
+                        <Badge variant="outline" className="border-amber-500/50 text-amber-700 dark:text-amber-300">
+                          <Clock className="mr-1 h-3 w-3" /> v{p.pendingApproval.version} awaiting approval
+                        </Badge>
+                      )}
+                      {(deployed[p.id] ?? []).map((d) =>
+                        isEnvironment(d.environment) ? (
+                          <span key={d.environment} className="text-xs text-muted-foreground" title={`Version in ${ENVIRONMENT_INFO[d.environment].label}`}>
+                            {ENVIRONMENT_INFO[d.environment].short}: {d.version === null ? 'not promoted' : d.version ? `v${d.version}` : 'not published'}
+                          </span>
+                        ) : null
+                      )}
                     </div>
                     {p.description && <p className="mt-1 text-sm text-muted-foreground">{p.description}</p>}
                     <p className="mt-2 text-xs text-muted-foreground">
@@ -310,7 +360,7 @@ export default function PipelineDesignerLayer() {
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    {p.draftVersion && canEdit && (
+                    {p.draftVersion && editable && (
                       <>
                         <Button size="sm" variant="outline" onClick={() => void publish(p)} title={`Make draft v${p.draftVersion} the version that runs`}>
                           <Rocket className="mr-1 h-4 w-4" /> Publish draft
@@ -334,7 +384,12 @@ export default function PipelineDesignerLayer() {
                     </Button>}
                     {canEdit && (
                       <Button size="sm" variant="outline" onClick={() => setEditing(toEditable(p))}>
-                        <Edit className="mr-1 h-4 w-4" /> Edit
+                        {editable ? <Edit className="mr-1 h-4 w-4" /> : <Eye className="mr-1 h-4 w-4" />} {editable ? 'Edit' : 'View'}
+                      </Button>
+                    )}
+                    {canEdit && published && workspace.environment && workspace.environment !== 'prod' && (
+                      <Button size="sm" variant="outline" onClick={() => setPromoting(p.id)} title="Copy the published version to the next environment">
+                        <ArrowUpRight className="mr-1 h-4 w-4" /> Promote
                       </Button>
                     )}
                     <Button size="sm" variant="outline" onClick={() => setHistoryFor(p)}>
@@ -345,7 +400,7 @@ export default function PipelineDesignerLayer() {
                         <RotateCcw className="mr-1 h-4 w-4" /> Reset sync
                       </Button>
                     )}
-                    {!canEdit ? null : confirmDelete === p.id ? (
+                    {!editable ? null : confirmDelete === p.id ? (
                       <span className="flex items-center gap-1 text-xs">
                         Delete &ldquo;{p.name}&rdquo; and its run history?
                         <Button size="sm" variant="destructive" onClick={() => remove(p.id)}>Delete</Button>

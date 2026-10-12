@@ -12,7 +12,7 @@ import { useCan } from '@/components/workspace/workspace-context'
 
 type Overview = Awaited<ReturnType<typeof getQualityOverview>>
 type Item = Awaited<ReturnType<typeof listQuarantine>>['rows'][number]
-type Status = 'open' | 'fixed' | 'approved' | 'replayed' | 'dismissed'
+type Status = 'open' | 'fixed' | 'approved' | 'replayed' | 'dismissed' | 'superseded'
 
 const show = (v: unknown) => (v === null || v === undefined ? '' : v instanceof Date ? v.toISOString() : typeof v === 'object' ? JSON.stringify(v) : String(v))
 
@@ -197,6 +197,7 @@ export default function DataQualityLayer() {
             <option value="approved">Approved</option>
             <option value="replayed">Replayed</option>
             <option value="dismissed">Dismissed</option>
+            <option value="superseded">Superseded</option>
           </NativeSelect>
           <NativeSelect className="w-40" value={kind} onChange={setKind} aria-label="Kind">
             <option value="">All kinds</option>
@@ -246,6 +247,11 @@ export default function DataQualityLayer() {
             </Button>
             {busy && <Loader2 className="h-4 w-4 animate-spin" />}
           </div>
+        )}
+        {status === 'superseded' && (
+          <p className="border-b border-border p-3 text-xs text-muted-foreground">
+            A later full run of the pipeline checked these rows again and quarantined the ones still failing, carrying over fixes and approvals. Work on the newer copies (Open); these are kept for the record.
+          </p>
         )}
         {notice && <p className="border-b border-border bg-green-500/10 p-3 text-sm text-green-700 dark:text-green-400">{notice}</p>}
         {error && <p className="border-b border-border bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}

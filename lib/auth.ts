@@ -3,7 +3,9 @@ import { betterAuth, type BetterAuthPlugin } from 'better-auth'
 import { APIError, createAuthMiddleware } from 'better-auth/api'
 import { twoFactor } from 'better-auth/plugins'
 import { sso } from '@better-auth/sso'
+import { Kysely, PostgresDialect } from 'kysely'
 import { auditSsoLogin, emailAllowedForProvider, enforcedProviderFor, provisionSsoUser } from '@/lib/auth/sso'
+import { SsoConfigPlugin } from '@/lib/auth/sso-config-plugin'
 import { pool } from '@/lib/db'
 import { emailEnabled, sendEmail } from '@/lib/email'
 
@@ -96,7 +98,8 @@ const auditLogins = () =>
 export const auth = betterAuth({
   appName: APP_NAME,
   secret: process.env.BETTER_AUTH_SECRET,
-  database: pool,
+  // The same pool through Kysely, with a plugin that opens sealed SSO secrets on read (TD-25).
+  database: { db: new Kysely({ dialect: new PostgresDialect({ pool }), plugins: [new SsoConfigPlugin()] }), type: 'postgres' },
   baseURL:
     process.env.BETTER_AUTH_URL ??
     (process.env.VERCEL_PROJECT_PRODUCTION_URL

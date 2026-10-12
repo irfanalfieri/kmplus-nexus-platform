@@ -380,8 +380,8 @@ export function checkDestination(def: PipelineDefinition, columns: OutputColumn[
   if (!columns.length) throw new Error(`${stepTitle(dest)}: no output columns. Add a Map step or check the source.`)
   const names = new Set(columns.map((c) => c.name))
   const missingKeys = dest.keys.filter((k) => !names.has(k))
-  if (dest.mode === 'upsert' && missingKeys.length) {
-    throw Object.assign(new Error(`${stepTitle(dest)}: upsert key column(s) not in output: ${missingKeys.join(', ')}`), { retryable: false })
+  if ((dest.mode === 'upsert' || dest.mode === 'replace') && missingKeys.length) {
+    throw Object.assign(new Error(`${stepTitle(dest)}: ${dest.mode === 'upsert' ? 'upsert' : 'replay'} key column(s) not in output: ${missingKeys.join(', ')}`), { retryable: false })
   }
 }
 

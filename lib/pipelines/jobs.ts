@@ -335,6 +335,8 @@ async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promi
             runId: job.id,
             // The chunk being written: progress.chunks counts completed (checkpointed) chunks.
             chunk: progress.chunks,
+            // A replay into a replace dataset replaces rows with the same key instead of adding a second copy (TD-24).
+            replaceKeys: progress.replay && dest.mode === 'replace' ? dest.keys : undefined,
           })
           written = res.written
         } else {
@@ -683,6 +685,7 @@ async function finishJob(job: Job, progress: JobProgress, def: PipelineDefinitio
     changes: { runId: job.id, trigger: job.trigger, status: runStatus, attempts: progress.attempts.length, chunks: progress.chunks, rowsRead: totals.rowsRead, rowsWritten: totals.rowsWritten, rejected: totals.rejectedCount, flagged: totals.flaggedCount, held: totals.heldCount },
   })
   if (cancelled) return runStatus
+  if (def && status !== 'failed' && !replay && !progress.capped) await supersedeOlderQuarantine(def, job, scope)
   if (def && status !== 'failed') await ruleSideEffects(def, totals, scope, pipeline?.name ?? 'Pipeline', job)
   await runDependents(scope, job.pipelineId, status)
   if (def && status !== 'failed') await snapshotQuality(scope, def, totals, results)
@@ -690,6 +693,39 @@ async function finishJob(job: Job, progress: JobProgress, def: PipelineDefinitio
   const message = summarize(result)
   await alertIfNeeded({ def, pipelineName: pipeline?.name ?? 'Pipeline', pipelineId: job.pipelineId, scope, runId: job.id, trigger: job.trigger, result, attempts: progress.attempts.length, message })
   return runStatus
+}
+
+/**
+ * A finished full read re-checked every source row, so its quarantine replaces
+ * the older runs' (TD-24): replaying an old copy as well as the new one would
+ * write the same row twice. A steward's fix or approval on an old row carries
+ * over to the identical row this run quarantined at the same step; the old rows
+ * become "superseded". Incremental runs only see changed rows and keep the rest.
+ */
+async function supersedeOlderQuarantine(def: PipelineDefinition, job: Job, scope: RunScope) {
+  const source = def.nodes.find((n): n is SourceStep => n.type === 'source')
+  if (source?.mode !== 'full') return
+  try {
+    await pool.query(
+      `UPDATE pipeline_run_rejects n
+          SET "fixedRow" = o."fixedRow", status = o.status, "updatedBy" = o."updatedBy", "updatedAt" = now()
+         FROM pipeline_run_rejects o
+        WHERE n."runId" = $1 AND n."workspaceId" = $2 AND n.status = 'open'
+          AND o."workspaceId" = $2 AND o."pipelineId" = $3 AND o."runId" <> $1
+          AND o.status IN ('fixed', 'approved') AND o.kind = n.kind
+          AND o."nodeId" IS NOT DISTINCT FROM n."nodeId" AND o."row" = n."row"`,
+      [job.id, scope.workspaceId, job.pipelineId]
+    )
+    const res = await pool.query(
+      `UPDATE pipeline_run_rejects SET status = 'superseded', "updatedAt" = now()
+        WHERE "workspaceId" = $1 AND "pipelineId" = $2 AND "runId" <> $3 AND status IN ('open', 'fixed', 'approved')`,
+      [scope.workspaceId, job.pipelineId, job.id]
+    )
+    if (res.rowCount) console.info(`[jobs] run ${job.id}: ${res.rowCount} older quarantined row(s) superseded`)
+  } catch (err) {
+    // Housekeeping: never fails the run.
+    console.error('[jobs] superseding older quarantine failed:', err instanceof Error ? err.message : err)
+  }
 }
 
 /**

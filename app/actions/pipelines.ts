@@ -7,13 +7,11 @@ import { and, desc, eq, inArray, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { newId, requireWorkspace, type WorkspaceContext } from '@/lib/auth/session'
 import { recordAudit, type AuditAction } from '@/lib/audit'
-import { diffObjects, diffPipelineDefinitions } from '@/lib/audit-diff'
-import { stepTitle } from '@/lib/pipelines/definition'
 import { db } from '@/lib/db'
-import { businessRules, dataSources, executionLogs, mappingTemplates, nexusDatasets, pipelineRunRejects, pipelineVersions, pipelines } from '@/lib/db/schema'
-import { definitionSchema, scheduleSchema, type MapStep, type PipelineDefinition, type PipelineSchedule } from '@/lib/pipelines/definition'
-import { assertValidSchedule, nextRunAt } from '@/lib/pipelines/schedule'
-import { currentWatermark, parseDefinition, testRunDefinition } from '@/lib/pipelines/runner'
+import { businessRules, dataSources, executionLogs, mappingTemplates, nexusDatasets, pipelineApprovals, pipelineRunRejects, pipelineVersions, pipelines } from '@/lib/db/schema'
+import { definitionSchema, scheduleSchema, type MapStep } from '@/lib/pipelines/definition'
+import { currentWatermark, testRunDefinition } from '@/lib/pipelines/runner'
+import { assertPipelinesEditable, computeNextRun, getOwnedPipeline, publishOrRequest, savePipelineAs, type saveInput } from '@/lib/pipelines/publish'
 import { cancelRun, enqueueRun } from '@/lib/pipelines/jobs'
 import { nudgeWorker, startWorker } from '@/lib/pipelines/worker'
 import { readDatasetSample } from '@/lib/pipelines/io'
@@ -27,24 +25,7 @@ async function audit(ctx: WorkspaceContext, action: AuditAction, resourceId: str
   await recordAudit(ctx, { action, resource, resourceId, changes, diff })
 }
 
-/** What a save or publish changed: steps, settings, name, description and schedule. */
-function pipelineDiff(before: { name?: string | null; description?: string | null; schedule?: unknown; definition?: unknown } | null, after: { name: string; description?: string | null; schedule: unknown; definition: unknown }) {
-  const defOf = (d: unknown) => definitionSchema.safeParse(d).data ?? null
-  return {
-    ...diffObjects({ name: before?.name, description: before?.description ?? '', schedule: before?.schedule ?? null }, { name: after.name, description: after.description ?? '', schedule: after.schedule }),
-    ...diffPipelineDefinitions(before ? defOf(before.definition) : null, defOf(after.definition), (n) => stepTitle(n as never)),
-  }
-}
-
-async function getOwned(ctx: WorkspaceContext, id: string) {
-  const [row] = await db.select().from(pipelines).where(and(eq(pipelines.id, id), eq(pipelines.workspaceId, ctx.workspaceId))).limit(1)
-  if (!row) throw new Error('Pipeline not found')
-  return row
-}
-
-function computeNextRun(enabled: boolean, schedule: PipelineSchedule) {
-  return enabled ? nextRunAt(schedule) : null
-}
+const getOwned = getOwnedPipeline
 
 const scope = (ctx: WorkspaceContext) => ({ workspaceId: ctx.workspaceId, actorId: ctx.userId })
 
@@ -52,6 +33,10 @@ const scope = (ctx: WorkspaceContext) => ({ workspaceId: ctx.workspaceId, actorI
 
 async function listPipelinesImpl() {
   const ctx = await requireWorkspace()
+  // Versions waiting for a second person (GV-6).
+  const pending = new Map(
+    (await db.select({ pipelineId: pipelineApprovals.pipelineId, id: pipelineApprovals.id, version: pipelineApprovals.version, kind: pipelineApprovals.kind }).from(pipelineApprovals).where(and(eq(pipelineApprovals.workspaceId, ctx.workspaceId), eq(pipelineApprovals.status, 'pending')))).map((a) => [a.pipelineId, a])
+  )
   return db
     .select({
       id: pipelines.id,
@@ -77,7 +62,8 @@ async function listPipelinesImpl() {
     .then((rows) =>
       rows.map(({ state, ...row }) => {
         const def = definitionSchema.safeParse(row.config)
-        return { ...row, syncPosition: def.success ? currentWatermark(def.data, state) : null }
+        const approval = pending.get(row.id)
+        return { ...row, syncPosition: def.success ? currentWatermark(def.data, state) : null, pendingApproval: approval ? { id: approval.id, version: approval.version, kind: approval.kind } : null }
       })
     )
 }
@@ -196,152 +182,12 @@ async function getDatasetPreviewImpl(rawName: string) {
 
 // ── Mutations ────────────────────────────────────────────────────────────────
 
-const saveInput = z.object({
-  id: z.string().optional(),
-  name: z.string().trim().min(1, 'Name is required').max(120),
-  description: z.string().trim().max(500).default(''),
-  definition: z.unknown(),
-  schedule: scheduleSchema,
-  enabled: z.boolean().default(false),
-  changeNote: z.string().trim().max(200).optional(),
-  /** Publish this version right away (it becomes what runs). */
-  publish: z.boolean().default(false),
-})
-
-/** Data sources a definition reads from or writes to (delete guard, quick lookups). */
-function sourceRefs(definition: PipelineDefinition) {
-  const source = definition.nodes.find((n) => n.type === 'source')
-  const dest = definition.nodes.find((n) => n.type === 'destination' && n.kind === 'datasource')
-  return {
-    sourceId: source?.type === 'source' ? source.dataSourceId : null,
-    destinationId: dest?.type === 'destination' && dest.kind === 'datasource' ? dest.dataSourceId : null,
-  }
-}
-
-/**
- * Saves the definition as a new immutable version (VC-1). The version is a
- * draft until published (VC-2): scheduled and manual runs keep executing the
- * published one. Name, description and schedule apply immediately.
- */
-/** "Run after" must name a pipeline of this workspace, and chains can't loop (A after B after A). */
-async function assertChainValid(ctx: WorkspaceContext, selfId: string | null, afterId: string) {
-  const all = await db.select({ id: pipelines.id, name: pipelines.name, schedule: pipelines.schedule }).from(pipelines).where(eq(pipelines.workspaceId, ctx.workspaceId))
-  if (!all.some((p) => p.id === afterId)) throw new Error('The pipeline to run after no longer exists.')
-  if (selfId && afterId === selfId) throw new Error("A pipeline can't run after itself.")
-  const after = new Map(all.map((p) => [p.id, scheduleSchema.safeParse(p.schedule ?? {}).data]))
-  let cur: string | undefined = afterId
-  const seen = new Set<string>()
-  while (cur && !seen.has(cur)) {
-    if (cur === selfId) throw new Error('This would create a loop of pipelines running after each other.')
-    seen.add(cur)
-    const s = after.get(cur)
-    cur = s?.type === 'after' ? s.afterPipelineId : undefined
-  }
-}
-
-async function savePipelineAs(ctx: WorkspaceContext, input: z.input<typeof saveInput>) {
-  const data = saveInput.parse(input)
-  const definition = parseDefinition(data.definition)
-  assertValidSchedule(data.schedule)
-  if (data.schedule.type === 'after') await assertChainValid(ctx, data.id ?? null, data.schedule.afterPipelineId)
-  const now = new Date()
-
-  let id = data.id
-  let version = 1
-  let published = 0
-  let before: Parameters<typeof pipelineDiff>[0] = null
-  if (id) {
-    const existing = await getOwned(ctx, id)
-    before = { name: existing.name, description: existing.description, schedule: existing.schedule, definition: existing.draftConfig ?? existing.config }
-    const [{ max }] = await db
-      .select({ max: sql<number>`coalesce(max(${pipelineVersions.version}), 0)::int` })
-      .from(pipelineVersions)
-      .where(eq(pipelineVersions.pipelineId, id))
-    version = Math.max(max, existing.version ?? 0, existing.draftVersion ?? 0) + 1
-    published = existing.version ?? 0
-    await db
-      .update(pipelines)
-      .set({
-        name: data.name,
-        description: data.description,
-        schedule: data.schedule,
-        enabled: published > 0 ? data.enabled : false,
-        nextRunAt: published > 0 ? computeNextRun(data.enabled, data.schedule) : null,
-        draftConfig: definition,
-        draftVersion: version,
-        updatedAt: now,
-      })
-      .where(and(eq(pipelines.id, id), eq(pipelines.workspaceId, ctx.workspaceId)))
-  } else {
-    id = newId('pipe')
-    // Never published yet (version 0): the definition is stored as the first draft.
-    await db.insert(pipelines).values({
-      id,
-      userId: ctx.userId,
-      workspaceId: ctx.workspaceId,
-      name: data.name,
-      description: data.description,
-      config: definition,
-      schedule: data.schedule,
-      enabled: false,
-      version: 0,
-      draftConfig: definition,
-      draftVersion: version,
-      status: 'draft',
-      ...sourceRefs(definition),
-      updatedAt: now,
-    })
-  }
-
-  await db.insert(pipelineVersions).values({
-    id: newId('pver'),
-    userId: ctx.userId,
-    workspaceId: ctx.workspaceId,
-    pipelineId: id,
-    version,
-    config: { definition, schedule: data.schedule, name: data.name, description: data.description },
-    changes: data.changeNote || (version === 1 ? 'Created' : 'Updated'),
-    createdBy: ctx.userId,
-  })
-  await audit(ctx, version === 1 ? 'CREATE' : 'UPDATE', id, { version, draft: true }, 'pipeline', pipelineDiff(before, { name: data.name, description: data.description, schedule: data.schedule, definition }))
-  if (data.publish) await publishVersion(ctx, id, version, data.enabled)
-  revalidatePath('/dashboard')
-  return { id, version, published: data.publish }
-}
-
-/** Makes a version the one that runs. */
-async function publishVersion(ctx: WorkspaceContext, id: string, version: number, enabled?: boolean) {
-  const existing = await getOwned(ctx, id)
-  const [snapshot] = await db
-    .select()
-    .from(pipelineVersions)
-    .where(and(eq(pipelineVersions.pipelineId, id), eq(pipelineVersions.workspaceId, ctx.workspaceId), eq(pipelineVersions.version, version)))
-    .limit(1)
-  if (!snapshot) throw new Error(`Version ${version} not found`)
-  const definition = parseDefinition((snapshot.config as { definition: unknown }).definition)
-  const schedule = scheduleSchema.parse(existing.schedule ?? {})
-  const isEnabled = enabled ?? existing.enabled ?? false
-  const now = new Date()
-  await db
-    .update(pipelines)
-    .set({
-      config: definition,
-      version,
-      // The draft is gone once it is the published version.
-      ...(existing.draftVersion !== null && existing.draftVersion <= version ? { draftConfig: null, draftVersion: null } : {}),
-      ...sourceRefs(definition),
-      enabled: isEnabled,
-      nextRunAt: computeNextRun(isEnabled, schedule),
-      status: existing.status === 'draft' ? 'active' : existing.status,
-      updatedAt: now,
-    })
-    .where(and(eq(pipelines.id, id), eq(pipelines.workspaceId, ctx.workspaceId)))
-  await db.update(pipelineVersions).set({ publishedAt: now, publishedBy: ctx.userId }).where(eq(pipelineVersions.id, snapshot.id))
-  await audit(ctx, 'PUBLISH', id, { version, previousVersion: existing.version || null }, 'pipeline', pipelineDiff(existing.version ? { definition: existing.config } : null, { name: existing.name, description: existing.description, schedule: existing.schedule, definition }))
-}
-
 async function savePipelineImpl(input: z.input<typeof saveInput>) {
-  return savePipelineAs(await requireWorkspace('pipelines:edit'), input)
+  const ctx = await requireWorkspace('pipelines:edit')
+  await assertPipelinesEditable(ctx)
+  const result = await savePipelineAs(ctx, input)
+  revalidatePath('/dashboard')
+  return result
 }
 
 /** Publishes the pipeline's draft (or a given version). */
@@ -351,9 +197,10 @@ async function publishPipelineImpl(rawId: string, rawVersion?: number) {
   const existing = await getOwned(ctx, id)
   const version = rawVersion !== undefined ? z.number().int().min(1).parse(rawVersion) : existing.draftVersion
   if (!version) throw new Error('There is no draft to publish.')
-  await publishVersion(ctx, id, version)
+  await assertPipelinesEditable(ctx)
+  const outcome = await publishOrRequest(ctx, id, version)
   revalidatePath('/dashboard')
-  return { version }
+  return { version, published: outcome.published, approvalId: outcome.approvalId ?? null }
 }
 
 /** Drops unpublished edits; the draft versions stay in history. */
@@ -362,6 +209,7 @@ async function discardDraftImpl(rawId: string) {
   const id = idSchema.parse(rawId)
   const existing = await getOwned(ctx, id)
   if (!existing.version) throw new Error('This pipeline was never published; delete it instead.')
+  await assertPipelinesEditable(ctx)
   await db.update(pipelines).set({ draftConfig: null, draftVersion: null, updatedAt: new Date() }).where(and(eq(pipelines.id, id), eq(pipelines.workspaceId, ctx.workspaceId)))
   await audit(ctx, 'UPDATE', id, { discardedDraft: existing.draftVersion })
   revalidatePath('/dashboard')
@@ -413,10 +261,12 @@ async function deletePipelineImpl(rawId: string) {
   const ctx = await requireWorkspace('pipelines:edit')
   const id = idSchema.parse(rawId)
   await getOwned(ctx, id)
+  await assertPipelinesEditable(ctx)
   const runIds = (await db.select({ id: executionLogs.id }).from(executionLogs).where(and(eq(executionLogs.pipelineId, id), eq(executionLogs.workspaceId, ctx.workspaceId)))).map((r) => r.id)
   if (runIds.length) await db.delete(pipelineRunRejects).where(and(inArray(pipelineRunRejects.runId, runIds), eq(pipelineRunRejects.workspaceId, ctx.workspaceId)))
   await db.delete(executionLogs).where(and(eq(executionLogs.pipelineId, id), eq(executionLogs.workspaceId, ctx.workspaceId)))
   await db.delete(pipelineVersions).where(and(eq(pipelineVersions.pipelineId, id), eq(pipelineVersions.workspaceId, ctx.workspaceId)))
+  await db.delete(pipelineApprovals).where(and(eq(pipelineApprovals.pipelineId, id), eq(pipelineApprovals.workspaceId, ctx.workspaceId)))
   await db.delete(pipelines).where(and(eq(pipelines.id, id), eq(pipelines.workspaceId, ctx.workspaceId)))
   // Datasets produced by the pipeline are kept; they may be used elsewhere.
   await audit(ctx, 'DELETE', id)
@@ -435,8 +285,9 @@ async function restoreVersionImpl(rawId: string, rawVersion: number) {
     .where(and(eq(pipelineVersions.pipelineId, id), eq(pipelineVersions.workspaceId, ctx.workspaceId), eq(pipelineVersions.version, version)))
     .limit(1)
   if (!snapshot) throw new Error(`Version ${version} not found`)
+  await assertPipelinesEditable(ctx)
   const cfg = snapshot.config as { definition: unknown; schedule: unknown; name: string; description: string }
-  return savePipelineAs(ctx, {
+  const result = await savePipelineAs(ctx, {
     id,
     name: cfg.name ?? existing.name,
     description: cfg.description ?? '',
@@ -446,6 +297,8 @@ async function restoreVersionImpl(rawId: string, rawVersion: number) {
     changeNote: `Restored v${version}`,
     publish: true,
   })
+  revalidatePath('/dashboard')
+  return result
 }
 
 /** Queues a run and starts a background worker for it; returns immediately. */

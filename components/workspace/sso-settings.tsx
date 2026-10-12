@@ -5,8 +5,8 @@ import { CheckCircle2, Copy, Fingerprint, Loader2, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { createSsoProvider, deleteSsoProvider, listSsoProviders, updateSsoProvider, verifySsoDomain } from '@/lib/actions/sso'
-import { SSO_PRESETS, SSO_PRESET_INFO, type SsoPreset } from '@/lib/auth/sso-presets'
+import { createSamlProvider, createSsoProvider, deleteSsoProvider, listSsoProviders, setSamlIdp, updateSsoProvider, verifySsoDomain } from '@/lib/actions/sso'
+import { SAML_PRESETS, SAML_PRESET_INFO, SSO_PRESETS, SSO_PRESET_INFO, type SamlPreset, type SsoPreset } from '@/lib/auth/sso-presets'
 import { ROLES, ROLE_INFO, type Role } from '@/lib/auth/permissions'
 import { NativeSelect } from '@/components/pipelines/step-editors'
 
@@ -27,7 +27,7 @@ function CopyField({ label, value }: { label: string; value: string }) {
   )
 }
 
-/** Single sign-on (GV-8): workspace admins connect Entra ID, Google Workspace, Okta or any OIDC provider. */
+/** Single sign-on (GV-8): workspace admins connect Entra ID, Google Workspace, Okta or any OIDC or SAML 2.0 provider. */
 export function SsoSettings() {
   const [providers, setProviders] = useState<Provider[] | null>(null)
   const [error, setError] = useState('')
@@ -35,6 +35,8 @@ export function SsoSettings() {
   const [adding, setAdding] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
   const [form, setForm] = useState({ label: '', preset: 'azure' as SsoPreset, issuerValue: '', domain: '', clientId: '', clientSecret: '', defaultRole: 'viewer' as Role })
+  const [protocol, setProtocol] = useState<'oidc' | 'saml'>('oidc')
+  const [samlForm, setSamlForm] = useState({ preset: 'azure' as SamlPreset, metadata: '' })
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
 
   const load = useCallback(async () => {
@@ -86,14 +88,29 @@ export function SsoSettings() {
 
       {adding && (
         <div className="mb-4 space-y-3 rounded-md border border-border p-3">
+          <div className="flex gap-1 rounded-md border border-border p-1 text-sm" role="tablist" aria-label="Protocol">
+            {(['oidc', 'saml'] as const).map((p) => (
+              <button key={p} role="tab" aria-selected={protocol === p} onClick={() => setProtocol(p)} className={`flex-1 rounded px-2 py-1 ${protocol === p ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}>
+                {p === 'oidc' ? 'OpenID Connect' : 'SAML 2.0'}
+              </button>
+            ))}
+          </div>
           <div className="grid gap-3 md:grid-cols-2">
             <label className="text-sm">
               <span className="mb-1 block text-xs text-muted-foreground">Identity provider</span>
-              <NativeSelect value={form.preset} onChange={(v) => setForm({ ...form, preset: v as SsoPreset, issuerValue: '' })}>
-                {SSO_PRESETS.map((p) => (
-                  <option key={p} value={p}>{SSO_PRESET_INFO[p].label}</option>
-                ))}
-              </NativeSelect>
+              {protocol === 'oidc' ? (
+                <NativeSelect value={form.preset} onChange={(v) => setForm({ ...form, preset: v as SsoPreset, issuerValue: '' })}>
+                  {SSO_PRESETS.map((p) => (
+                    <option key={p} value={p}>{SSO_PRESET_INFO[p].label}</option>
+                  ))}
+                </NativeSelect>
+              ) : (
+                <NativeSelect value={samlForm.preset} onChange={(v) => setSamlForm({ ...samlForm, preset: v as SamlPreset })}>
+                  {SAML_PRESETS.map((p) => (
+                    <option key={p} value={p}>{SAML_PRESET_INFO[p].label}</option>
+                  ))}
+                </NativeSelect>
+              )}
             </label>
             <label className="text-sm">
               <span className="mb-1 block text-xs text-muted-foreground">Name shown to users</span>
@@ -103,12 +120,14 @@ export function SsoSettings() {
               <span className="mb-1 block text-xs text-muted-foreground">Email domain</span>
               <Input value={form.domain} onChange={(e) => setForm({ ...form, domain: e.target.value })} placeholder="kmplus.co.id" />
             </label>
-            {info.field && (
+            {protocol === 'oidc' && info.field && (
               <label className="text-sm">
                 <span className="mb-1 block text-xs text-muted-foreground">{info.field}</span>
                 <Input value={form.issuerValue} onChange={(e) => setForm({ ...form, issuerValue: e.target.value })} placeholder={info.placeholder} className="font-mono" />
               </label>
             )}
+            {protocol === 'oidc' && (
+              <>
             <label className="text-sm">
               <span className="mb-1 block text-xs text-muted-foreground">Client ID</span>
               <Input value={form.clientId} onChange={(e) => setForm({ ...form, clientId: e.target.value })} className="font-mono" autoComplete="off" />
@@ -117,6 +136,8 @@ export function SsoSettings() {
               <span className="mb-1 block text-xs text-muted-foreground">Client secret</span>
               <Input type="password" value={form.clientSecret} onChange={(e) => setForm({ ...form, clientSecret: e.target.value })} autoComplete="new-password" />
             </label>
+              </>
+            )}
             <label className="text-sm">
               <span className="mb-1 block text-xs text-muted-foreground">Role for new SSO users</span>
               <NativeSelect value={form.defaultRole} onChange={(v) => setForm({ ...form, defaultRole: v as Role })}>
@@ -126,9 +147,20 @@ export function SsoSettings() {
               </NativeSelect>
             </label>
           </div>
-          <p className="text-xs text-muted-foreground">{info.help}</p>
+          {protocol === 'saml' && (
+            <label className="block text-sm">
+              <span className="mb-1 block text-xs text-muted-foreground">IdP metadata: XML or its https URL (optional now; you can add it after creating the app)</span>
+              <textarea value={samlForm.metadata} onChange={(e) => setSamlForm({ ...samlForm, metadata: e.target.value })} rows={3} className="w-full rounded-md border border-input bg-background p-2 font-mono text-xs" placeholder="https://login.microsoftonline.com/<tenant>/federationmetadata/2007-06/federationmetadata.xml?appid=…" aria-label="IdP metadata" />
+            </label>
+          )}
+          <p className="text-xs text-muted-foreground">{protocol === 'oidc' ? info.help : SAML_PRESET_INFO[samlForm.preset].help}</p>
           <p className="text-xs text-muted-foreground">
-            Redirect URI: you get it after saving (<span className="font-mono">{origin}/api/auth/sso/callback/…</span>). Then add the DNS record shown to prove the domain; sign-in stays off until then.
+            {protocol === 'oidc' ? (
+              <>Redirect URI: you get it after saving (<span className="font-mono">{origin}/api/auth/sso/callback/…</span>).</>
+            ) : (
+              <>The Entity ID and ACS URL to enter at your provider appear after saving.</>
+            )}{' '}
+            Then add the DNS record shown to prove the domain; sign-in stays off until then.
           </p>
           <div className="flex justify-end gap-2">
             <Button size="sm" variant="ghost" onClick={() => setAdding(false)}>Cancel</Button>
@@ -137,6 +169,12 @@ export function SsoSettings() {
               disabled={busy === 'new'}
               onClick={() =>
                 void run('new', async () => {
+                  if (protocol === 'saml') {
+                    await createSamlProvider({ label: form.label, preset: samlForm.preset, domain: form.domain, defaultRole: form.defaultRole, metadata: samlForm.metadata || undefined })
+                    setAdding(false)
+                    setSamlForm({ ...samlForm, metadata: '' })
+                    return 'Saved. Enter the Entity ID and ACS URL at your provider, add its metadata here if you haven\'t, add the TXT record to your DNS, then click Verify domain.'
+                  }
                   await createSsoProvider(form)
                   setAdding(false)
                   setForm({ ...form, clientSecret: '' })
@@ -163,15 +201,33 @@ export function SsoSettings() {
             <li key={p.providerId} className="space-y-3 rounded-md border border-border p-3">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-medium">{p.label}</span>
-                <Badge variant="outline">{SSO_PRESET_INFO[p.preset as SsoPreset]?.label ?? p.preset}</Badge>
+                <Badge variant="outline">{p.protocol === 'saml' ? (SAML_PRESET_INFO[p.preset as SamlPreset]?.label ?? 'SAML 2.0') : (SSO_PRESET_INFO[p.preset as SsoPreset]?.label ?? p.preset)}</Badge>
                 <Badge variant="outline">@{p.domain}</Badge>
                 {p.verified ? <Badge className="bg-green-600 text-white hover:bg-green-600">domain verified</Badge> : <Badge variant="destructive">domain not verified</Badge>}
                 {p.enforce && <Badge variant="secondary">SSO required</Badge>}
               </div>
-              <div className="grid gap-2 md:grid-cols-2">
-                <CopyField label="Redirect URI (add to your identity provider)" value={p.redirectUri} />
-                <CopyField label="Issuer" value={p.issuer} />
-              </div>
+              {p.saml ? (
+                <>
+                  <div className="grid gap-2 md:grid-cols-2">
+                    <CopyField label="Entity ID / Audience (enter at your identity provider)" value={p.saml.entityId} />
+                    <CopyField label="ACS / Reply URL (enter at your identity provider)" value={p.saml.acsUrl} />
+                  </div>
+                  {p.saml.idpConfigured ? (
+                    <p className="text-xs text-muted-foreground">
+                      Identity provider: <span className="font-mono">{p.issuer}</span>
+                      {p.saml.certificateExpires && <> · signing certificate valid until {new Date(p.saml.certificateExpires).toLocaleDateString()}</>}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-amber-700 dark:text-amber-300">Add the identity provider&apos;s metadata to finish the setup.</p>
+                  )}
+                  <SamlMetadataForm configured={p.saml.idpConfigured} onSave={(metadata) => run(p.providerId, async () => { const r = await setSamlIdp({ providerId: p.providerId, metadata }); return `Identity provider saved (${r.entityId}).` })} />
+                </>
+              ) : (
+                <div className="grid gap-2 md:grid-cols-2">
+                  <CopyField label="Redirect URI (add to your identity provider)" value={p.redirectUri} />
+                  <CopyField label="Issuer" value={p.issuer} />
+                </div>
+              )}
               {!p.verified && (
                 <div className="space-y-2 rounded-md bg-muted/40 p-2">
                   <p className="text-xs text-muted-foreground">Prove you own {p.domain}: add this TXT record in your DNS, then verify.</p>
@@ -202,6 +258,10 @@ export function SsoSettings() {
                   />
                   Require SSO for @{p.domain} (no passwords)
                 </label>
+                <label className="flex items-center gap-2" title="Off: only people your identity provider provisions through SCIM get access">
+                  <input type="checkbox" checked={p.jitProvisioning} onChange={(e) => void run(p.providerId, async () => (await updateSsoProvider({ providerId: p.providerId, jitProvisioning: e.target.checked }), e.target.checked ? 'People join on their first sign-in.' : 'Only SCIM-provisioned people get access now.'))} />
+                  Add people on first sign-in
+                </label>
                 <span className="flex-1" />
                 {confirmDelete === p.providerId ? (
                   <span className="flex items-center gap-1 text-xs">
@@ -213,7 +273,7 @@ export function SsoSettings() {
                   <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(p.providerId)}>Disconnect</Button>
                 )}
               </div>
-              <RotateSecret providerId={p.providerId} onDone={(msg) => void run(p.providerId, async () => msg)} />
+              {p.protocol === 'oidc' && <RotateSecret providerId={p.providerId} onDone={(msg) => void run(p.providerId, async () => msg)} />}
             </li>
           ))}
         </ul>
@@ -248,6 +308,23 @@ function RotateSecret({ providerId, onDone }: { providerId: string; onDone: (msg
       </Button>
       <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
       {error && <span className="text-xs text-destructive">{error}</span>}
+    </div>
+  )
+}
+
+function SamlMetadataForm({ configured, onSave }: { configured: boolean; onSave: (metadata: string) => Promise<void> }) {
+  const [open, setOpen] = useState(!configured)
+  const [metadata, setMetadata] = useState('')
+  if (!open) return <Button size="sm" variant="ghost" className="text-xs" onClick={() => setOpen(true)}>Replace IdP metadata (new certificate)</Button>
+  return (
+    <div className="space-y-2">
+      <textarea value={metadata} onChange={(e) => setMetadata(e.target.value)} rows={3} className="w-full rounded-md border border-input bg-background p-2 font-mono text-xs" placeholder="Paste the IdP metadata XML, or its https URL" aria-label="IdP metadata" />
+      <div className="flex gap-2">
+        <Button size="sm" disabled={!metadata.trim()} onClick={() => void onSave(metadata).then(() => (setMetadata(''), setOpen(false)))}>
+          Save metadata
+        </Button>
+        {configured && <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>}
+      </div>
     </div>
   )
 }

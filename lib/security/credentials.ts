@@ -36,7 +36,7 @@ const LEGACY = 'v1'
 
 export type StoredCredentials = Record<string, unknown>
 
-interface EncryptedEnvelope {
+export interface EncryptedEnvelope {
   __enc: typeof VERSION | typeof LEGACY
   kid?: string
   /** v2: workspace whose data key sealed it. */
@@ -152,4 +152,61 @@ export function decryptCredentials(sourceId: string, stored: unknown, expectedWo
     if (plain) return plain
   }
   throw new Error('Stored credentials could not be decrypted. Re-enter the credentials for this data source.')
+}
+
+// ── SSO provider secrets ─────────────────────────────────────────────────────
+
+/**
+ * SSO provider secrets at rest (TD-25). `ssoProvider.oidcConfig` / `samlConfig`
+ * are JSON the Better Auth SSO plugin reads; Nexus stores their secret fields
+ * (the OIDC client secret, a SAML signing key) sealed in `__sealed` with the
+ * workspace's data key, bound to the provider id. lib/auth/sso-config-plugin.ts
+ * opens them when Better Auth reads the row, so the plugin sees plain config
+ * and a database dump shows no secrets.
+ */
+
+export const SSO_SECRET_FIELDS = ['clientSecret', 'privateKey', 'decryptionPvk'] as const
+const SEALED = '__sealed'
+
+const bindingId = (providerId: string) => `sso:${providerId}`
+
+/** Config JSON for the database: secret fields removed and sealed for the workspace. */
+export function sealSsoConfig(providerId: string, workspaceId: string, config: Record<string, unknown>): string {
+  const { [SEALED]: _old, ...plain } = config
+  const secrets: Record<string, unknown> = {}
+  for (const field of SSO_SECRET_FIELDS) {
+    if (typeof plain[field] === 'string' && plain[field]) secrets[field] = plain[field]
+    delete plain[field]
+  }
+  if (!Object.keys(secrets).length) return JSON.stringify(plain)
+  return JSON.stringify({ ...plain, [SEALED]: encryptCredentials(bindingId(providerId), secrets, workspaceId) })
+}
+
+/** Plain config (secrets restored) from stored JSON; JSON without sealed secrets is returned unchanged. */
+export function openSsoConfig(providerId: string, stored: string): Record<string, unknown> {
+  const config = JSON.parse(stored) as Record<string, unknown>
+  const sealed = config[SEALED]
+  if (!sealed) return config
+  const { [SEALED]: _sealed, ...rest } = config
+  return { ...rest, ...decryptCredentials(bindingId(providerId), sealed) }
+}
+
+/** Same as openSsoConfig, returning JSON (what the plugin parses). Unreadable or non-JSON values pass through. */
+export function openSsoConfigJson(providerId: string, stored: string): string {
+  if (!stored.includes(SEALED)) return stored
+  return JSON.stringify(openSsoConfig(providerId, stored))
+}
+
+/** True when stored config has a plaintext secret, or secrets sealed with an old key or envelope version. */
+export function ssoConfigNeedsSealing(stored: string | null): boolean {
+  if (!stored) return false
+  let config: Record<string, unknown>
+  try {
+    config = JSON.parse(stored) as Record<string, unknown>
+  } catch {
+    return false
+  }
+  if (SSO_SECRET_FIELDS.some((f) => typeof config[f] === 'string' && config[f])) return true
+  const sealed = config[SEALED]
+  return Boolean(sealed) && (!isEncryptedCredentials(sealed) || needsReencryption(sealed as EncryptedEnvelope))
 }

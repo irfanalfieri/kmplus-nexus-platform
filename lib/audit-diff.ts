@@ -72,3 +72,15 @@ export function diffPipelineDefinitions(
     ...diffObjects(before?.settings ?? {}, after?.settings ?? {}),
   }
 }
+
+const showValue = (v: unknown) => (v === null || v === undefined || v === '' ? '∅' : typeof v === 'object' ? JSON.stringify(v) : String(v))
+
+/** Human-readable lines for a recorded diff (audit log, approval requests). Client-safe. */
+export function describeDiff(diff: Record<string, unknown> | null | undefined): string[] {
+  if (!diff) return []
+  return Object.entries(diff).map(([field, d]) => {
+    if (Array.isArray(d)) return `${field}: ${d.join(', ')}`
+    const x = d as { from?: unknown; to?: unknown; changed?: boolean }
+    return x.changed ? `${field}: changed (secret)` : `${field}: ${showValue(x.from)} → ${showValue(x.to)}`
+  })
+}

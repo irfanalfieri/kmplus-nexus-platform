@@ -35,13 +35,17 @@ export async function emailAllowedForProvider(providerId: string, email: string)
 
 /** Adds the user to the provider's workspace (default role) if they aren't a member yet; marks the email verified. */
 export async function provisionSsoUser(providerId: string, user: { id: string; email: string }) {
-  const { rows } = await pool.query<{ workspaceId: string; defaultRole: string; domain: string }>(
-    `SELECT w."workspaceId", w."defaultRole", w.domain FROM workspace_sso w JOIN "ssoProvider" p ON p."providerId" = w."providerId"
+  const { rows } = await pool.query<{ workspaceId: string; defaultRole: string; domain: string; jitProvisioning: boolean }>(
+    `SELECT w."workspaceId", w."defaultRole", w.domain, w."jitProvisioning" FROM workspace_sso w JOIN "ssoProvider" p ON p."providerId" = w."providerId"
       WHERE w."providerId" = $1 AND p."domainVerified"`,
     [providerId]
   )
   const link = rows[0]
   if (!link || emailDomain(user.email) !== link.domain) return
+  // SCIM: someone the IdP deactivated stays out; with JIT off, only SCIM-provisioned users join.
+  const scim = await pool.query<{ active: boolean }>('SELECT active FROM scim_users WHERE "workspaceId" = $1 AND "userId" = $2', [link.workspaceId, user.id])
+  if (scim.rows[0] && !scim.rows[0].active) return
+  if (!link.jitProvisioning && !scim.rows[0]) return
   await pool.query(
     `INSERT INTO workspace_members ("workspaceId", "userId", role) VALUES ($1, $2, $3) ON CONFLICT ("workspaceId", "userId") DO NOTHING`,
     [link.workspaceId, user.id, link.defaultRole]

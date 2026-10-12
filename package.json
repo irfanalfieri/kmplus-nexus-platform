@@ -26,6 +26,7 @@
     "cron-parser": "^5.10.1",
     "drizzle-kit": "^0.31.10",
     "drizzle-orm": "^0.45.2",
+    "kysely": "0.29.3",
     "ldapts": "9.2.0",
     "lucide-react": "^1.16.0",
     "mysql2": "^3.24.4",

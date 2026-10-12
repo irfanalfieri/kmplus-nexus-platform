@@ -640,9 +640,12 @@ export function DestinationEditor({ step, options, columns, onChange }: { step: 
         </div>
       )}
 
-      {step.mode === 'upsert' && (
+      {(step.mode === 'upsert' || step.mode === 'replace') && (
         <div>
-          <FieldLabel>Key column(s)</FieldLabel>
+          <FieldLabel>{step.mode === 'replace' ? 'Key column(s), optional' : 'Key column(s)'}</FieldLabel>
+          {step.mode === 'replace' && (
+            <p className="mb-2 text-xs text-muted-foreground">Used when fixed rows are replayed from Data Quality: a replayed row replaces the row with the same key instead of adding a copy.</p>
+          )}
           <div className="flex flex-wrap gap-2">
             {columns.length ? (
               columns.map((c) => (
@@ -655,6 +658,7 @@ export function DestinationEditor({ step, options, columns, onChange }: { step: 
               <span className="text-xs text-muted-foreground">Configure the steps before this one first.</span>
             )}
           </div>
+          {step.mode === 'upsert' && (
           <label className="mt-3 flex items-start gap-2 text-sm">
             <input type="checkbox" className="mt-0.5" checked={step.softDeleteMissing} onChange={(e) => onChange({ ...step, softDeleteMissing: e.target.checked } as DestinationStep)} />
             <span>
@@ -662,7 +666,8 @@ export function DestinationEditor({ step, options, columns, onChange }: { step: 
               <span className="block text-xs text-muted-foreground">After each full run, rows this run didn&apos;t write are flagged deleted (not removed). Needs a full read, not incremental.</span>
             </span>
           </label>
-          {step.kind === 'datasource' && step.softDeleteMissing && (
+          )}
+          {step.mode === 'upsert' && step.kind === 'datasource' && step.softDeleteMissing && (
             <div className="mt-2">
               <FieldLabel>Column marking deleted rows (boolean or timestamp)</FieldLabel>
               <ColumnPicker columns={targetColumns} value={step.softDeleteColumn} onChange={(v) => onChange({ ...step, softDeleteColumn: v })} label="Deleted marker column" />

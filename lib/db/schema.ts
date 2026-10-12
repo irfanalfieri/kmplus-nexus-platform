@@ -53,6 +53,10 @@ export const workspaceSso = pgTable('workspace_sso', {
   defaultRole: text('defaultRole').notNull().default('viewer'),
   /** Block password sign-in for emails at this domain. */
   enforce: boolean('enforce').notNull().default(false),
+  /** oidc | saml */
+  protocol: text('protocol').notNull().default('oidc'),
+  /** Add users to the workspace on their first SSO sign-in. Off = only SCIM-provisioned users get access. */
+  jitProvisioning: boolean('jitProvisioning').notNull().default(true),
   verificationToken: text('verificationToken').notNull(),
   verifiedAt: timestamp('verifiedAt', { withTimezone: true }),
   createdBy: text('createdBy').notNull(),
@@ -101,6 +105,14 @@ export const workspaces = pgTable('workspaces', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
   createdBy: text('createdBy').notNull(),
+  /** Who must approve a pipeline publish (GV-6): off | destructive (replace / mark-deleted writes) | always. */
+  publishApproval: text('publishApproval').notNull().default('off'),
+  /** Stage in an environment group (GV-7): dev | staging | prod; null = not part of a group. */
+  environment: text('environment'),
+  /** Workspaces promoting into each other share this id (GV-7). */
+  environmentGroupId: text('environmentGroupId'),
+  /** Pipelines here change only through promotion from the previous stage. */
+  environmentLocked: boolean('environmentLocked').notNull().default(false),
   createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
 })
@@ -187,9 +199,36 @@ export const pipelines = pgTable('pipelines', {
   state: jsonb('state'),
   /** SHA-256 of the inbound webhook trigger token (SC-1); null = webhook trigger off. */
   triggerTokenHash: text('triggerTokenHash'),
+  /** Same value in every environment a pipeline was promoted through (the id it had where it was created, GV-7). */
+  promotionKey: text('promotionKey'),
   createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
-}, (t) => [index('pipelines_next_run_idx').on(t.nextRunAt), index('pipelines_workspace_idx').on(t.workspaceId)])
+}, (t) => [index('pipelines_next_run_idx').on(t.nextRunAt), index('pipelines_workspace_idx').on(t.workspaceId), index('pipelines_promotion_idx').on(t.workspaceId, t.promotionKey)])
+
+/** A pipeline version waiting for a second person before it runs (GV-6). */
+export const pipelineApprovals = pgTable('pipeline_approvals', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  pipelineId: text('pipelineId').notNull(),
+  /** The pipeline_versions version that is published on approval. */
+  version: integer('version').notNull(),
+  /** publish (a change made here) | promote (arrived from the previous environment) */
+  kind: text('kind').notNull().default('publish'),
+  /** pending | approved | rejected | cancelled | superseded */
+  status: text('status').notNull().default('pending'),
+  /** Why approval is needed, e.g. "Replaces dataset employees". */
+  reasons: jsonb('reasons').notNull().default([]),
+  /** Schedule on/off to apply when published (null = keep). */
+  enabled: boolean('enabled'),
+  requestNote: text('requestNote'),
+  requestedBy: text('requestedBy').notNull(),
+  /** Promotions: the workspace (environment) it came from. */
+  fromWorkspaceId: text('fromWorkspaceId'),
+  decidedBy: text('decidedBy'),
+  decisionNote: text('decisionNote'),
+  decidedAt: timestamp('decidedAt', { withTimezone: true }),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('pipeline_approvals_inbox_idx').on(t.workspaceId, t.status, t.createdAt), index('pipeline_approvals_pipeline_idx').on(t.pipelineId)])
 
 // Layer 4: Scheduler & Layer 5: Monitoring
 export const executionLogs = pgTable('execution_logs', {
@@ -564,3 +603,47 @@ export const datasetQualitySnapshots = pgTable('dataset_quality_snapshots', {
   score: numeric('score'),
   takenAt: timestamp('takenAt', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [uniqueIndex('dataset_quality_day_idx').on(t.workspaceId, t.datasetName, t.day)])
+
+// SCIM 2.0 provisioning (GV-8): the identity provider creates, updates and deactivates workspace members.
+/** Bearer tokens the IdP uses (only a SHA-256 hash stored; shown once). */
+export const scimTokens = pgTable('scim_tokens', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  name: text('name').notNull(),
+  prefix: text('prefix').notNull(),
+  hash: text('hash').notNull().unique(),
+  createdBy: text('createdBy').notNull(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  lastUsedAt: timestamp('lastUsedAt', { withTimezone: true }),
+  revokedAt: timestamp('revokedAt', { withTimezone: true }),
+  revokedBy: text('revokedBy'),
+}, (t) => [index('scim_tokens_workspace_idx').on(t.workspaceId)])
+
+/** A SCIM User resource: one Nexus account provisioned into one workspace. */
+export const scimUsers = pgTable('scim_users', {
+  /** SCIM resource id. */
+  id: text('id').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  userId: text('userId').notNull(),
+  userName: text('userName').notNull(),
+  externalId: text('externalId'),
+  active: boolean('active').notNull().default(true),
+  /** name, displayName, emails, title … as the IdP sent them (returned on GET). */
+  attributes: jsonb('attributes').notNull().default({}),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex('scim_users_member_idx').on(t.workspaceId, t.userId), index('scim_users_name_idx').on(t.workspaceId, t.userName)])
+
+/** A SCIM Group; members of a group mapped to a role get that role (the highest of their groups). */
+export const scimGroups = pgTable('scim_groups', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  displayName: text('displayName').notNull(),
+  externalId: text('externalId'),
+  /** Role for members (admin … viewer); null = the group doesn't set roles. */
+  role: text('role'),
+  /** SCIM user ids. */
+  members: jsonb('members').notNull().default([]),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('scim_groups_workspace_idx').on(t.workspaceId)])

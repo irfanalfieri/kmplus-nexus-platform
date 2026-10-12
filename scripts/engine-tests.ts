@@ -29,6 +29,12 @@ import { isPrivateAddress } from '@/lib/net/safe-url'
 import { issuerFor, PUBLIC_EMAIL_DOMAINS, DOMAIN_RE } from '@/lib/auth/sso-presets'
 import { rateLimitHeaders } from '@/lib/api/rate-limit'
 import { openApiSpec } from '@/lib/api/openapi'
+import { readFileSync } from 'node:fs'
+import { approvalReasons, destructiveWrites } from '@/lib/pipelines/approvals'
+import { applyRuleIds, nextEnvironment, planPromotion, remapRuleBody, type PromotionSide } from '@/lib/pipelines/promote'
+import { ruleBodySchema } from '@/lib/rules/definition'
+import { manualIdpSettings, parseIdpMetadata, samlConfigFor, spEndpoints } from '@/lib/auth/saml'
+import { ScimError, applyGroupPatch, applyUserPatch, paging, parseFilter, parsePatch, userEmail } from '@/lib/scim/protocol'
 
 let passed = 0
 async function test(name: string, fn: () => void | Promise<void>) {
@@ -606,6 +612,124 @@ async function main() {
     const after = scheduleSchema.parse({ type: 'after', afterPipelineId: 'p1', afterOn: 'success_or_partial' })
     assert.deepEqual(nextRunTimes(after, 3), [])
     assert.match(describeSchedule(after), /After another pipeline succeeds \(also partially\)/)
+  })
+
+  await test('approvals: policy decides which publishes wait for a second person', () => {
+    const replace = definitionSchema.parse({ steps: [{ id: 's', type: 'source', dataSourceId: 'x', table: 't' }, { id: 'd', type: 'destination', kind: 'dataset', datasetName: 'employees', mode: 'replace' }] })
+    const upsert = definitionSchema.parse({ steps: [{ id: 's', type: 'source', dataSourceId: 'x', table: 't' }, { id: 'd', type: 'destination', kind: 'dataset', datasetName: 'employees', mode: 'upsert', keys: ['id'] }] })
+    const softDelete = definitionSchema.parse({ steps: [{ id: 's', type: 'source', dataSourceId: 'x', table: 't' }, { id: 'd', type: 'destination', kind: 'dataset', datasetName: 'employees', mode: 'upsert', keys: ['id'], softDeleteMissing: true }] })
+    assert.deepEqual(approvalReasons('off', replace), [])
+    assert.deepEqual(approvalReasons('destructive', replace), ['Replaces dataset employees on every run'])
+    assert.deepEqual(approvalReasons('destructive', upsert), [], 'upserts are not destructive')
+    assert.match(destructiveWrites(softDelete)[0], /Marks rows missing from the source as deleted in dataset employees/)
+    assert.equal(approvalReasons('always', upsert)[0], 'Every publish needs approval in this workspace')
+    assert.equal(approvalReasons('always', upsert, { promotedFrom: 'Staging' })[0], 'Promoted from Staging')
+  })
+
+  await test('promotion: data sources, rules and chained pipelines are mapped into the next environment', () => {
+    const body = ruleBodySchema.parse({ when: { match: 'all', conditions: [{ field: 'status', operator: 'equals', value: 'x' }] }, then: [{ type: 'trigger_pipeline', pipelineId: 'dev-p2' }] })
+    const def = definitionSchema.parse({
+      steps: [
+        { id: 's', type: 'source', dataSourceId: 'dev-hr', table: 'employees' },
+        { id: 'r', type: 'rules', ruleIds: ['dev-rule'] },
+        { id: 'd', type: 'destination', kind: 'datasource', dataSourceId: 'dev-lms', table: 'employee', mode: 'upsert', keys: ['id'] },
+      ],
+    })
+    const from: PromotionSide = {
+      dataSources: [{ id: 'dev-hr', name: 'HR DB', sourceType: 'postgresql' }, { id: 'dev-lms', name: 'LMS', sourceType: 'kmplus' }],
+      rules: [{ id: 'dev-rule', name: 'Contract approval', body }],
+      pipelines: [{ id: 'dev-p1', name: 'Employees', promotionKey: null }, { id: 'dev-p2', name: 'Training', promotionKey: null }],
+    }
+    const to: PromotionSide = {
+      dataSources: [{ id: 'stg-hr', name: 'hr db', sourceType: 'postgresql' }, { id: 'stg-lms', name: 'LMS', sourceType: 'kmplus' }],
+      rules: [],
+      pipelines: [{ id: 'stg-p2', name: 'Training (renamed)', promotionKey: 'dev-p2' }],
+    }
+    const schedule = scheduleSchema.parse({ type: 'after', afterPipelineId: 'dev-p2' })
+    const plan = planPromotion(def, schedule, from, to, 'Staging')
+    assert.deepEqual(plan.blocking, [])
+    const src = plan.definition.nodes.find((n) => n.type === 'source')!
+    assert.equal(src.type === 'source' && src.dataSourceId, 'stg-hr', 'data sources match by name (any case) and connector type')
+    const dest = plan.definition.nodes.find((n) => n.type === 'destination')!
+    assert.equal(dest.type === 'destination' && dest.kind === 'datasource' && dest.dataSourceId, 'stg-lms')
+    assert.equal(plan.schedule.type === 'after' && plan.schedule.afterPipelineId, 'stg-p2', '"run after" follows the promotion key, not the name')
+    assert.equal(plan.rules.length, 1)
+    assert.equal(plan.rules[0].targetId, null, 'missing rule is created')
+    assert.equal(plan.rules[0].body.then[0].type === 'trigger_pipeline' && plan.rules[0].body.then[0].pipelineId, 'stg-p2')
+    const fixed = applyRuleIds(plan.definition, new Map([['dev-rule', 'stg-rule']]))
+    const rulesNode = fixed.nodes.find((n) => n.type === 'rules')!
+    assert.deepEqual(rulesNode.type === 'rules' && rulesNode.ruleIds, ['stg-rule'])
+    // Same rule already there: nothing to write.
+    const again = planPromotion(def, schedule, from, { ...to, rules: [{ id: 'stg-rule', name: 'CONTRACT APPROVAL', body: remapRuleBody(body, () => 'stg-p2') }] }, 'Staging')
+    assert.equal(again.rules.length, 0)
+    assert.equal(again.items.find((i) => i.kind === 'business rule')?.status, 'same')
+    // Missing data source and unpromoted chained pipeline block it.
+    const blocked = planPromotion(def, schedule, from, { dataSources: [], rules: [], pipelines: [] }, 'Production')
+    assert.ok(blocked.blocking.some((b) => /Add the data source "HR DB" \(postgresql\) in Production/.test(b)))
+    assert.ok(blocked.blocking.some((b) => /promote that one to Production first/.test(b)))
+    assert.equal(nextEnvironment('dev', ['dev', 'prod']), 'prod', 'skips a missing staging')
+    assert.equal(nextEnvironment('prod', ['dev', 'staging', 'prod']), null)
+  })
+
+  await test('SAML: IdP metadata gives entity ID, sign-in URL and signing certificate; bad metadata is refused', () => {
+    const pem = readFileSync('scripts/test/fixtures/saml-idp-cert.pem', 'utf8')
+    const b64 = pem.replace(/-----(BEGIN|END) CERTIFICATE-----|\s/g, '')
+    const metadata = `<?xml version="1.0"?>
+<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="https://sts.windows.net/tenant-1/">
+  <md:IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+    <md:KeyDescriptor use="encryption"><ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><ds:X509Data><ds:X509Certificate>not-a-cert</ds:X509Certificate></ds:X509Data></ds:KeyInfo></md:KeyDescriptor>
+    <md:KeyDescriptor use="signing"><ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><ds:X509Data><ds:X509Certificate>
+      ${b64}
+    </ds:X509Certificate></ds:X509Data></ds:KeyInfo></md:KeyDescriptor>
+    <md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="https://login.example.com/saml/post"/>
+    <md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="https://login.example.com/saml?a=1&amp;b=2"/>
+  </md:IDPSSODescriptor>
+</md:EntityDescriptor>`
+    const idp = parseIdpMetadata(metadata)
+    assert.equal(idp.entityId, 'https://sts.windows.net/tenant-1/')
+    assert.equal(idp.ssoUrl, 'https://login.example.com/saml?a=1&b=2', 'prefers HTTP-Redirect and decodes entities')
+    assert.deepEqual(idp.certificates, [b64], 'encryption keys are ignored')
+    assert.throws(() => parseIdpMetadata('<!DOCTYPE x [<!ENTITY e "x">]>' + metadata), /DOCTYPE/)
+    assert.throws(() => parseIdpMetadata('<md:EntityDescriptor entityID="sp"><md:SPSSODescriptor/></md:EntityDescriptor>'), /no identity provider/)
+    assert.throws(() => parseIdpMetadata(metadata, new Date('2100-01-01')), /expired/)
+    assert.throws(() => manualIdpSettings({ entityId: 'x', ssoUrl: 'http://insecure.example.com', certificate: pem }), /https/)
+    assert.equal(manualIdpSettings({ entityId: 'urn:x', ssoUrl: 'https://idp.example.com/sso', certificate: pem }).certificates[0], b64, 'PEM headers are stripped')
+    const sp = spEndpoints('https://nexus.example/', 'sso-abc')
+    assert.equal(sp.acsUrl, 'https://nexus.example/api/auth/sso/saml2/sp/acs/sso-abc')
+    const cfg = samlConfigFor({ preset: 'azure', sp, idp })
+    assert.equal(cfg.audience, sp.entityId)
+    assert.equal(cfg.entryPoint, idp.ssoUrl)
+    assert.match(cfg.mapping.email, /claims\/emailaddress$/)
+    assert.ok(!JSON.stringify(cfg).includes('privateKey'), 'no SP private key is stored')
+  })
+
+  await test('SCIM: filters, Entra/Okta PATCH shapes and group membership changes', () => {
+    assert.deepEqual(parseFilter('userName eq "Budi@KMPlus.co.id"', ['userName', 'externalId']), { attribute: 'userName', value: 'Budi@KMPlus.co.id' })
+    assert.deepEqual(parseFilter('USERNAME eq "a\\"b"', ['userName']), { attribute: 'userName', value: 'a"b' })
+    assert.equal(parseFilter(null, ['userName']), null)
+    assert.throws(() => parseFilter('userName sw "a"', ['userName']), ScimError)
+    assert.throws(() => parseFilter('title eq "x"', ['userName']), /not supported/)
+    assert.deepEqual(paging(new URLSearchParams('startIndex=0&count=5000')), { startIndex: 1, count: 200 })
+    const doc = { userName: 'budi@kmplus.co.id', active: true, name: { givenName: 'Budi' }, emails: [{ type: 'work', value: 'budi@kmplus.co.id', primary: true }] }
+    // Entra: path + string booleans; Okta: value object.
+    const entra = applyUserPatch(doc, parsePatch({ Operations: [{ op: 'Replace', path: 'active', value: 'False' }, { op: 'Add', path: 'name.familyName', value: 'Santoso' }, { op: 'Replace', path: 'emails[type eq "work"].value', value: 'budi.s@kmplus.co.id' }] }))
+    assert.equal(entra.active, false)
+    assert.deepEqual(entra.name, { givenName: 'Budi', familyName: 'Santoso' })
+    assert.equal(userEmail(entra), 'budi.s@kmplus.co.id')
+    assert.equal(doc.active, true, 'the input is not changed')
+    const okta = applyUserPatch(doc, parsePatch({ schemas: ['urn:ietf:params:scim:api:messages:2.0:PatchOp'], Operations: [{ op: 'replace', value: { active: false, displayName: 'Budi S' } }] }))
+    assert.equal(okta.active, false)
+    assert.equal(okta.displayName, 'Budi S')
+    const ext = applyUserPatch(doc, parsePatch({ Operations: [{ op: 'add', path: 'urn:ietf:params:scim:schemas:extension:enterprise:2.0:User:department', value: 'Finance' }] }))
+    assert.deepEqual(ext['urn:ietf:params:scim:schemas:extension:enterprise:2.0:User'], { department: 'Finance' })
+    assert.throws(() => parsePatch({ Operations: [{ op: 'move', path: 'x' }] }), /Unknown PATCH op/)
+    assert.equal(userEmail({ userName: 'not-an-email' }), null)
+    const g = { displayName: 'Nexus Admins', externalId: null, members: ['u1'] }
+    assert.deepEqual(applyGroupPatch(g, parsePatch({ Operations: [{ op: 'Add', path: 'members', value: [{ value: 'u2' }, { value: 'u1' }] }] })).members, ['u1', 'u2'])
+    assert.deepEqual(applyGroupPatch({ ...g, members: ['u1', 'u2'] }, parsePatch({ Operations: [{ op: 'Remove', path: 'members', value: [{ value: 'u1' }] }] })).members, ['u2'])
+    assert.deepEqual(applyGroupPatch({ ...g, members: ['u1', 'u2'] }, parsePatch({ Operations: [{ op: 'remove', path: 'members[value eq "u2"]' }] })).members, ['u1'])
+    assert.equal(applyGroupPatch(g, parsePatch({ Operations: [{ op: 'replace', value: { displayName: 'Admins', id: 'ignored' } }] })).displayName, 'Admins')
+    assert.throws(() => applyGroupPatch(g, parsePatch({ Operations: [{ op: 'remove', path: 'displayName' }] })), /required/)
   })
 
   console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`)

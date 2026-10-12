@@ -48,16 +48,26 @@ async function adminCount(workspaceId: string) {
 async function getWorkspaceContextImpl() {
   const ctx = await requireWorkspace()
   const mine = await db
-    .select({ id: workspaces.id, name: workspaces.name, role: workspaceMembers.role })
+    .select({ id: workspaces.id, name: workspaces.name, role: workspaceMembers.role, environment: workspaces.environment, publishApproval: workspaces.publishApproval, environmentLocked: workspaces.environmentLocked })
     .from(workspaceMembers)
     .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
     .where(eq(workspaceMembers.userId, ctx.userId))
     .orderBy(asc(workspaces.name))
+  const current = mine.find((w) => w.id === ctx.workspaceId)
   return {
     user: { id: ctx.userId, email: ctx.email, name: ctx.name },
-    workspace: { id: ctx.workspaceId, name: ctx.workspaceName },
+    workspace: {
+      id: ctx.workspaceId,
+      name: ctx.workspaceName,
+      /** dev | staging | prod | null (GV-7) */
+      environment: current?.environment ?? null,
+      /** Pipelines change only by promotion. */
+      locked: current?.environmentLocked ?? false,
+      /** off | destructive | always (GV-6) */
+      publishApproval: current?.publishApproval ?? 'off',
+    },
     role: ctx.role,
-    workspaces: mine.map((w) => ({ ...w, role: w.role as Role })),
+    workspaces: mine.map((w) => ({ id: w.id, name: w.name, role: w.role as Role, environment: w.environment })),
   }
 }
 

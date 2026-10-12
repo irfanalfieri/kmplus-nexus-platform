@@ -192,7 +192,7 @@ function NexusNode({ data, selected }: NodeProps<FlowNode<NodeData>>) {
 }
 const nodeTypes = { nexus: NexusNode }
 
-export default function PipelineEditor({ initial, options, onClose, onSaved }: { initial: EditablePipeline; options: BuilderOptions; onClose: () => void; onSaved: (id: string) => void }) {
+export default function PipelineEditor({ initial, options, onClose, onSaved }: { initial: EditablePipeline; options: BuilderOptions; onClose: () => void; onSaved: (id: string, result: { version: number; published: boolean; approvalId: string | null }) => void }) {
   const [draft, setDraft] = useState<EditablePipeline>(initial)
   const [selectedId, setSelectedId] = useState<string | null>(initial.nodes[0]?.id ?? null)
   const [tab, setTab] = useState<'settings' | 'schedule' | 'test'>('test')
@@ -295,8 +295,8 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
     if (draft.schedule.type === 'after' && !draft.schedule.afterPipelineId) return setError('Choose the pipeline this one runs after (Schedule tab).')
     setSaving(publish ? 'publish' : 'draft')
     try {
-      const { id } = await savePipeline({ id: draft.id, name: draft.name, description: draft.description, definition, schedule: draft.schedule, enabled: draft.enabled, changeNote: changeNote || undefined, publish })
-      onSaved(id)
+      const res = await savePipeline({ id: draft.id, name: draft.name, description: draft.description, definition, schedule: draft.schedule, enabled: draft.enabled, changeNote: changeNote || undefined, publish })
+      onSaved(res.id, res)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed')
     } finally {

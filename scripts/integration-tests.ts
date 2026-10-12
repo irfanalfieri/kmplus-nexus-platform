@@ -13,15 +13,23 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { and, eq, inArray, like } from 'drizzle-orm'
 import { db, pool } from '@/lib/db'
-import { apiKeys, apiRateLimits, auditLogs, businessRuleVersions, businessRules, catalogEntries, connectorInstalls, dashboards, dataSources, datasetPolicies, datasetQualitySnapshots, domainMappings, mappingTemplates, ssoProvider, webhookDeliveries, webhooks, workspaceSso, executionLogs, nexusDatasets, pipelineJobs, pipelineRunRejects, pipelines, pipelineVersions, session, user, verification, workspaceInvites, workspaceMembers, workspaces } from '@/lib/db/schema'
+import { apiKeys, apiRateLimits, auditLogs, businessRuleVersions, businessRules, catalogEntries, connectorInstalls, dashboards, dataSources, datasetPolicies, datasetQualitySnapshots, domainMappings, mappingTemplates, notifications, pipelineApprovals, scimGroups, scimTokens, scimUsers, ssoProvider, webhookDeliveries, webhooks, workspaceSso, executionLogs, nexusDatasets, pipelineJobs, pipelineRunRejects, pipelines, pipelineVersions, session, user, verification, workspaceInvites, workspaceMembers, workspaces } from '@/lib/db/schema'
 import { acceptInvite, changeMemberRole, createInvite, getWorkspaceContext, listMembers, resetMemberTwoFactor, switchWorkspace } from '@/lib/actions/workspaces'
 import { installConnector } from '@/lib/actions/connectors'
 import { createDataSource, deleteDataSource, getDataSources, renameDataSource, setDataSourceRole, testConnection } from '@/lib/actions/data-sources'
 import { writeDataset } from '@/lib/pipelines/io'
 import { startKmplusMock } from './test/kmplus-mock'
 import { cancelPipelineRun, createWebhookTrigger, discardDraft, getBuilderOptions, getDatasetPreview, getRunStatus, listPipelines, listRuns, publishPipeline, retryPipelineRun, runPipelineNow, savePipeline } from '@/lib/actions/pipelines'
-import { createSsoProvider, deleteSsoProvider, listSsoProviders, updateSsoProvider, verifySsoDomain } from '@/lib/actions/sso'
+import { createSamlProvider, createSsoProvider, deleteSsoProvider, listSsoProviders, setSamlIdp, updateSsoProvider, verifySsoDomain } from '@/lib/actions/sso'
+import { approveRequest, listApprovals, rejectRequest } from '@/lib/actions/approvals'
+import { listPromotionStatus, previewPromotion, promotePipeline, setApprovalPolicy, setupEnvironments, unlinkEnvironment } from '@/lib/actions/environments'
+import { createScimToken, revokeScimToken, setScimGroupRole } from '@/lib/actions/scim'
+import { DELETE as scimDelete, GET as scimGet, PATCH as scimPatch, POST as scimPost } from '@/app/api/scim/v2/[[...path]]/route'
+import { readFileSync } from 'node:fs'
 import { emailAllowedForProvider, enforcedProviderFor, provisionSsoUser } from '@/lib/auth/sso'
+import { SsoConfigPlugin } from '@/lib/auth/sso-config-plugin'
+import { upgradeSsoSecrets } from '@/lib/security/upgrade'
+import { Kysely, PostgresDialect } from 'kysely'
 import { createWebhook, deleteWebhook, listWebhooks, testWebhook } from '@/lib/actions/webhooks'
 import { deleteMappingTemplate, saveMappingTemplate } from '@/lib/actions/templates'
 import { POST as postHook } from '@/app/api/hooks/pipelines/[id]/[token]/route'
@@ -596,6 +604,22 @@ async function main() {
       assert.equal(listed.verified, false)
       assert.match(listed.redirectUri, new RegExp(`/api/auth/sso/callback/${providerId}$`))
       assert.equal(listed.dnsRecord.name, `_nexus-sso.${domain}`)
+      // TD-25: the client secret is sealed at rest; Better Auth's reads (through the Kysely plugin) see it in plain.
+      const storedConfig = async () => (await db.select({ c: ssoProvider.oidcConfig }).from(ssoProvider).where(eq(ssoProvider.providerId, providerId)))[0].c!
+      assert.doesNotMatch(await storedConfig(), /client-secret|clientSecret/, 'no plaintext secret in the database')
+      const authDb = new Kysely<Record<string, Record<string, unknown>>>({ dialect: new PostgresDialect({ pool }), plugins: [new SsoConfigPlugin()] })
+      const readAsAuth = async () => JSON.parse(String((await authDb.selectFrom('ssoProvider').selectAll().where('providerId', '=', providerId).executeTakeFirstOrThrow()).oidcConfig))
+      assert.equal((await readAsAuth()).clientSecret, 'client-secret')
+      assert.equal((await readAsAuth()).clientId, 'client-id')
+      await updateSsoProvider({ providerId, clientSecret: 'rotated-secret' })
+      assert.doesNotMatch(await storedConfig(), /rotated-secret/)
+      assert.equal((await readAsAuth()).clientSecret, 'rotated-secret', 'rotation re-seals the new secret')
+      // A provider stored in plaintext (before TD-25) is sealed by the cron tick.
+      const plainConfig = JSON.stringify({ ...(await readAsAuth()), clientSecret: 'legacy-secret' })
+      await db.update(ssoProvider).set({ oidcConfig: plainConfig }).where(eq(ssoProvider.providerId, providerId))
+      assert.ok((await upgradeSsoSecrets()).upgraded >= 1)
+      assert.doesNotMatch(await storedConfig(), /legacy-secret/)
+      assert.equal((await readAsAuth()).clientSecret, 'legacy-secret')
       await rejectsWith(() => verifySsoDomain(providerId), /TXT record not found/)
       await rejectsWith(() => updateSsoProvider({ providerId, enforce: true }), /Verify the domain before requiring SSO/)
       setTestUser(viewer)
@@ -800,6 +824,233 @@ async function main() {
       }
     })
 
+
+    await test('TD-24: a full run supersedes older quarantine (fixes carry over); replays into a replace dataset replace by key', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      await pool.query(`CREATE TABLE "${FIXTURE_SCHEMA}".people (id int PRIMARY KEY, email text)`)
+      await pool.query(`INSERT INTO "${FIXTURE_SCHEMA}".people VALUES (1, 'one@kmplus.test'), (2, 'broken-2'), (3, 'broken-3')`)
+      const ds = `${RUN}_people`
+      const { id } = await savePipeline({
+        publish: true,
+        name: `${RUN} people`,
+        definition: {
+          steps: [
+            { id: 's', type: 'source', dataSourceId: sourceId, table: 'people' },
+            { id: 'v', type: 'validate', rules: [{ field: 'email', rule: 'email' }] },
+            { id: 'd', type: 'destination', kind: 'dataset', datasetName: ds, mode: 'replace', keys: ['id'] },
+          ],
+          settings: { retries: 0 },
+        },
+        schedule: { type: 'manual' } as never,
+      })
+      const runOnce = async () => {
+        const r = await runPipelineNow(id)
+        takeAfterCallbacks()
+        await processJobs({})
+        return r.runId
+      }
+      const first = await runOnce()
+      const firstRejects = await db.select().from(pipelineRunRejects).where(eq(pipelineRunRejects.runId, first))
+      assert.equal(firstRejects.length, 2)
+      const two = firstRejects.find((r) => (r.row as { id: number }).id === 2)!
+      await fixRow({ id: two.id, row: { id: 2, email: 'two@kmplus.test' } })
+      const second = await runOnce()
+      const old = await db.select().from(pipelineRunRejects).where(eq(pipelineRunRejects.runId, first))
+      assert.ok(old.every((r) => r.status === 'superseded'), 'older quarantine superseded by the new full run')
+      const fresh = await db.select().from(pipelineRunRejects).where(eq(pipelineRunRejects.runId, second))
+      const carried = fresh.find((r) => (r.row as { id: number }).id === 2)!
+      assert.equal(carried.status, 'fixed', "the steward's fix carries over to the new copy")
+      assert.equal((carried.fixedRow as { email: string }).email, 'two@kmplus.test')
+      await rejectsWith(() => fixRow({ id: two.id, row: { id: 2, email: 'x@kmplus.test' } }), /later run quarantined this row again/)
+      // A stale copy of id 2 (as an earlier replay would have left) is replaced, not duplicated.
+      const [table] = await db.select({ t: nexusDatasets.tableName }).from(nexusDatasets).where(and(eq(nexusDatasets.workspaceId, adminWs), eq(nexusDatasets.name, ds)))
+      await pool.query(`INSERT INTO "nexus_data"."${table.t}" (id, email) VALUES (2, 'stale@kmplus.test')`)
+      const [outcome] = await replayRows([carried.id])
+      takeAfterCallbacks()
+      await processJobs({})
+      assert.equal((await getRunStatus(outcome.runId)).recordsSuccess, 1)
+      const { rows } = await pool.query(`SELECT email FROM "nexus_data"."${table.t}" WHERE id = 2 AND "_nexus_deleted_at" IS NULL`)
+      assert.deepEqual(rows.map((r) => r.email), ['two@kmplus.test'])
+    })
+
+    const approver = newUser('approver')
+    await test('GV-6: publishing waits for a second person; requesters cannot approve their own', async () => {
+      await db.insert(user).values({ id: approver.id, email: approver.email, name: approver.name, emailVerified: true, twoFactorEnabled: true })
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const others = await db.select({ userId: workspaceMembers.userId }).from(workspaceMembers).where(and(eq(workspaceMembers.workspaceId, adminWs), inArray(workspaceMembers.role, ['admin', 'steward'])))
+      if (others.length < 2) await rejectsWith(() => setApprovalPolicy('always'), /at least two people/)
+      await db.insert(workspaceMembers).values({ workspaceId: adminWs, userId: approver.id, role: 'steward' })
+      await setApprovalPolicy('always')
+      const def = { steps: [{ id: 's', type: 'source', dataSourceId: sourceId, table: 'people' }, { id: 'd', type: 'destination', kind: 'dataset', datasetName: `${RUN}_approved`, mode: 'upsert', keys: ['id'] }] }
+      const saved = await savePipeline({ publish: true, name: `${RUN} approved`, definition: def, schedule: { type: 'manual' } as never })
+      assert.equal(saved.published, false)
+      assert.ok(saved.approvalId)
+      const listed = (await listPipelines()).find((x) => x.id === saved.id)!
+      assert.equal(listed.version, 0, 'nothing runs until approved')
+      assert.equal(listed.pendingApproval?.version, saved.version)
+      await rejectsWith(() => approveRequest({ id: saved.approvalId! }), /Someone else/)
+      setTestUser(viewer)
+      await switchWorkspace(adminWs)
+      await rejectsWith(() => approveRequest({ id: saved.approvalId! }), /Your role/)
+      setTestUser(approver)
+      await switchWorkspace(adminWs)
+      const pending = await listApprovals('pending')
+      const mine = pending.find((r) => r.id === saved.approvalId)!
+      assert.ok(mine.canDecide && mine.reasons[0].startsWith('Every publish'))
+      await rejectsWith(() => rejectRequest({ id: mine.id }), /Say why/)
+      await rejectRequest({ id: mine.id, note: 'use replace instead' })
+      assert.ok((await db.select().from(notifications).where(and(eq(notifications.userId, admin.id), eq(notifications.workspaceId, adminWs)))).some((n) => /rejected/.test(n.title)))
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const again = await publishPipeline(saved.id, saved.version)
+      assert.equal(again.published, false)
+      setTestUser(approver)
+      await switchWorkspace(adminWs)
+      assert.equal((await approveRequest({ id: again.approvalId!, note: 'ok' })).version, saved.version)
+      const [p] = await db.select({ version: pipelines.version }).from(pipelines).where(eq(pipelines.id, saved.id))
+      assert.equal(p.version, saved.version, 'approval published the requested version')
+      await rejectsWith(() => approveRequest({ id: again.approvalId! }), /already approved/)
+      // "destructive": upserts publish right away, replace datasets wait.
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      await setApprovalPolicy('destructive')
+      assert.equal((await savePipeline({ id: saved.id, publish: true, name: `${RUN} approved`, definition: def, schedule: { type: 'manual' } as never })).published, true)
+      const replaceDef = { steps: [def.steps[0], { ...def.steps[1], mode: 'replace', keys: [] }] }
+      assert.equal((await savePipeline({ id: saved.id, publish: true, name: `${RUN} approved`, definition: replaceDef, schedule: { type: 'manual' } as never })).published, false)
+      await setApprovalPolicy('off')
+      const { rows: approved } = await listAuditLogs({ action: 'APPROVE' })
+      assert.ok(approved.length >= 1)
+    })
+
+    let prodWs = ''
+    await test('GV-7: environments; promotion maps data sources by name and keeps Production locked', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const { created } = await setupEnvironments({ environment: 'dev', create: ['prod'] })
+      prodWs = created[0].id
+      const [prod] = await db.select().from(workspaces).where(eq(workspaces.id, prodWs))
+      assert.equal(prod.environment, 'prod')
+      assert.equal(prod.environmentLocked, true)
+      const devPipeline = (await listPipelines()).find((x) => x.name === `${RUN} people`)!
+      const preview = await previewPromotion(devPipeline.id)
+      assert.ok(preview.blocking.some((b) => /Add the data source/.test(b)), 'prod needs its own data source first')
+      // Production gets its own data source with the same name (its own credentials).
+      await switchWorkspace(prodWs)
+      await installConnector('postgres')
+      const prodSource = await createDataSource({ name: `${RUN} fixture`, type: 'database', sourceType: 'postgres', config: { role: 'source' }, credentials: { connectionString: process.env.DATABASE_URL!, schema: FIXTURE_SCHEMA } })
+      await rejectsWith(() => savePipeline({ name: 'direct edit', definition: { steps: [] }, schedule: { type: 'manual' } as never }), /change only by promotion/)
+      await switchWorkspace(adminWs)
+      const res = await promotePipeline({ pipelineId: devPipeline.id, note: 'first release' })
+      assert.equal(res.published, true)
+      assert.equal(res.target.id, prodWs)
+      const [promoted] = await db.select().from(pipelines).where(eq(pipelines.id, res.pipelineId))
+      assert.equal(promoted.workspaceId, prodWs)
+      assert.equal(promoted.promotionKey, devPipeline.id)
+      assert.equal(promoted.enabled, false, 'new pipelines start with the schedule off')
+      const src = (promoted.config as { nodes: { type: string; dataSourceId?: string }[] }).nodes.find((n) => n.type === 'source')!
+      assert.equal(src.dataSourceId, prodSource, 'uses the Production data source')
+      // A second promotion updates the same pipeline.
+      const again = await promotePipeline({ pipelineId: devPipeline.id })
+      assert.equal(again.pipelineId, res.pipelineId)
+      assert.ok(again.version > res.version)
+      const status = await listPromotionStatus()
+      assert.deepEqual(status.find((x) => x.pipelineId === devPipeline.id)?.deployed, [{ environment: 'prod', version: again.version }])
+      const { rows: promotions } = await listAuditLogs({ action: 'PROMOTE' })
+      assert.equal(promotions.length, 2)
+      await unlinkEnvironment(prodWs)
+      const [devAfter] = await db.select().from(workspaces).where(eq(workspaces.id, adminWs))
+      assert.equal(devAfter.environmentGroupId, null, 'a group of one is dissolved')
+    })
+
+    await test('SCIM: provision, group roles, deactivate (signed out, no SSO rejoin), delete; tokens are workspace-scoped', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const domain = `${RUN}.scim.test`
+      const providerId = `sso-${RUN}`
+      await db.insert(ssoProvider).values({ id: `ssop_${RUN}`, issuer: 'https://idp.example', providerId, domain, domainVerified: true, userId: admin.id })
+      await db.insert(workspaceSso).values({ id: `wsso_${RUN}`, workspaceId: adminWs, providerId, label: 'Test IdP', preset: 'oidc', domain, defaultRole: 'viewer', verificationToken: 'x', createdBy: admin.id })
+      const { token } = await createScimToken('Entra provisioning')
+      const call = async (handler: typeof scimGet, method: string, path: string[], body?: unknown, auth = token) => {
+        const res = await handler(new Request(`https://nexus.example/api/scim/v2/${path.join('/')}`, { method, headers: { authorization: `Bearer ${auth}`, 'content-type': 'application/scim+json' }, body: body === undefined ? undefined : JSON.stringify(body) }), { params: Promise.resolve({ path }) })
+        return { status: res.status, body: res.status === 204 ? null : await res.json() }
+      }
+      assert.equal((await call(scimGet, 'GET', ['Users'], undefined, 'nxs_wrong')).status, 401)
+      const entraUser = { schemas: ['urn:ietf:params:scim:schemas:core:2.0:User'], userName: `ani@${domain}`, externalId: 'aad-1', active: true, displayName: 'Ani Wijaya', emails: [{ primary: true, type: 'work', value: `ani@${domain}` }] }
+      const created = await call(scimPost, 'POST', ['Users'], entraUser)
+      assert.equal(created.status, 201, JSON.stringify(created.body))
+      const scimId = created.body.id as string
+      const [link] = await db.select().from(scimUsers).where(eq(scimUsers.id, scimId))
+      const [member] = await db.select().from(workspaceMembers).where(and(eq(workspaceMembers.workspaceId, adminWs), eq(workspaceMembers.userId, link.userId)))
+      assert.equal(member.role, 'viewer', 'joins with the SSO default role')
+      assert.equal((await call(scimPost, 'POST', ['Users'], entraUser)).status, 409)
+      assert.equal((await call(scimPost, 'POST', ['Users'], { ...entraUser, userName: 'x@other.example', emails: [] })).body.scimType, 'invalidValue')
+      const found = await call(scimGet, 'GET', ['Users'], undefined)
+      assert.ok(found.body.totalResults >= 1)
+      const filtered = await scimGet(new Request(`https://nexus.example/api/scim/v2/Users?filter=${encodeURIComponent(`userName eq "ANI@${domain}"`)}`, { headers: { authorization: `Bearer ${token}` } }), { params: Promise.resolve({ path: ['Users'] }) })
+      assert.equal((await filtered.json()).totalResults, 1, 'userName lookups ignore case')
+      // Groups carry roles.
+      const group = await call(scimPost, 'POST', ['Groups'], { displayName: `${RUN} Stewards`, members: [{ value: scimId }, { value: 'unknown-id' }] })
+      assert.equal(group.status, 201)
+      assert.equal(group.body.members.length, 1, 'unknown members are ignored')
+      await setScimGroupRole({ groupId: group.body.id, role: 'steward' })
+      const roleOf = async () => (await db.select({ role: workspaceMembers.role }).from(workspaceMembers).where(and(eq(workspaceMembers.workspaceId, adminWs), eq(workspaceMembers.userId, link.userId))))[0]?.role
+      assert.equal(await roleOf(), 'steward')
+      await call(scimPatch, 'PATCH', ['Groups', group.body.id], { schemas: ['urn:ietf:params:scim:api:messages:2.0:PatchOp'], Operations: [{ op: 'Remove', path: 'members', value: [{ value: scimId }] }] })
+      assert.equal(await roleOf(), 'viewer', 'leaving the group falls back to the default role')
+      // Deactivate (Entra sends "False"): access removed, sessions revoked, SSO can't add them back.
+      await db.insert(session).values({ id: `${RUN}_scim_sess`, userId: link.userId, token: `${RUN}_scim_tok`, expiresAt: new Date(Date.now() + 86_400_000) })
+      const off = await call(scimPatch, 'PATCH', ['Users', scimId], { schemas: ['urn:ietf:params:scim:api:messages:2.0:PatchOp'], Operations: [{ op: 'Replace', path: 'active', value: 'False' }] })
+      assert.equal(off.body.active, false)
+      assert.equal(await roleOf(), undefined, 'membership removed')
+      assert.equal((await db.select().from(session).where(eq(session.userId, link.userId))).length, 0, 'signed out everywhere')
+      await provisionSsoUser(providerId, { id: link.userId, email: `ani@${domain}` })
+      assert.equal(await roleOf(), undefined, 'a deactivated person does not rejoin through SSO')
+      await call(scimPatch, 'PATCH', ['Users', scimId], { Operations: [{ op: 'replace', value: { active: true } }] })
+      assert.equal(await roleOf(), 'viewer', 'reactivated')
+      // JIT off: only provisioned people join on SSO sign-in.
+      await db.update(workspaceSso).set({ jitProvisioning: false }).where(eq(workspaceSso.providerId, providerId))
+      const stranger = newUser('stranger')
+      await db.insert(user).values({ id: stranger.id, email: `stranger@${domain}`, name: 'x', emailVerified: true, twoFactorEnabled: false })
+      await provisionSsoUser(providerId, { id: stranger.id, email: `stranger@${domain}` })
+      assert.equal((await db.select().from(workspaceMembers).where(eq(workspaceMembers.userId, stranger.id))).length, 0)
+      assert.equal((await call(scimDelete, 'DELETE', ['Users', scimId])).status, 204)
+      assert.equal((await call(scimGet, 'GET', ['Users', scimId])).status, 404)
+      assert.equal(await roleOf(), undefined)
+      const { rows: deprov } = await listAuditLogs({ action: 'DEPROVISION' })
+      assert.ok(deprov.length >= 2)
+      const tokenId = (await db.select({ id: scimTokens.id }).from(scimTokens).where(eq(scimTokens.workspaceId, adminWs)))[0].id
+      await revokeScimToken(tokenId)
+      assert.equal((await call(scimGet, 'GET', ['Users'])).status, 401, 'revoked tokens stop working')
+      await db.delete(user).where(like(user.email, `%@${domain}`))
+    })
+
+    await test('SAML: providers store the IdP metadata; the SP values are shown to the admin', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const cert = readFileSync('scripts/test/fixtures/saml-idp-cert.pem', 'utf8').replace(/-----(BEGIN|END) CERTIFICATE-----|\s/g, '')
+      const metadata = `<EntityDescriptor xmlns="urn:oasis:names:tc:SAML:2.0:metadata" entityID="https://idp.${RUN}.example/saml"><IDPSSODescriptor><KeyDescriptor use="signing"><KeyInfo><X509Data><X509Certificate>${cert}</X509Certificate></X509Data></KeyInfo></KeyDescriptor><SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="https://idp.${RUN}.example/sso"/></IDPSSODescriptor></EntityDescriptor>`
+      await rejectsWith(() => createSamlProvider({ label: 'x', preset: 'saml', domain: `${RUN}.saml.test`, metadata: 'http://127.0.0.1/metadata' }), /https|private|Could not download/)
+      const created = await createSamlProvider({ label: 'Okta', preset: 'okta', domain: `${RUN}.saml.test`, defaultRole: 'analyst' })
+      let listed = (await listSsoProviders()).find((x) => x.providerId === created.providerId)!
+      assert.equal(listed.protocol, 'saml')
+      assert.equal(listed.saml?.idpConfigured, false, 'metadata can come after the app is created')
+      assert.match(listed.saml!.acsUrl, new RegExp(`/api/auth/sso/saml2/sp/acs/${created.providerId}$`))
+      await setSamlIdp({ providerId: created.providerId, metadata })
+      listed = (await listSsoProviders()).find((x) => x.providerId === created.providerId)!
+      assert.equal(listed.saml?.idpConfigured, true)
+      assert.equal(listed.issuer, `https://idp.${RUN}.example/saml`)
+      const [row] = await db.select().from(ssoProvider).where(eq(ssoProvider.providerId, created.providerId))
+      const cfg = JSON.parse(row.samlConfig!)
+      assert.equal(cfg.entryPoint, `https://idp.${RUN}.example/sso`)
+      assert.equal(cfg.cert, cert)
+      assert.equal(cfg.audience, listed.saml!.entityId)
+      assert.equal(row.oidcConfig, null)
+      await rejectsWith(() => setSamlIdp({ providerId: created.providerId, metadata: '<foo/>' }), /not SAML metadata/)
+      await deleteSsoProvider(created.providerId)
+    })
+
     await test('admins reset a member\'s 2FA (lost phone); members cannot', async () => {
       await db.insert(session).values({ id: `${RUN}_sess`, userId: viewer.id, token: `${RUN}_tok`, expiresAt: new Date(Date.now() + 86_400_000) })
       await db.insert(verification).values({ id: `${RUN}_trust`, identifier: `trust-device-${RUN}`, value: viewer.id, expiresAt: new Date(Date.now() + 86_400_000) })
@@ -820,7 +1071,7 @@ async function main() {
       assert.equal(rows.length, 1)
     })
   } finally {
-    await cleanup([admin, viewer, outsider].map((u) => u.id))
+    await cleanup([admin, viewer, outsider].map((u) => u.id).concat(await db.select({ id: user.id }).from(user).where(like(user.id, `${RUN}_%`)).then((r) => r.map((x) => x.id))))
   }
 
   console.log(`\n${passed} passed, ${failed} failed`)
@@ -830,6 +1081,9 @@ async function main() {
 
 async function cleanup(userIds: string[]) {
   const wsIds = (await db.select({ id: workspaceMembers.workspaceId }).from(workspaceMembers).where(inArray(workspaceMembers.userId, userIds))).map((r) => r.id)
+  // Environment workspaces created by the tests.
+  const created = (await db.select({ id: workspaces.id }).from(workspaces).where(inArray(workspaces.createdBy, userIds))).map((r) => r.id)
+  wsIds.push(...created)
   const ws = [...new Set([...wsIds, ...userIds.map((id) => `ws_${id}`)])]
   const datasets = await db.select({ tableName: nexusDatasets.tableName }).from(nexusDatasets).where(inArray(nexusDatasets.workspaceId, ws))
   for (const d of datasets) await pool.query(`DROP TABLE IF EXISTS "nexus_data"."${d.tableName}"`)
@@ -841,7 +1095,7 @@ async function cleanup(userIds: string[]) {
   if (pipeIds.length) await db.delete(apiRateLimits).where(inArray(apiRateLimits.bucket, pipeIds))
   const sso = await db.select({ providerId: workspaceSso.providerId }).from(workspaceSso).where(inArray(workspaceSso.workspaceId, ws))
   if (sso.length) await db.delete(ssoProvider).where(inArray(ssoProvider.providerId, sso.map((x) => x.providerId)))
-  for (const t of [workspaceSso, webhookDeliveries, webhooks, mappingTemplates, datasetQualitySnapshots, apiKeys, catalogEntries, domainMappings, businessRuleVersions, businessRules, datasetPolicies, dashboards, nexusDatasets, pipelineRunRejects, executionLogs, pipelineJobs, pipelineVersions, pipelines, dataSources, connectorInstalls, workspaceInvites, auditLogs, workspaceMembers]) {
+  for (const t of [pipelineApprovals, scimTokens, scimUsers, scimGroups, notifications, workspaceSso, webhookDeliveries, webhooks, mappingTemplates, datasetQualitySnapshots, apiKeys, catalogEntries, domainMappings, businessRuleVersions, businessRules, datasetPolicies, dashboards, nexusDatasets, pipelineRunRejects, executionLogs, pipelineJobs, pipelineVersions, pipelines, dataSources, connectorInstalls, workspaceInvites, auditLogs, workspaceMembers]) {
     await db.delete(t).where(inArray(t.workspaceId, ws))
   }
   await db.delete(auditLogs).where(inArray(auditLogs.userId, userIds))

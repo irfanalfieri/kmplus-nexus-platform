@@ -21,7 +21,8 @@ import { guard } from '@/lib/server-action'
  * bulk), approvals and replays (DQ-3), and quality scores (DQ-5).
  */
 
-const STATUSES = ['open', 'fixed', 'approved', 'replayed', 'dismissed'] as const
+/** superseded: a later full run of the pipeline quarantined the row again (TD-24); that newer copy is the one to fix. */
+const STATUSES = ['open', 'fixed', 'approved', 'replayed', 'dismissed', 'superseded'] as const
 const KINDS = ['invalid', 'approval', 'flag'] as const
 const idsSchema = z.array(z.string().min(1).max(100)).min(1, 'Select rows first').max(REPLAY_MAX_ROWS)
 
@@ -170,6 +171,7 @@ async function fixRowImpl(input: z.input<typeof fixInput>) {
   const data = fixInput.parse(input)
   const [row] = await ownedRows(ctx, [data.id])
   if (row.kind === 'flag') throw new Error('Flagged rows were already written; fix the source instead and acknowledge the flag.')
+  if (row.status === 'superseded') throw new Error('A later run quarantined this row again. Fix the newer copy.')
   if (row.status === 'replayed' || row.status === 'dismissed') throw new Error(`This row was already ${row.status}.`)
   await db
     .update(pipelineRunRejects)
@@ -220,7 +222,7 @@ async function approveRowsImpl(rawIds: string[]) {
 async function dismissRowsImpl(rawIds: string[]) {
   const ctx = await requireWorkspace('quality:manage')
   const ids = idsSchema.parse(rawIds)
-  const rows = (await ownedRows(ctx, ids)).filter((r) => r.status !== 'replayed' && r.status !== 'dismissed')
+  const rows = (await ownedRows(ctx, ids)).filter((r) => r.status !== 'replayed' && r.status !== 'dismissed' && r.status !== 'superseded')
   await db
     .update(pipelineRunRejects)
     .set({ status: 'dismissed', updatedBy: ctx.userId, updatedAt: new Date() })

@@ -8,7 +8,7 @@ import { enqueueRun, processJobs, WORKER_BUDGET_MS } from '@/lib/pipelines/jobs'
 import { applyDueRetention } from '@/lib/governance/retention'
 import { deliverDueWebhooks } from '@/lib/webhooks/deliver'
 import { pruneRateLimits } from '@/lib/api/rate-limit'
-import { upgradeCredentialEnvelopes } from '@/lib/security/upgrade'
+import { upgradeCredentialEnvelopes, upgradeSsoSecrets } from '@/lib/security/upgrade'
 
 /**
  * Scheduler tick. Called every minute by Supabase pg_cron (see
@@ -67,8 +67,9 @@ async function tick(request: Request) {
   const webhooks = await deliverDueWebhooks().catch((err) => (console.error('[cron] webhooks:', err instanceof Error ? err.message : err), 0))
   await pruneRateLimits().catch(() => undefined)
   const credentials = await upgradeCredentialEnvelopes().catch((err) => (console.error('[cron] credentials:', err instanceof Error ? err.message : err), { upgraded: 0, failed: 0 }))
+  const ssoSecrets = await upgradeSsoSecrets().catch((err) => (console.error('[cron] SSO secrets:', err instanceof Error ? err.message : err), { upgraded: 0, failed: 0 }))
   const processed = await processJobs({ budgetMs: WORKER_BUDGET_MS })
-  return Response.json({ due: due.length, queued, processed, webhooks, credentials })
+  return Response.json({ due: due.length, queued, processed, webhooks, credentials, ssoSecrets })
 }
 
 export const GET = tick

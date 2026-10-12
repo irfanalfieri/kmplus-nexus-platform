@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 import { createWorkspace, switchWorkspace } from '@/lib/actions/workspaces'
 import { ROLE_INFO } from '@/lib/auth/permissions'
 import { useWorkspace } from './workspace-context'
+import { EnvironmentBadge } from './environment-badge'
 
 export default function WorkspaceSwitcher() {
   const { workspace, role, workspaces } = useWorkspace()
@@ -55,7 +56,10 @@ export default function WorkspaceSwitcher() {
         </div>
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">{workspace.name}</div>
-          <div className="text-xs text-muted-foreground">{ROLE_INFO[role].label}</div>
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <EnvironmentBadge environment={workspace.environment} />
+            {ROLE_INFO[role].label}
+          </div>
         </div>
         <ChevronsUpDown className="h-4 w-4 text-muted-foreground" />
       </button>
@@ -74,6 +78,7 @@ export default function WorkspaceSwitcher() {
                   aria-selected={w.id === workspace.id}
                 >
                   <span className="min-w-0 flex-1 truncate">{w.name}</span>
+                  <EnvironmentBadge environment={w.environment} />
                   <span className="text-xs text-muted-foreground">{ROLE_INFO[w.role].label}</span>
                   {w.id === workspace.id && <Check className="h-4 w-4 text-primary" />}
                 </button>

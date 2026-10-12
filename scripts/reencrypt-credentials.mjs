@@ -2,7 +2,8 @@
  * Seals every data_sources.credentials row with its workspace's data key under
  * the current NEXUS_ENCRYPTION_KEY: plaintext rows (saved before encryption
  * existed), v1 rows (master key, before per-workspace keys) and rows sealed
- * with a retired key (after a rotation). Rows already on the current key are skipped,
+ * with a retired key (after a rotation), and the same for SSO provider secrets
+ * (ssoProvider.oidcConfig / samlConfig, TD-25). Rows already on the current key are skipped,
  * so it is safe to re-run.
  *
  * Dry run:  node --env-file=.env.local --experimental-strip-types scripts/reencrypt-credentials.mjs
@@ -14,7 +15,7 @@
  */
 import pg from 'pg'
 import { scriptSsl } from './db-ssl.mjs'
-import { currentKeyId, decryptCredentials, encryptCredentials, isEncryptedCredentials, needsReencryption } from '../lib/security/credentials.ts'
+import { currentKeyId, decryptCredentials, encryptCredentials, isEncryptedCredentials, needsReencryption, openSsoConfig, sealSsoConfig, ssoConfigNeedsSealing } from '../lib/security/credentials.ts'
 
 const apply = process.argv.includes('--apply')
 const connectionString = process.env.DATABASE_URL
@@ -34,7 +35,11 @@ console.log(
     `(${plaintext} plaintext, ${pending.length - plaintext} on an older key).`
 )
 
-if (apply && pending.length) {
+const sso = (await client.query('select p."providerId", w."workspaceId", p."oidcConfig", p."samlConfig" from "ssoProvider" p join "workspace_sso" w on w."providerId" = p."providerId"')).rows
+const ssoPending = sso.flatMap((r) => ['oidcConfig', 'samlConfig'].filter((c) => ssoConfigNeedsSealing(r[c])).map((column) => ({ ...r, column })))
+console.log(`${sso.length} SSO provider(s); ${ssoPending.length} config(s) to seal.`)
+
+if (apply && (pending.length || ssoPending.length)) {
   await client.query('BEGIN')
   try {
     for (const row of pending) {
@@ -46,14 +51,20 @@ if (apply && pending.length) {
       }
       await client.query('update "data_sources" set "credentials" = $1 where "id" = $2', [sealed, row.id])
     }
+    for (const row of ssoPending) {
+      const plain = openSsoConfig(row.providerId, row[row.column])
+      const sealed = sealSsoConfig(row.providerId, row.workspaceId, plain)
+      if (JSON.stringify(openSsoConfig(row.providerId, sealed)) !== JSON.stringify(plain)) throw new Error(`Round-trip check failed for SSO provider ${row.providerId}`)
+      await client.query(`update "ssoProvider" set "${row.column}" = $1 where "providerId" = $2`, [sealed, row.providerId])
+    }
     await client.query('COMMIT')
-    console.log(`Re-sealed ${pending.length} row(s) with key ${currentKeyId()}.`)
+    console.log(`Re-sealed ${pending.length} data source(s) and ${ssoPending.length} SSO config(s) with key ${currentKeyId()}.`)
   } catch (err) {
     await client.query('ROLLBACK')
     console.error('Failed, rolled back:', err.message)
     process.exitCode = 1
   }
-} else if (pending.length) {
+} else if (pending.length || ssoPending.length) {
   console.log('Dry run. Pass --apply to re-seal them.')
 }
 

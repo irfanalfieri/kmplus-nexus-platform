@@ -98,6 +98,22 @@ export async function requireWorkspace(permission?: Permission): Promise<Workspa
   return ctx
 }
 
+/**
+ * The same user's context in another workspace they belong to (environment
+ * promotion acts in the next environment). Enforces membership and the permission.
+ */
+export async function contextInWorkspace(base: WorkspaceContext, workspaceId: string, permission: Permission): Promise<WorkspaceContext> {
+  const [row] = await db
+    .select({ role: workspaceMembers.role, name: workspaces.name })
+    .from(workspaceMembers)
+    .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
+    .where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, base.userId)))
+    .limit(1)
+  if (!row || !isRole(row.role)) throw new Error('You are not a member of that workspace.')
+  if (!can(row.role, permission)) throw new Error(`In ${row.name}: ${deniedMessage(row.role, permission)}`)
+  return { ...base, workspaceId, workspaceName: row.name, role: row.role }
+}
+
 /** Membership check for a specific workspace (used when switching). */
 export async function getMembership(userId: string, workspaceId: string) {
   const [m] = await db

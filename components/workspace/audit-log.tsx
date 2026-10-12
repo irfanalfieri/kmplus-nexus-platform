@@ -4,29 +4,21 @@ import { useCallback, useEffect, useState } from 'react'
 import { History, Loader2, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { listAuditLogs } from '@/lib/actions/audit'
+import { describeDiff } from '@/lib/audit-diff'
 
 type Row = Awaited<ReturnType<typeof listAuditLogs>>['rows'][number]
 
 const ACTIONS = [
   'CREATE', 'UPDATE', 'DELETE', 'RENAME', 'RUN', 'TEST_RUN', 'VIEW_DATA', 'ENABLE', 'DISABLE', 'RESET_SYNC',
   'INSTALL', 'UNINSTALL', 'UPDATE_CREDENTIALS', 'INVITE', 'REVOKE_INVITE', 'ACCEPT_INVITE', 'CHANGE_ROLE', 'REMOVE_MEMBER', 'LEAVE',
+  'PUBLISH', 'REQUEST_APPROVAL', 'APPROVE', 'REJECT', 'PROMOTE', 'UPDATE_POLICY', 'PROVISION', 'DEPROVISION', 'LOGIN',
 ]
 
 const stamp = (d: Date | string) =>
   new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jakarta', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(d))
 
-const show = (v: unknown) => (v === null || v === undefined || v === '' ? '∅' : typeof v === 'object' ? JSON.stringify(v) : String(v))
-
 /** Before/after values recorded with the event (changes.diff). */
-function diffLines(changes: unknown): string[] {
-  const diff = (changes as { diff?: Record<string, unknown> } | null)?.diff
-  if (!diff) return []
-  return Object.entries(diff).map(([field, d]) => {
-    if (Array.isArray(d)) return `${field}: ${d.join(', ')}`
-    const x = d as { from?: unknown; to?: unknown; changed?: boolean }
-    return x.changed ? `${field}: changed (secret)` : `${field}: ${show(x.from)} → ${show(x.to)}`
-  })
-}
+const diffLines = (changes: unknown) => describeDiff((changes as { diff?: Record<string, unknown> } | null)?.diff)
 
 function summary(changes: unknown) {
   if (!changes || typeof changes !== 'object') return ''
