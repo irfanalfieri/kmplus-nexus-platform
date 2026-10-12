@@ -24,6 +24,8 @@ import { SsoSettings } from '@/components/workspace/sso-settings'
 import { Webhooks } from '@/components/workspace/webhooks'
 import { EnvironmentsSettings } from '@/components/workspace/environments'
 import { ScimSettings } from '@/components/workspace/scim-settings'
+import { AgentsSettings } from '@/components/workspace/agents-settings'
+import { AiSettings } from '@/components/workspace/ai-settings'
 
 type Member = Awaited<ReturnType<typeof listMembers>>[number]
 type Invite = Awaited<ReturnType<typeof listInvites>>[number]
@@ -298,6 +300,10 @@ export default function WorkspaceSettingsLayer() {
           )}
         </section>
       )}
+
+      {isAdmin && <AiSettings />}
+
+      {isAdmin && <AgentsSettings />}
 
       {isAdmin && <EnvironmentsSettings />}
 

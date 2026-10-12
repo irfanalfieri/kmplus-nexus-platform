@@ -10,6 +10,7 @@ import { deleteDashboard, getAnalyticsDatasets, getDashboardData, listDashboards
 import type { Widget } from '@/lib/analytics/definition'
 import { WidgetView } from '@/components/analytics/charts'
 import WidgetEditor, { newWidget } from '@/components/analytics/widget-editor'
+import { AiAsk } from '@/components/ai/ai-ask'
 
 type List = Awaited<ReturnType<typeof listDashboards>>
 type Dash = List['dashboards'][number]
@@ -136,6 +137,8 @@ export default function AnalyticsDashboardLayer({ onNavigate }: { onNavigate: (t
       </div>
 
       {error && <p className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
+
+      {list?.canView && datasets.length > 0 && <AiAsk datasets={datasets.map((d) => d.name)} onAdd={list.canEdit && dash ? (w) => persist(dash, [...dash.widgets, w]) : undefined} />}
 
       {!list ? (
         !error && (

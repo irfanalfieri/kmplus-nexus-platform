@@ -141,6 +141,13 @@
       "when": 1791790191502,
       "tag": "0019_sso_secret_tick",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1791793535684,
+      "tag": "0020_agents_ai",
+      "breakpoints": true
     }
   ]
 }

@@ -9,6 +9,7 @@ import { applyDueRetention } from '@/lib/governance/retention'
 import { deliverDueWebhooks } from '@/lib/webhooks/deliver'
 import { pruneRateLimits } from '@/lib/api/rate-limit'
 import { upgradeCredentialEnvelopes, upgradeSsoSecrets } from '@/lib/security/upgrade'
+import { pruneAgentTasks } from '@/lib/agent/server'
 
 /**
  * Scheduler tick. Called every minute by Supabase pg_cron (see
@@ -66,6 +67,7 @@ async function tick(request: Request) {
   // Housekeeping never blocks the queue.
   const webhooks = await deliverDueWebhooks().catch((err) => (console.error('[cron] webhooks:', err instanceof Error ? err.message : err), 0))
   await pruneRateLimits().catch(() => undefined)
+  await pruneAgentTasks().catch(() => undefined)
   const credentials = await upgradeCredentialEnvelopes().catch((err) => (console.error('[cron] credentials:', err instanceof Error ? err.message : err), { upgraded: 0, failed: 0 }))
   const ssoSecrets = await upgradeSsoSecrets().catch((err) => (console.error('[cron] SSO secrets:', err instanceof Error ? err.message : err), { upgraded: 0, failed: 0 }))
   const processed = await processJobs({ budgetMs: WORKER_BUDGET_MS })

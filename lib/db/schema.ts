@@ -113,6 +113,10 @@ export const workspaces = pgTable('workspaces', {
   environmentGroupId: text('environmentGroupId'),
   /** Pipelines here change only through promotion from the previous stage. */
   environmentLocked: boolean('environmentLocked').notNull().default(false),
+  /** AI assistant (#14): off | server (the open-source model configured by NEXUS_AI_*) | agent (a model next to one of this workspace's agents). */
+  aiProvider: text('aiProvider').notNull().default('server'),
+  /** The agent whose local model answers when aiProvider = agent. */
+  aiAgentId: text('aiAgentId'),
   createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
 })
@@ -647,3 +651,43 @@ export const scimGroups = pgTable('scim_groups', {
   createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [index('scim_groups_workspace_idx').on(t.workspaceId)])
+
+// Nexus Agent (#13): a small program inside a customer's network that reaches their
+// databases for Nexus. It only connects out (polls for tasks); credentials stay on its host.
+export const agents = pgTable('agents', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  name: text('name').notNull(),
+  /** First characters of the token, to recognize it. Only a SHA-256 hash of the token is stored. */
+  prefix: text('prefix').notNull(),
+  tokenHash: text('tokenHash').notNull().unique(),
+  createdBy: text('createdBy').notNull(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  lastSeenAt: timestamp('lastSeenAt', { withTimezone: true }),
+  version: text('version'),
+  hostname: text('hostname'),
+  /** What the agent offers: [{ name, type, writable }] (never credentials), and whether it has a local AI model. */
+  connections: jsonb('connections').notNull().default([]),
+  ai: jsonb('ai'),
+  revokedAt: timestamp('revokedAt', { withTimezone: true }),
+  revokedBy: text('revokedBy'),
+}, (t) => [index('agents_workspace_idx').on(t.workspaceId)])
+
+/** Work for an agent: queued by Nexus, claimed by the agent's poll, answered with a result. */
+export const agentTasks = pgTable('agent_tasks', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  agentId: text('agentId').notNull(),
+  /** test | scan | sample | readChunk | readRows | write | liveQuery | ai */
+  op: text('op').notNull(),
+  /** Connection name and arguments (no credentials). */
+  payload: jsonb('payload').notNull(),
+  /** queued | claimed | done | failed | expired */
+  status: text('status').notNull().default('queued'),
+  result: jsonb('result'),
+  error: text('error'),
+  retryable: boolean('retryable'),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  claimedAt: timestamp('claimedAt', { withTimezone: true }),
+  finishedAt: timestamp('finishedAt', { withTimezone: true }),
+}, (t) => [index('agent_tasks_queue_idx').on(t.agentId, t.status, t.createdAt)])

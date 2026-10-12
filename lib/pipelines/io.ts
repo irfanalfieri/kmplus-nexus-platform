@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import mysql from 'mysql2/promise'
 import type { PoolClient } from 'pg'
 import { createClient } from '@supabase/supabase-js'
@@ -13,10 +13,14 @@ import type { ColumnType } from './definition'
 import type { Row } from './transforms'
 import { compareWatermarks, type OutputColumn } from './columns'
 import { rowFilterSql, type RowFilter } from '@/lib/governance/row-filters'
+import { agentOf, callAgent } from '@/lib/agent/server'
+import { WRITE_BATCH_ROWS } from '@/lib/agent/protocol'
 
 /** Data source row as stored (credentials still encrypted). */
 export interface StoredDataSource {
   id: string
+  /** Owning workspace (required for sources reached through a Nexus Agent). */
+  workspaceId?: string
   name: string
   sourceType: string
   config: unknown
@@ -72,6 +76,9 @@ export class NonRetryableError extends Error {
 }
 
 export async function readSourceRows(source: StoredDataSource, table: string, maxRows: number, opts: ReadOptions = {}): Promise<Row[]> {
+  // Behind a customer's firewall: the Nexus Agent reads it (#13).
+  const via = agentOf(source)
+  if (via) return (await callAgent(via.agentId, 'readRows', { connection: via.connection, table, maxRows: Math.min(maxRows, 1_000_000), watermark: opts.watermark }, { timeoutMs: 240_000, workspaceId: via.workspaceId })) as Row[]
   const wm = opts.watermark
   const pg = pgTarget(source)
   if (pg) {
@@ -335,9 +342,11 @@ const jsonValue = (v: unknown) => (v instanceof Date ? v.toISOString() : typeof 
 // ── Write back into a connected database ─────────────────────────────────────
 
 /**
- * PD-6 for databases: marks rows whose key the run didn't write. `seen` holds
- * the keys written (joined with \u0001). The marker column is a boolean (set
- * true) or a timestamp (set now). Returns how many rows were marked.
+ * PD-6 for databases: marks rows whose key the run didn't write. `isSeen` says
+ * whether a key (values joined with \u0001) was written. The marker column is a
+ * boolean (set true) or a timestamp (set now). Works directly and through a
+ * Nexus Agent: the keys of not-yet-deleted rows are read in pages, the missing
+ * ones are computed here, then marked in batches. Returns how many were marked.
  */
 export async function softDeleteDataSourceMissing(opts: {
   source: StoredDataSource
@@ -347,32 +356,78 @@ export async function softDeleteDataSourceMissing(opts: {
   isSeen: (key: string) => boolean
 }): Promise<number> {
   const { source, table, keys, column } = opts
+  const via = agentOf(source)
+  const listPage = (offset: number) =>
+    via
+      ? (callAgent(via.agentId, 'activeKeys', { connection: via.connection, table, keys, column, offset, limit: ACTIVE_KEYS_PAGE }, { timeoutMs: 180_000, workspaceId: via.workspaceId }) as Promise<string[][]>)
+      : listActiveKeys(source, { table, keys, column, offset, limit: ACTIVE_KEYS_PAGE })
+  const missing: string[][] = []
+  for (let offset = 0; ; offset += ACTIVE_KEYS_PAGE) {
+    const page = await listPage(offset)
+    if (!Array.isArray(page)) throw new NonRetryableError('The Nexus Agent is too old to mark missing rows deleted. Update it to version 1.1.0 or later.')
+    for (const k of page) if (!opts.isSeen(k.join('\u0001'))) missing.push(k)
+    if (page.length < ACTIVE_KEYS_PAGE) break
+  }
+  let marked = 0
+  for (let i = 0; i < missing.length; i += MARK_DELETED_BATCH) {
+    const batch = missing.slice(i, i + MARK_DELETED_BATCH)
+    marked += via
+      ? ((await callAgent(via.agentId, 'markDeleted', { connection: via.connection, table, keys, column, keyValues: batch }, { timeoutMs: 180_000, workspaceId: via.workspaceId })) as number)
+      : await markRowsDeleted(source, { table, keys, column, keyValues: batch })
+  }
+  return marked
+}
+
+export const ACTIVE_KEYS_PAGE = 20_000
+export const MARK_DELETED_BATCH = 1000
+
+async function deletedMarker(p: ReturnType<typeof externalPgPool>, schema: string, table: string, column: string) {
+  const { rows: info } = await p.query<{ data_type: string }>(
+    'SELECT data_type FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 AND column_name = $3',
+    [schema, table, column]
+  )
+  if (!info.length) throw new NonRetryableError(`Column ${column} is not in ${schema}.${table}.`)
+  const isBool = info[0].data_type === 'boolean'
+  return { isBool, active: isBool ? `(${qIdent(column)} IS NOT TRUE)` : `(${qIdent(column)} IS NULL)` }
+}
+
+function softDeleteTarget(source: StoredDataSource) {
   const pg = pgTarget(source)
-  if (!pg) throw new NonRetryableError(`Marking missing rows deleted is supported for PostgreSQL destinations.`)
+  if (!pg) throw new NonRetryableError('Marking missing rows deleted is supported for PostgreSQL destinations.')
+  return pg
+}
+
+/** One page of the keys (as text) of rows not yet marked deleted, in a stable order. */
+export async function listActiveKeys(source: StoredDataSource, opts: { table: string; keys: string[]; column: string; offset: number; limit: number }): Promise<string[][]> {
+  const pg = softDeleteTarget(source)
   const p = externalPgPool(pg.connectionString, pg.tls)
   try {
-    const rel = `${qIdent(pg.schema)}.${qIdent(table)}`
-    const { rows: info } = await p.query<{ data_type: string }>(
-      'SELECT data_type FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 AND column_name = $3',
-      [pg.schema, table, column]
+    const { active } = await deletedMarker(p, pg.schema, opts.table, opts.column)
+    const cols = opts.keys.map((k) => `${qIdent(k)}::text`)
+    const { rows } = await p.query(
+      `SELECT ${opts.keys.map((k) => `${qIdent(k)}::text AS ${qIdent(k)}`).join(', ')} FROM ${qIdent(pg.schema)}.${qIdent(opts.table)} WHERE ${active} ORDER BY ${cols.join(', ')} LIMIT $1 OFFSET $2`,
+      [opts.limit, opts.offset]
     )
-    if (!info.length) throw new NonRetryableError(`Column ${column} is not in ${pg.schema}.${table}.`)
-    const isBool = info[0].data_type === 'boolean'
-    const active = isBool ? `(${qIdent(column)} IS NOT TRUE)` : `(${qIdent(column)} IS NULL)`
-    const { rows } = await p.query(`SELECT ${keys.map((k) => `${qIdent(k)}::text AS ${qIdent(k)}`).join(', ')} FROM ${rel} WHERE ${active}`)
-    const missing = (rows as Row[]).filter((r) => !opts.isSeen(keys.map((k) => String(r[k] ?? '')).join('\u0001')))
-    let marked = 0
-    for (let i = 0; i < missing.length; i += 1000) {
-      const batch = missing.slice(i, i + 1000)
-      const params: unknown[] = []
-      const tuples = batch.map((r) => `(${keys.map((k) => { params.push(String(r[k] ?? '')); return `$${params.length}` }).join(', ')})`)
-      const res = await p.query(
-        `UPDATE ${rel} SET ${qIdent(column)} = ${isBool ? 'true' : 'now()'} WHERE ${active} AND (${keys.map((k) => `${qIdent(k)}::text`).join(', ')}) IN (${tuples.join(', ')})`,
-        params
-      )
-      marked += res.rowCount ?? 0
-    }
-    return marked
+    return (rows as Row[]).map((r) => opts.keys.map((k) => String(r[k] ?? '')))
+  } finally {
+    await p.end()
+  }
+}
+
+/** Marks the rows with these key values deleted (only rows not marked yet). */
+export async function markRowsDeleted(source: StoredDataSource, opts: { table: string; keys: string[]; column: string; keyValues: string[][] }): Promise<number> {
+  if (!opts.keyValues.length) return 0
+  const pg = softDeleteTarget(source)
+  const p = externalPgPool(pg.connectionString, pg.tls)
+  try {
+    const { isBool, active } = await deletedMarker(p, pg.schema, opts.table, opts.column)
+    const params: unknown[] = []
+    const tuples = opts.keyValues.map((values) => `(${opts.keys.map((_k, i) => (params.push(values[i] ?? ''), `$${params.length}`)).join(', ')})`)
+    const res = await p.query(
+      `UPDATE ${qIdent(pg.schema)}.${qIdent(opts.table)} SET ${qIdent(opts.column)} = ${isBool ? 'true' : 'now()'} WHERE ${active} AND (${opts.keys.map((k) => `${qIdent(k)}::text`).join(', ')}) IN (${tuples.join(', ')})`,
+      params
+    )
+    return res.rowCount ?? 0
   } finally {
     await p.end()
   }
@@ -391,6 +446,19 @@ export async function writeToDataSource(opts: {
   const { source, table, rows } = opts
   if ((source.config as { role?: string } | null)?.role !== 'destination') {
     throw new NonRetryableError(`"${source.name}" was added as a source, so Nexus won't write to it. Add the database again with Data Sources → Add Destination and pick that one.`)
+  }
+
+  const via = agentOf(source)
+  if (via) {
+    let written = 0
+    const rejected: { row: Row; error: string }[] = []
+    for (let i = 0; i < rows.length; i += WRITE_BATCH_ROWS) {
+      const batch = rows.slice(i, i + WRITE_BATCH_ROWS).map((r) => Object.fromEntries(opts.columns.map((c) => [c.name, jsonValue(r[c.name])])))
+      const res = (await callAgent(via.agentId, 'write', { connection: via.connection, table, mode: opts.mode, keys: opts.keys, columns: opts.columns, rows: batch, runId: opts.runId, chunk: opts.chunk }, { timeoutMs: 180_000, workspaceId: via.workspaceId })) as { written: number; rejected?: { row: Row; error: string }[] }
+      written += res.written
+      rejected.push(...(res.rejected ?? []))
+    }
+    return { written, rejected }
   }
 
   const pg = pgTarget(source)
@@ -533,6 +601,13 @@ export async function readSourceChunk(
   const limit = Math.max(0, Math.min(opts.limit, opts.maxRows - offset))
   if (limit === 0) return { rows: [], exhausted: true }
   const wm = opts.watermark
+  const via = agentOf(source)
+  if (via) {
+    // One agent-side cache per worker invocation, like the cache passed in here.
+    let cacheKey = cache.get('agent:cacheKey') as string | undefined
+    if (!cacheKey) cache.set('agent:cacheKey', (cacheKey = randomUUID()))
+    return (await callAgent(via.agentId, 'readChunk', { connection: via.connection, table, offset, limit, maxRows: opts.maxRows, watermark: wm, cacheKey }, { timeoutMs: 180_000, workspaceId: via.workspaceId })) as ChunkRead
+  }
   const pg = pgTarget(source)
   if (pg) {
     const p = externalPgPool(pg.connectionString, pg.tls)
@@ -657,6 +732,9 @@ export async function liveQuery(
   const filters = opts.filters ?? []
   const take = limit + 1
   const finish = (rows: Row[], pushdown: boolean): LiveQueryResult => ({ rows: rows.slice(0, limit), pushdown, truncated: rows.length > limit })
+
+  const via = agentOf(source)
+  if (via) return (await callAgent(via.agentId, 'liveQuery', { connection: via.connection, table, limit, timeoutMs: Math.min(opts.timeoutMs, 120_000), filters }, { timeoutMs: opts.timeoutMs + 15_000, workspaceId: via.workspaceId })) as LiveQueryResult
 
   const pg = pgTarget(source)
   if (pg) {

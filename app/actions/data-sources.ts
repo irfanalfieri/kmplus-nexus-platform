@@ -67,6 +67,8 @@ const createInput = z.object({
 async function createDataSourceImpl(input: z.input<typeof createInput>) {
   const ctx = await requireWorkspace('sources:manage')
   const data = createInput.parse(input)
+  // Agent-backed sources are created in Settings → Nexus Agents (agent ownership checked there).
+  delete (data.config as Record<string, unknown>).agent
   if (!isConnectorSlug(data.sourceType)) throw new Error(`Unknown connector "${data.sourceType}".`)
   await assertConnectorInstalled(data.sourceType)
 
@@ -101,13 +103,14 @@ async function testConnectionImpl(rawId: string) {
   const source = await getOwned(ctx, idSchema.parse(rawId))
   if (!isConnectorSlug(source.sourceType)) throw new Error(`Unknown connector "${source.sourceType}".`)
 
-  const { testConnectorConnection, scanConnectorSchema } = await import('@/lib/connectors/runtime')
+  const { testSource, scanSource } = await import('@/lib/agent/sources')
   await assertConnectorInstalled(source.sourceType)
   const credentials = asStrings(decryptCredentials(source.id, source.credentials))
-  const test = await testConnectorConnection(source.sourceType, credentials)
+  // Agent-backed sources are tested by the agent, with its local credentials.
+  const test = await testSource(source, credentials)
   if (!test.ok) throw new Error(test.message)
 
-  const scan = await scanConnectorSchema(source.sourceType, credentials)
+  const scan = await scanSource(source, credentials)
   await db
     .update(dataSources)
     .set({ status: 'connected', lastConnected: new Date(), updatedAt: new Date(), config: { ...(source.config as Record<string, unknown>), schemaScan: scan } })
@@ -123,6 +126,8 @@ async function testConnectionImpl(rawId: string) {
 async function getEditableCredentialsImpl(rawId: string) {
   const ctx = await requireWorkspace('sources:manage')
   const source = await getOwned(ctx, idSchema.parse(rawId))
+  // Agent-backed: the credentials live in the agent's config, not in Nexus.
+  if ((source.config as { agent?: unknown } | null)?.agent) return { supported: false as const, sourceType: source.sourceType }
   const stored = asStrings(decryptCredentials(source.id, source.credentials))
   if (hasCustomCredentialForm(source.sourceType)) {
     // REST / Salesforce: the full form, with secrets masked (see secret-mask.ts).
@@ -153,6 +158,7 @@ async function updateDataSourceCredentialsImpl(rawId: string, rawValues: Record<
   const ctx = await requireWorkspace('sources:manage')
   const target = await getOwned(ctx, idSchema.parse(rawId))
   if (target.sourceType === 'file') throw new Error('File sources have no credentials. Upload files instead.')
+  if ((target.config as { agent?: unknown } | null)?.agent) throw new Error("This data source is reached through a Nexus Agent; change its credentials in the agent's config file.")
   const source = await getOwned(ctx, idSchema.parse(rawId))
   const values = asStrings(credentialValues.parse(rawValues))
   const stored = asStrings(decryptCredentials(source.id, source.credentials))

@@ -304,6 +304,9 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
     }
   }
 
+  // The source table, for example values in AI mapping suggestions.
+  const sourceNode = draft.nodes.find((n) => n.type === 'source')
+  const sourceRef = sourceNode?.type === 'source' && sourceNode.dataSourceId && sourceNode.table ? { dataSourceId: sourceNode.dataSourceId, table: sourceNode.table } : undefined
   const outgoing = selected ? draft.edges.filter((e) => e.from === selected.id) : []
   const targets = draft.nodes.filter((n) => selected && n.id !== selected.id && n.type !== 'source')
   const [linkTo, setLinkTo] = useState('')
@@ -380,7 +383,7 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
                 </div>
                 {selected.type === 'source' && <SourceEditor step={selected} options={options} onChange={setNode} />}
                 {selected.type === 'filter' && <FilterEditor step={selected} columns={columns.get(selected.id) ?? []} options={options} onChange={setNode} />}
-                {selected.type === 'map' && <MapEditor step={selected} columns={columns.get(selected.id) ?? []} options={options} onChange={setNode} />}
+                {selected.type === 'map' && <MapEditor step={selected} columns={columns.get(selected.id) ?? []} options={options} source={sourceRef} onChange={setNode} />}
                 {selected.type === 'validate' && <ValidateEditor step={selected} columns={columns.get(selected.id) ?? []} options={options} onChange={setNode} />}
                 {selected.type === 'rules' && <RulesEditor step={selected} options={options} onChange={setNode} />}
                 {selected.type === 'router' && <RouterEditor step={selected} columns={columns.get(selected.id) ?? []} options={options} onChange={setNode} />}

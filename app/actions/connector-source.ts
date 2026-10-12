@@ -21,6 +21,7 @@ import { restoreSecrets } from '@/lib/connectors/secret-mask'
 import type { Permission } from '@/lib/auth/permissions'
 import { revalidatePath } from 'next/cache'
 import { guard } from '@/lib/server-action'
+import { sampleSource, scanSource } from '@/lib/agent/sources'
 import { sourceKey } from '@/lib/catalog/definition'
 import { applyMasks, liveTableAccess } from '@/lib/governance/masking'
 
@@ -102,7 +103,7 @@ async function scanDataSourceSchemaImpl(rawSourceId: string) {
     if (auth.refreshed) credentials = auth.refreshed as ConnectorCredentials
   }
 
-  const scan = await scanConnectorSchema(source.sourceType as ConnectorSlug, credentials)
+  const scan = await scanSource(source, credentials)
 
   await db
     .update(dataSources)
@@ -131,7 +132,7 @@ async function getDataSourceTableSampleImpl(rawSourceId: string, rawTableName: s
   await assertConnectorInstalled(source.sourceType)
   const credentials = parseCredentials(source.id, source.credentials)
   await recordAudit(ctx, { action: 'VIEW_DATA', resource: 'data_source', resourceId: sourceId, changes: { what: 'source_sample', table: tableName } })
-  const sample = await sampleConnectorTable(source.sourceType as ConnectorSlug, credentials, tableName, limit)
+  const sample = await sampleSource(source, credentials, tableName, limit)
   // Personal columns are masked for roles without unmasked access, like catalog live samples (TD-21).
   const [entry] = await db.select({ alias: catalogEntries.alias }).from(catalogEntries).where(and(eq(catalogEntries.workspaceId, workspaceId), eq(catalogEntries.key, sourceKey(sourceId, tableName)))).limit(1)
   const rows = sample.rows as Record<string, unknown>[]

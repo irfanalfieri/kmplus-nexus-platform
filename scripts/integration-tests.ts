@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { and, eq, inArray, like } from 'drizzle-orm'
 import { db, pool } from '@/lib/db'
-import { apiKeys, apiRateLimits, auditLogs, businessRuleVersions, businessRules, catalogEntries, connectorInstalls, dashboards, dataSources, datasetPolicies, datasetQualitySnapshots, domainMappings, mappingTemplates, notifications, pipelineApprovals, scimGroups, scimTokens, scimUsers, ssoProvider, webhookDeliveries, webhooks, workspaceSso, executionLogs, nexusDatasets, pipelineJobs, pipelineRunRejects, pipelines, pipelineVersions, session, user, verification, workspaceInvites, workspaceMembers, workspaces } from '@/lib/db/schema'
+import { agentTasks as agentTaskTable, agents as agentTable, apiKeys, apiRateLimits, auditLogs, businessRuleVersions, businessRules, catalogEntries, connectorInstalls, dashboards, dataSources, datasetPolicies, datasetQualitySnapshots, domainMappings, mappingTemplates, notifications, pipelineApprovals, scimGroups, scimTokens, scimUsers, ssoProvider, webhookDeliveries, webhooks, workspaceSso, executionLogs, nexusDatasets, pipelineJobs, pipelineRunRejects, pipelines, pipelineVersions, session, user, verification, workspaceInvites, workspaceMembers, workspaces } from '@/lib/db/schema'
 import { acceptInvite, changeMemberRole, createInvite, getWorkspaceContext, listMembers, resetMemberTwoFactor, switchWorkspace } from '@/lib/actions/workspaces'
 import { installConnector } from '@/lib/actions/connectors'
 import { createDataSource, deleteDataSource, getDataSources, renameDataSource, setDataSourceRole, testConnection } from '@/lib/actions/data-sources'
@@ -26,6 +26,14 @@ import { listPromotionStatus, previewPromotion, promotePipeline, setApprovalPoli
 import { createScimToken, revokeScimToken, setScimGroupRole } from '@/lib/actions/scim'
 import { DELETE as scimDelete, GET as scimGet, PATCH as scimPatch, POST as scimPost } from '@/app/api/scim/v2/[[...path]]/route'
 import { readFileSync } from 'node:fs'
+import { addAgentDataSource, createAgent, listAgents, revokeAgent } from '@/lib/actions/agents'
+import { getDataSourceTableSample } from '@/lib/actions/connector-source'
+import { parseConfig, runAgent } from '../agent/nexus-agent'
+import { askData, draftRule, getAiSettings, setAiProvider, suggestMapping } from '@/lib/actions/ai'
+import { startLlmMock } from './test/llm-mock'
+import { POST as agentHello } from '@/app/api/agent/v1/hello/route'
+import { GET as agentTasks } from '@/app/api/agent/v1/tasks/route'
+import { POST as agentResult } from '@/app/api/agent/v1/tasks/[id]/result/route'
 import { emailAllowedForProvider, enforcedProviderFor, provisionSsoUser } from '@/lib/auth/sso'
 import { SsoConfigPlugin } from '@/lib/auth/sso-config-plugin'
 import { upgradeSsoSecrets } from '@/lib/security/upgrade'
@@ -708,8 +716,9 @@ async function main() {
       assert.equal(status.data.trigger, 'api')
       assert.ok(['success', 'partial'].includes(status.data.status))
       assert.equal((await getDataset(authed(`/datasets/${DATASET}`), { params: Promise.resolve({ name: DATASET }) })).status, 403, 'scopes are enforced')
+      // Fixed one-minute windows: if one resets mid-loop, the next still runs out within 25 calls.
       let last = 0
-      for (let i = 0; i < 10; i++) last = (await getRun(authed(`/runs/${apiRun}`), { params: Promise.resolve({ id: apiRun }) })).status
+      for (let i = 0; i < 25 && last !== 429; i++) last = (await getRun(authed(`/runs/${apiRun}`), { params: Promise.resolve({ id: apiRun }) })).status
       assert.equal(last, 429, 'the 10-per-minute limit is enforced')
     })
 
@@ -1051,6 +1060,205 @@ async function main() {
       await deleteSsoProvider(created.providerId)
     })
 
+
+
+    await test('database destinations: rows missing from the source are marked deleted (boolean and timestamp markers)', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      await pool.query(`CREATE TABLE "${FIXTURE_SCHEMA}".direct_out (id int PRIMARY KEY, email text, is_deleted boolean NOT NULL DEFAULT false)`)
+      await pool.query(`INSERT INTO "${FIXTURE_SCHEMA}".direct_out (id, email) VALUES (7, 'old@kmplus.test'), (8, 'old2@kmplus.test')`)
+      const destId = await createDataSource({ name: `${RUN} direct dest`, type: 'database', sourceType: 'postgres', config: { role: 'destination' }, credentials: { connectionString: process.env.DATABASE_URL!, schema: FIXTURE_SCHEMA } })
+      const saved = await savePipeline({
+        publish: true,
+        name: `${RUN} direct soft delete`,
+        definition: {
+          steps: [
+            { id: 's', type: 'source', dataSourceId: sourceId, table: 'people' },
+            { id: 'w', type: 'destination', kind: 'datasource', dataSourceId: destId, table: 'direct_out', mode: 'upsert', keys: ['id'], softDeleteMissing: true, softDeleteColumn: 'is_deleted' },
+          ],
+          settings: { retries: 0 },
+        },
+        schedule: { type: 'manual' } as never,
+      })
+      const run = await runPipelineNow(saved.id)
+      takeAfterCallbacks()
+      await processJobs({})
+      assert.equal((await getRunStatus(run.runId)).status, 'success')
+      const { rows } = await pool.query(`SELECT id, is_deleted FROM "${FIXTURE_SCHEMA}".direct_out ORDER BY id`)
+      assert.deepEqual(rows.map((r) => [r.id, r.is_deleted]), [[1, false], [2, false], [3, false], [7, true], [8, true]])
+    })
+
+    await test('AI assistant on an open-source model: mapping suggestions, rules from text, questions as charts; personal values never sent', async () => {
+      const llm = await startLlmMock()
+      process.env.NEXUS_AI_BASE_URL = llm.baseUrl
+      process.env.NEXUS_AI_MODEL = 'qwen2.5:7b-instruct'
+      try {
+        setTestUser(admin)
+        await switchWorkspace(adminWs)
+        const status = await getAiSettings()
+        assert.equal(status.ready, true, status.message)
+        assert.equal(status.model, 'qwen2.5:7b-instruct')
+
+        const mapping = await suggestMapping({ columns: [{ name: 'id', type: 'integer' }, { name: 'email', type: 'text' }], dataSourceId: sourceId, table: 'people', entity: 'employee' })
+        assert.deepEqual(mapping.suggestions.map((m) => [m.from, m.to]), [['id', 'employee_code'], ['email', 'email']], 'invented columns and bad names are dropped')
+        assert.deepEqual(mapping.suggestions[1].transforms.map((t) => t.fn), ['lowercase'], 'unknown transforms are dropped')
+        const sent = JSON.stringify(llm.requests[0].messages)
+        const shared = (JSON.parse(llm.requests[0].messages[1].content) as { sourceColumns: { name: string; samples: string[] }[] }).sourceColumns
+        assert.deepEqual(shared.find((c) => c.name === 'id')?.samples.slice().sort(), ['1', '2', '3'], 'example values of non-personal columns are shared')
+        assert.deepEqual(shared.find((c) => c.name === 'email')?.samples, [], 'personal columns share no examples')
+        assert.doesNotMatch(sent, /@kmplus\.test/, 'emails (personal) are never sent to the model')
+        assert.deepEqual(llm.requests[0].response_format, { type: 'json_object' })
+
+        const rule = await draftRule({ text: 'Only keep people whose email is a kmplus.test address', dataset: `${RUN}_people` })
+        assert.equal(rule.body.when.conditions[0].field, 'email', 'an unknown field is sent back to the model and corrected')
+        assert.equal(rule.body.otherwise[0].type, 'exclude')
+        const ruleRequests = llm.requests.filter((r) => r.messages[0].content.startsWith('You turn a business rule'))
+        assert.equal(ruleRequests.length, 2)
+        assert.match(ruleRequests[1].messages.at(-1)!.content, /Unknown field\(s\) in conditions: salary/)
+
+        const answer = await askData({ question: 'How many people are there?', dataset: `${RUN}_people` })
+        const [ds] = await db.select({ t: nexusDatasets.tableName }).from(nexusDatasets).where(and(eq(nexusDatasets.workspaceId, adminWs), eq(nexusDatasets.name, `${RUN}_people`)))
+        const { rows: count } = await pool.query(`SELECT count(*)::int AS n FROM "nexus_data"."${ds.t}" WHERE "_nexus_deleted_at" IS NULL`)
+        assert.equal(answer.widget.type, 'kpi')
+        assert.equal(answer.result.rows[0].value, count[0].n, 'the question runs as a governed Analytics query')
+        assert.ok(!JSON.stringify(llm.requests.at(-1)!.messages).includes('@kmplus.test'), 'questions send the schema, not rows')
+
+        const { rows: audits } = await listAuditLogs({ action: 'AI_ASSIST' })
+        assert.equal(audits.length, 3)
+        assert.ok(!JSON.stringify(audits).includes('kmplus.test address'), 'the audit records the feature and model, not the prompt')
+
+        setTestUser(viewer)
+        await switchWorkspace(adminWs)
+        await rejectsWith(() => suggestMapping({ columns: [{ name: 'id', type: 'integer' }] }), /Your role/)
+        setTestUser(admin)
+        await switchWorkspace(adminWs)
+        await setAiProvider({ provider: 'off' })
+        await rejectsWith(() => askData({ question: 'How many?' }), /turned off/)
+        await rejectsWith(() => setAiProvider({ provider: 'agent', agentId: 'nope' }), /Agent not found/)
+        await setAiProvider({ provider: 'server' })
+      } finally {
+        delete process.env.NEXUS_AI_BASE_URL
+        delete process.env.NEXUS_AI_MODEL
+        await llm.stop()
+      }
+    })
+
+    await test('Nexus Agent: sources behind a firewall are tested, sampled, read and written through the agent', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const { token } = await createAgent('Office agent')
+      // The agent talks to the real route handlers, in-process.
+      const agentFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input))
+        const path = url.pathname.replace('/api/agent/v1', '')
+        const req = new Request(url, init)
+        if (path === '/hello') return agentHello(req)
+        if (path === '/tasks') return agentTasks(req)
+        const m = /^\/tasks\/([^/]+)\/result$/.exec(path)
+        if (m) return agentResult(req, { params: Promise.resolve({ id: decodeURIComponent(m[1]) }) })
+        return new Response('not found', { status: 404 })
+      }) as typeof fetch
+      await pool.query(`CREATE TABLE "${FIXTURE_SCHEMA}".agent_out (id int PRIMARY KEY, email text, deleted_at timestamptz)`)
+      // A row the source no longer has: the run must mark it deleted through the agent.
+      await pool.query(`INSERT INTO "${FIXTURE_SCHEMA}".agent_out (id, email) VALUES (99, 'gone@kmplus.test')`)
+      const agentLlm = await startLlmMock()
+      const config = parseConfig({
+        url: 'http://localhost:3000',
+        token,
+        pollWaitSeconds: 1,
+        connections: [{ name: 'HR', type: 'postgres', writable: true, credentials: { connectionString: '${AGENT_TEST_DB}', schema: FIXTURE_SCHEMA } }],
+        ai: { baseUrl: agentLlm.baseUrl, model: 'llama3.1:8b' },
+      }, { AGENT_TEST_DB: process.env.DATABASE_URL })
+      const stop = new AbortController()
+      const logs: string[] = []
+      const running = runAgent(config, { fetchImpl: agentFetch, signal: stop.signal, log: (l) => logs.push(l) })
+      // Observed from the start: the agent stopping early fails the test instead of crashing the process.
+      const outcome = running.then(() => null, (e: Error) => e)
+      let ended: Error | null | undefined
+      void outcome.then((e) => (ended = e ?? new Error('ended')))
+      const alive = (stage: string) => {
+        if (ended) throw new Error(`The agent stopped during ${stage}: ${ended.message}. Agent log: ${logs.join(' | ')}`)
+      }
+      try {
+        for (let i = 0; i < 50 && !(await listAgents()).agents.find((a) => a.name === 'Office agent')?.online; i++) await new Promise((r) => setTimeout(r, 100))
+        const listed = (await listAgents()).agents.find((a) => a.name === 'Office agent')!
+        assert.equal(listed.online, true)
+        assert.deepEqual(listed.connections.map((c) => [c.name, c.type, c.writable]), [['HR', 'postgres', true]])
+        const [stored] = await db.select().from(agentTable).where(eq(agentTable.id, listed.id))
+        assert.ok(!JSON.stringify(stored.connections).includes('postgres://'), 'Nexus never receives the credentials')
+
+        const src = await addAgentDataSource({ agentId: listed.id, connection: 'HR', role: 'source' })
+        await testConnection(src.id)
+        const [row] = await db.select().from(dataSources).where(eq(dataSources.id, src.id))
+        assert.ok(((row.config as { schemaScan?: { tables: { name: string }[] } }).schemaScan?.tables ?? []).some((t) => t.name === 'people'), 'scanned through the agent')
+        const sample = await getDataSourceTableSample(src.id, 'people', 5)
+        assert.equal(sample.rows.length, 3)
+
+        const dest = await addAgentDataSource({ agentId: listed.id, connection: 'HR', role: 'destination', name: 'HR out' })
+        const saved = await savePipeline({
+          publish: true,
+          name: `${RUN} via agent`,
+          definition: {
+            schemaVersion: 2,
+            nodes: [
+              { id: 's', type: 'source', position: { x: 0, y: 0 }, dataSourceId: src.id, table: 'people' },
+              { id: 'd', type: 'destination', position: { x: 300, y: 0 }, kind: 'dataset', datasetName: `${RUN}_agent_people`, mode: 'replace' },
+              { id: 'w', type: 'destination', position: { x: 300, y: 150 }, kind: 'datasource', dataSourceId: dest.id, table: 'agent_out', mode: 'upsert', keys: ['id'], softDeleteMissing: true, softDeleteColumn: 'deleted_at' },
+            ],
+            edges: [{ id: 'e1', from: 's', to: 'd' }, { id: 'e2', from: 's', to: 'w' }],
+            settings: { retries: 0 },
+          },
+          schedule: { type: 'manual' } as never,
+        })
+        const run = await runPipelineNow(saved.id)
+        takeAfterCallbacks()
+        await processJobs({})
+        const status = await getRunStatus(run.runId)
+        alive('the pipeline run')
+        assert.equal(status.status, 'success', status.errorMessage ?? '')
+        assert.equal(status.recordsProcessed, 3)
+        const { rows: written } = await pool.query(`SELECT id, deleted_at IS NOT NULL AS deleted FROM "${FIXTURE_SCHEMA}".agent_out ORDER BY id`)
+        assert.deepEqual(written.map((r) => [r.id, r.deleted]), [[1, false], [2, false], [3, false], [99, true]], 'written through the agent; the row missing from the source is marked deleted')
+        assert.ok(logs.some((l) => /^activeKeys HR/.test(l)) && logs.some((l) => /^markDeleted HR/.test(l)))
+        assert.ok(logs.some((l) => /^readChunk HR \d+ ms ok/.test(l)) && logs.some((l) => /^write HR/.test(l)), 'the agent logs operations')
+        assert.ok(!logs.join('\n').includes('@kmplus.test'), 'the agent never logs data')
+        assert.equal((await db.select().from(agentTaskTable).where(eq(agentTaskTable.agentId, listed.id))).length, 0, 'results are not kept')
+
+        // The AI assistant can use the model next to the agent: prompts stay in the customer's network.
+        await setAiProvider({ provider: 'agent', agentId: listed.id })
+        const viaAgent = await getAiSettings()
+        assert.equal(viaAgent.ready, true, viaAgent.message)
+        assert.equal(viaAgent.model, 'llama3.1:8b')
+        await askData({ question: 'How many people?', dataset: `${RUN}_agent_people` })
+        assert.equal(agentLlm.requests.length, 1, 'answered by the agent-side model')
+        assert.ok(logs.some((l) => /^ai \d+ ms ok/.test(l)))
+        await setAiProvider({ provider: 'server' })
+        alive('the AI question')
+
+        // A client can't point a data source at an agent itself.
+        const sneaky = await createDataSource({ name: 'sneaky', type: 'database', sourceType: 'postgres', config: { role: 'source', agent: { agentId: listed.id, connection: 'HR' } } as never, credentials: {} })
+        const [sneakyRow] = await db.select().from(dataSources).where(eq(dataSources.id, sneaky))
+        assert.equal((sneakyRow.config as { agent?: unknown }).agent, undefined)
+        await rejectsWith(() => addAgentDataSource({ agentId: listed.id, connection: 'nope' }), /doesn't offer a connection/)
+
+        // Revoked: the agent stops, and sources using it fail without retrying.
+        await revokeAgent(listed.id)
+        assert.match((await outcome)?.message ?? '', /rejected the agent token/)
+        await rejectsWith(() => testConnection(src.id), /removed/)
+      } finally {
+        stop.abort()
+        await outcome
+        await agentLlm.stop()
+      }
+      // An agent that stopped polling is reported offline.
+      const { token: t2 } = await createAgent('Sleepy agent')
+      const sleepy = (await listAgents()).agents.find((a) => a.name === 'Sleepy agent')!
+      await db.update(agentTable).set({ lastSeenAt: new Date(Date.now() - 10 * 60_000), connections: [{ name: 'HR', type: 'postgres', writable: false }] }).where(eq(agentTable.id, sleepy.id))
+      const offline = await addAgentDataSource({ agentId: sleepy.id, connection: 'HR' })
+      await rejectsWith(() => testConnection(offline.id), /offline \(last seen/)
+      assert.ok(t2.startsWith('nxa_'))
+    })
+
     await test('admins reset a member\'s 2FA (lost phone); members cannot', async () => {
       await db.insert(session).values({ id: `${RUN}_sess`, userId: viewer.id, token: `${RUN}_tok`, expiresAt: new Date(Date.now() + 86_400_000) })
       await db.insert(verification).values({ id: `${RUN}_trust`, identifier: `trust-device-${RUN}`, value: viewer.id, expiresAt: new Date(Date.now() + 86_400_000) })
@@ -1095,7 +1303,7 @@ async function cleanup(userIds: string[]) {
   if (pipeIds.length) await db.delete(apiRateLimits).where(inArray(apiRateLimits.bucket, pipeIds))
   const sso = await db.select({ providerId: workspaceSso.providerId }).from(workspaceSso).where(inArray(workspaceSso.workspaceId, ws))
   if (sso.length) await db.delete(ssoProvider).where(inArray(ssoProvider.providerId, sso.map((x) => x.providerId)))
-  for (const t of [pipelineApprovals, scimTokens, scimUsers, scimGroups, notifications, workspaceSso, webhookDeliveries, webhooks, mappingTemplates, datasetQualitySnapshots, apiKeys, catalogEntries, domainMappings, businessRuleVersions, businessRules, datasetPolicies, dashboards, nexusDatasets, pipelineRunRejects, executionLogs, pipelineJobs, pipelineVersions, pipelines, dataSources, connectorInstalls, workspaceInvites, auditLogs, workspaceMembers]) {
+  for (const t of [agentTaskTable, agentTable, pipelineApprovals, scimTokens, scimUsers, scimGroups, notifications, workspaceSso, webhookDeliveries, webhooks, mappingTemplates, datasetQualitySnapshots, apiKeys, catalogEntries, domainMappings, businessRuleVersions, businessRules, datasetPolicies, dashboards, nexusDatasets, pipelineRunRejects, executionLogs, pipelineJobs, pipelineVersions, pipelines, dataSources, connectorInstalls, workspaceInvites, auditLogs, workspaceMembers]) {
     await db.delete(t).where(inArray(t.workspaceId, ws))
   }
   await db.delete(auditLogs).where(inArray(auditLogs.userId, userIds))

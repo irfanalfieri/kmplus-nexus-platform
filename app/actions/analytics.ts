@@ -9,12 +9,12 @@ import { newId, requireWorkspace, type WorkspaceContext } from '@/lib/auth/sessi
 import { can } from '@/lib/auth/permissions'
 import { recordAudit } from '@/lib/audit'
 import { dashboardInputSchema, widgetSchema, type Widget, type WidgetResult } from '@/lib/analytics/definition'
-import { buildWidgetSql, isTimeSeries, WidgetQueryError, type DatasetColumn } from '@/lib/analytics/query'
+import { type DatasetColumn } from '@/lib/analytics/query'
+import { runWidget } from '@/lib/analytics/run'
 import { accessFor, masksFor } from '@/lib/governance/masking'
 import { guard } from '@/lib/server-action'
 
 const idSchema = z.string().trim().min(1).max(100)
-const QUERY_TIMEOUT = '15s'
 
 async function datasetsOf(workspaceId: string) {
   return db
@@ -94,38 +94,6 @@ async function deleteDashboardImpl(rawId: string) {
   revalidatePath('/dashboard')
 }
 
-async function runWidget(ctx: WorkspaceContext, widget: Widget): Promise<WidgetResult> {
-  const [dataset] = await db
-    .select({ tableName: nexusDatasets.tableName, columns: nexusDatasets.columns, lastLoadedAt: nexusDatasets.lastLoadedAt })
-    .from(nexusDatasets)
-    .where(and(eq(nexusDatasets.workspaceId, ctx.workspaceId), eq(nexusDatasets.name, widget.dataset)))
-    .limit(1)
-  if (!dataset) throw new WidgetQueryError(`Dataset ${widget.dataset} no longer exists.`)
-  const access = await accessFor(ctx.workspaceId, widget.dataset, ctx.role)
-  const table = `"nexus_data"."${dataset.tableName.replace(/"/g, '""')}"`
-  const { text, params } = buildWidgetSql(widget, table, (dataset.columns as DatasetColumn[]) ?? [], { blockedColumns: Object.keys(access.masks), rowFilters: access.rowFilters })
-  const client = await pool.connect()
-  try {
-    await client.query('BEGIN READ ONLY')
-    await client.query(`SET LOCAL statement_timeout = '${QUERY_TIMEOUT}'`)
-    const exists = (await client.query<{ r: string | null }>('SELECT to_regclass($1)::text AS r', [table])).rows[0].r
-    const res = exists ? await client.query<{ label?: string | null; value: string | number | null }>(text, params) : { rows: [] }
-    await client.query('COMMIT')
-    const rows = res.rows.map((r) => ({ label: r.label ?? null, value: r.value === null ? null : Number(r.value) }))
-    const truncated = Boolean(widget.dimension) && rows.length > widget.limit
-    // Time series drop the oldest extra period; rankings drop the last.
-    return { rows: !truncated ? rows : isTimeSeries(widget) ? rows.slice(rows.length - widget.limit) : rows.slice(0, widget.limit), truncated, lastLoadedAt: dataset.lastLoadedAt }
-  } catch (err) {
-    await client.query('ROLLBACK').catch(() => undefined)
-    if (err instanceof WidgetQueryError) throw err
-    const msg = err instanceof Error ? err.message : String(err)
-    throw new WidgetQueryError(/statement timeout/i.test(msg) ? 'The query took too long. Add a filter or group by a coarser column.' : `Query failed: ${msg}`)
-  } finally {
-    client.release()
-  }
-}
-
-/** Runs one widget for the editor's live preview. */
 async function previewWidgetImpl(rawWidget: unknown) {
   const ctx = await requireWorkspace('data:preview')
   const parsed = widgetSchema.safeParse(rawWidget)

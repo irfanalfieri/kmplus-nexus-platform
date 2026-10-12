@@ -16,3 +16,6 @@ node_modules
 .env*
 next-env.d.ts
 tsconfig.tsbuildinfo
+
+# Nexus Agent bundle (built by scripts/build-agent.mjs)
+/public/downloads/nexus-agent.mjs

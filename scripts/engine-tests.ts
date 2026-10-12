@@ -35,6 +35,10 @@ import { applyRuleIds, nextEnvironment, planPromotion, remapRuleBody, type Promo
 import { ruleBodySchema } from '@/lib/rules/definition'
 import { manualIdpSettings, parseIdpMetadata, samlConfigFor, spEndpoints } from '@/lib/auth/saml'
 import { ScimError, applyGroupPatch, applyUserPatch, paging, parseFilter, parsePatch, userEmail } from '@/lib/scim/protocol'
+import { expandEnv, parseConfig } from '../agent/nexus-agent'
+import { payloadSchemas, wireRow } from '@/lib/agent/protocol'
+import { extractJson, LlmError } from '@/lib/ai/llm'
+import { AnswerError, checkAsk, checkMapping, checkRule, safeSamples } from '@/lib/ai/prompts'
 
 let passed = 0
 async function test(name: string, fn: () => void | Promise<void>) {
@@ -730,6 +734,58 @@ async function main() {
     assert.deepEqual(applyGroupPatch({ ...g, members: ['u1', 'u2'] }, parsePatch({ Operations: [{ op: 'remove', path: 'members[value eq "u2"]' }] })).members, ['u1'])
     assert.equal(applyGroupPatch(g, parsePatch({ Operations: [{ op: 'replace', value: { displayName: 'Admins', id: 'ignored' } }] })).displayName, 'Admins')
     assert.throws(() => applyGroupPatch(g, parsePatch({ Operations: [{ op: 'remove', path: 'displayName' }] })), /required/)
+  })
+
+  await test('Nexus Agent: config with ${ENV} secrets, https only, unique names; wire-safe rows; payload limits', () => {
+    const cfg = parseConfig({ url: 'https://nexus.example', token: 'nxa_abc', connections: [{ name: 'HR', type: 'postgres', credentials: { connectionString: '${HR_URL}', port: 5432 } }] }, { HR_URL: 'postgres://u:p@db/hr' })
+    assert.equal(cfg.connections[0].credentials.connectionString, 'postgres://u:p@db/hr')
+    assert.equal(cfg.connections[0].writable, false, 'read-only unless marked writable')
+    assert.throws(() => parseConfig({ url: 'https://n.example', token: 'nxa_x', connections: [{ name: 'A', type: 'postgres', credentials: { x: '${MISSING}' } }] }, {}), /MISSING is not set/)
+    assert.throws(() => parseConfig({ url: 'http://nexus.example', token: 'nxa_x' }, {}), /https/)
+    assert.doesNotThrow(() => parseConfig({ url: 'http://localhost:3000', token: 'nxa_x' }, {}))
+    assert.throws(() => parseConfig({ url: 'https://n.example', token: 'nxa_x', connections: [{ name: 'A', type: 'postgres' }, { name: 'a', type: 'mysql' }] }, {}), /Two connections/)
+    assert.throws(() => parseConfig({ url: 'https://n.example', token: 'nxa_x', connections: [{ name: 'F', type: 'file' }] }, {}))
+    assert.throws(() => parseConfig({ url: 'https://n.example', token: 'secret' }, {}), /nxa_/)
+    assert.deepEqual(expandEnv(['${A}-${A}', { k: 1 }], { A: 'x' }), ['x-x', { k: 1 }])
+    assert.deepEqual(wireRow({ d: new Date('2026-01-02T03:04:05Z'), b: BigInt(12), buf: Buffer.from('hi'), n: null, u: undefined, o: { a: 1 } }), { d: '2026-01-02T03:04:05.000Z', b: '12', buf: 'aGk=', n: null, u: null, o: { a: 1 } })
+    assert.equal(payloadSchemas.write.safeParse({ connection: 'HR', table: 't', mode: 'append', keys: [], columns: [], rows: Array.from({ length: 1001 }, () => ({})) }).success, false, 'writes travel in batches of at most 1000 rows')
+    assert.equal(payloadSchemas.readChunk.safeParse({ connection: 'HR', table: 't', offset: 0, limit: 5000, maxRows: 100000, cacheKey: 'k' }).success, true)
+  })
+
+  await test('AI assistant: JSON extraction and answer checks keep models to real columns, schemas and safe samples', () => {
+    assert.deepEqual(extractJson('Sure!\n```json\n{"a":1}\n```'), { a: 1 })
+    assert.deepEqual(extractJson('Here you go: {"a":{"b":2}} hope that helps'), { a: { b: 2 } })
+    assert.throws(() => extractJson('no json here'), LlmError)
+    assert.deepEqual(safeSamples('nik', ['3201234567890001']), [], 'personal columns share no examples')
+    assert.deepEqual(safeSamples('gaji_pokok', ['9000000']), [], 'sensitive columns share no examples')
+    assert.deepEqual(safeSamples('org_code', ['50000010', '', null, 'x'.repeat(60)]), ['50000010', 'x'.repeat(40)])
+    const cols = [{ name: 'PERNR', type: 'text' }, { name: 'BEGDA', type: 'integer' }]
+    const mapped = checkMapping({ fields: [
+      { from: 'pernr', to: 'employee_code', type: 'text' },
+      { from: 'BEGDA', to: 'hire_date', type: 'date', transforms: [{ fn: 'format_date', args: ['yyyy-MM-dd', 'yyyyMMdd'] }, { fn: 'rm -rf', args: [] }] },
+      { from: 'BEGDA', to: 'hire_date' },
+      { from: 'GHOST', to: 'full_name' },
+      { from: 'PERNR', to: 'not_a_target_field' },
+    ] }, { sourceColumns: cols, targetFields: [{ name: 'employee_code', type: 'text' }, { name: 'hire_date', type: 'date' }, { name: 'full_name', type: 'text' }], mapped: [] })
+    assert.deepEqual(mapped.map((m) => [m.from, m.to, m.type, m.transforms.map((t) => t.fn).join()]), [['PERNR', 'employee_code', 'text', ''], ['BEGDA', 'hire_date', 'date', 'format_date']])
+    assert.throws(() => checkMapping({ nope: 1 }, { sourceColumns: cols, targetFields: null, mapped: [] }), AnswerError)
+
+    const fields = [{ name: 'status', type: 'text' }, { name: 'hire_date', type: 'date' }]
+    const good = { name: 'Contract approval', body: { when: { match: 'all', conditions: [{ field: 'status', operator: 'equals', value: 'Kontrak' }] }, then: [{ type: 'require_approval', reason: 'contract' }] } }
+    assert.equal(checkRule(good, { fields }).body.when.conditions[0].valueField, '', 'defaults are filled in')
+    assert.throws(() => checkRule({ ...good, body: { ...good.body, when: { match: 'all', conditions: [{ field: 'salary', operator: 'greater_than', value: '1' }] } } }, { fields }), /Unknown field\(s\) in conditions: salary/)
+    assert.throws(() => checkRule({ ...good, body: { ...good.body, then: [{ type: 'trigger_pipeline', pipelineId: 'p1' }] } }, { fields }), /trigger_pipeline/)
+    assert.throws(() => checkRule({ ...good, body: { when: { match: 'sometimes' }, then: [] } }, { fields }), /invalid at when.match/)
+
+    const datasets = [{ name: 'employees', rowCount: 10, columns: [{ name: 'department', type: 'text' }, { name: 'hire_date', type: 'date' }, { name: 'salary', type: 'numeric', masked: true }] }]
+    const ask = checkAsk({ widget: { dataset: 'employees', type: 'bar', measure: { agg: 'count', column: '' }, dimension: { column: 'department', grain: 'none' }, filters: [], sort: 'value_desc', limit: 5 }, explanation: 'x' }, { datasets })
+    assert.equal(ask.widget.dimension?.column, 'department')
+    assert.equal(checkAsk({ widget: { dataset: 'employees', type: 'kpi', measure: { agg: 'count' }, dimension: {} } }, { datasets }).widget.dimension, null, 'an empty dimension on a KPI is ignored')
+    assert.throws(() => checkAsk({ widget: { dataset: 'payroll', type: 'kpi', measure: { agg: 'count' } } }, { datasets }), /Unknown dataset/)
+    assert.throws(() => checkAsk({ widget: { dataset: 'employees', type: 'kpi', measure: { agg: 'sum', column: 'salary' } } }, { datasets }), /masked/)
+    assert.throws(() => checkAsk({ widget: { dataset: 'employees', type: 'kpi', measure: { agg: 'sum', column: 'department' } } }, { datasets }), /needs a number column/)
+    assert.throws(() => checkAsk({ widget: { dataset: 'employees', type: 'line', measure: { agg: 'count' }, dimension: { column: 'department', grain: 'month' } } }, { datasets }), /needs a date column/)
+    assert.throws(() => checkAsk({ widget: { dataset: 'employees', type: 'bar', measure: { agg: 'count' }, dimension: { column: 'nope' } } }, { datasets }), /not in employees/)
   })
 
   console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`)

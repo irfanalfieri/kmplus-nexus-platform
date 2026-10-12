@@ -235,7 +235,7 @@ The central registry for every connected system.
 | DS-7 | Periodic health check (e.g., every 15 min) and status history | P1 | ⬜ |
 | DS-8 | Schema drift detection: compare the new scan with the previous one and flag added/removed/changed columns used by pipelines | P1 | ⬜ |
 | DS-9 | Supported source types: Database, REST, GraphQL, SOAP, OData, LDAP/AD, File (CSV/Excel upload), Cloud Storage (S3/Azure Blob/GCS), SFTP/FTP, Message Queue | P0 for DB/REST/File; others P1–P2 | 🟡 (Database, REST, LDAP/AD and **File upload (CSV/TSV/XLSX)** ✅; GraphQL, SOAP, cloud storage, SFTP, queues later) |
-| DS-10 | Connection via **Nexus Agent** for private networks (choose "Direct" or "Via Agent") | P1 | ⬜ |
+| DS-10 | Connection via **Nexus Agent** for private networks (choose "Direct" or "Via Agent") | P1 | ✅ (Settings → Nexus Agents: create an agent (token shown once), download the single-file agent (Node 20+), list connections in its config with `${ENV}` secrets; each connection becomes a data source with no credentials in Nexus; test/scan/sample/pipeline reads and writes/live queries run through it; online status, version and host shown) |
 | DS-11 | Source ownership + tags + environment (dev/staging/prod credentials per source) | P1 | ⬜ |
 
 **Acceptance (DS-1..4):** A user with a reachable MySQL DB can add it, see "Connected · 42 tables", open a table, and see 25 real rows in under 10 seconds.
@@ -401,21 +401,24 @@ The visual workflow engine (inspired by NiFi, Power Automate, n8n, and Node-RED)
 
 Example rules: `IF employment_status = 'Active' → Import`; `IF department = 'Finance' → Notify HR`.
 
-### Layer 12 — AI Integration Assistant (Phase 4) · 🎭
+### Layer 12 — AI Integration Assistant (Phase 4) · 🟡
 
 | ID | Capability | Behavior |
 |---|---|---|
-| AI-1 | **Smart Mapping** | Upload CSV / pick a source table → AI proposes source→target mappings plus transforms with confidence scores. The user must accept them; they're never auto-applied. |
+| AI-1 | **Smart Mapping** | Upload CSV / pick a source table → AI proposes source→target mappings plus transforms with confidence scores. The user must accept them; they're never auto-applied. **✅ Map step → Suggest with AI** (to an entity's fields or clean names; reasons per field; ticked suggestions are added) |
 | AI-2 | **Pipeline Recommendations / Generation** | "Sync active employees from Talenta to KMS daily" → a draft pipeline the user reviews |
 | AI-3 | **Error Diagnosis** | Reads the run error + sample bad rows → explanation + a concrete fix ("Insert Date Formatter `dd/MM/yyyy` before Validate") with a one-click apply that creates a new draft version |
 | AI-4 | **Connector Suggestions** | Detects a system from a URL, file headers, or an error signature → recommends a connector |
 | AI-5 | **Natural-language catalog search** | "Where is training hours by department?" |
+| AI-6 | **Business rules from plain language** *(added)* | ✅ Rule editor → Describe the rule → a draft rule (conditions + actions) to review, test and save |
+| AI-7 | **Ask your data** *(added)* | ✅ Analytics → Ask a question → the model writes a widget query (no SQL), Nexus runs it with the asker's masks and row filters; can be added to a dashboard |
 
 **AI guardrails (added):**
 - Send schema/metadata and *masked* sample rows only. Never send raw PII to the LLM unless the workspace opts in.
 - All AI output becomes a **draft** that needs human acceptance, and acceptance is audited.
 - Per-workspace AI usage limits and logging.
-- Model: latest Claude models via the Anthropic API (or Vercel AI Gateway).
+- Model: **open-source models only** (decided 2026-10-12, so it is free): any OpenAI-compatible server (Ollama, vLLM, LM Studio, llama.cpp; e.g. Qwen 2.5 7B, Llama 3.1 8B). Per workspace: the model configured for the Nexus server (`NEXUS_AI_*`), a model **next to a Nexus Agent** (prompts never leave the customer's network), or off.
+- Implemented: schema + a few example values of columns classified public (never personal/sensitive values); answers validated against the editors' schemas and real column lists with one repair round; every request audited (`AI_ASSIST`: feature, model; no prompt text).
 
 ### Layer 13 — Governance & Security (Phase 1 basics, Phase 2 full) · 🟡
 
@@ -533,7 +536,7 @@ Nexus doesn't expose raw source systems. It publishes **standardized business do
 | Version Control | ✅ | Pipelines: draft vs published, every save a version, publish/discard/restore; business rules versioned | No diff view, no JSON export/import |
 | Governance | ✅ | Controls overview; dataset policies (classification, masking: hide / keep last 4 / pseudonymize; suggestions from column names; **row-level access per role**); retention (hourly); right to erasure; per-workspace credential keys; roles, permissions and audit log (Settings); **publish approvals** (GV-6) and **environments dev → staging → prod with promotion** (GV-7) | KMS |
 | Email | ✅ | SMTP mailer (`lib/email.ts`, company mail server `mail.kmplus.co.id` as `noreply@kmplus.co.id`) for verification, invites and alerts; set in every Vercel environment (2026-10-09) | Bounce/delivery tracking |
-| AI Assistant | 🎭 | — | Mock UI |
+| AI Assistant | 🟡 | Open-source model (Ollama/vLLM… via OpenAI-compatible API) on the Nexus server or next to a Nexus Agent; mapping suggestions (AI-1), rules from plain language (AI-6), questions answered as governed charts (AI-7); privacy guardrails and audit | AI-2 pipeline generation, AI-3 error diagnosis, AI-4, AI-5; usage limits |
 | Data API | ✅ | `GET /api/v1/datasets`, `/datasets/:name` (fields, filters, cursor, `updated_since`, live catalog tables), `/domains/:entity`, `/pipelines`, `POST /pipelines/:id/runs`, `/runs/:id`; scoped, hashed, expiring, revocable keys with per-key rate limits (Settings); masking and row filters by key role; every read audited; OpenAPI 3.1 at `/api/v1/openapi.json`; outbound signed webhooks with retries | SDKs |
 
 **Tech debt register** (reviewed 2026-10-09). Priority: **P1** before the first customer pilot · **P2** before GA · **P3** when convenient. Move items to *Resolved* when fixed.
@@ -619,6 +622,8 @@ Many target customers (government, banking, mining) won't expose SAP/AD/SQL Serv
 - receives connector jobs (test/scan/sample/read/write) and runs the same driver code locally,
 - streams results back encrypted; credentials can be kept **only on the agent** (local vault),
 - reports heartbeat and version; the UI shows agent status.
+
+**Built (2026-10-12):** a single-file Node program (`agent/`, built to `public/downloads/nexus-agent.mjs`) that long-polls `/api/agent/v1/tasks` over HTTPS (Vercel functions can't hold WebSockets), runs test/scan/sample/readChunk/readRows/write/liveQuery/ai with Nexus's own driver code, and posts results (gzip). Tasks are a DB mailbox (`agent_tasks`), deleted once read. Credentials live only in the agent's config (`${ENV}` references). Marking missing rows deleted works through agents too (keys of not-yet-deleted rows are paged from the agent, the missing ones marked in batches; agent 1.1.0+). Not yet: auto-update, Windows installer.
 
 ### 11.4 Connector interface (target)
 

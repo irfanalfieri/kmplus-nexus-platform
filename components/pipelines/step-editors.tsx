@@ -28,6 +28,7 @@ import { autoMapName } from '@/lib/domain/model'
 import { BUILTIN_MAPPING_TEMPLATES, applyMappingTemplate, autoMapFields, columnTypeFromSql, hrRulePack, newValidationRule, type MappingTemplate } from '@/lib/pipelines/templates'
 import { saveMappingTemplate } from '@/lib/actions/templates'
 import type { getBuilderOptions } from '@/lib/actions/pipelines'
+import { AiMappingButton } from '@/components/ai/ai-mapping'
 
 export type BuilderOptions = Awaited<ReturnType<typeof getBuilderOptions>>
 export type Column = { name: string; type: string }
@@ -263,7 +264,7 @@ const TRANSFORM_ARGS: Partial<Record<TransformName, string[]>> = {
   lookup: ['dataset', 'key column', 'value column', 'if not found (empty = null, {value} keeps it)'],
 }
 
-export function MapEditor({ step, columns, options, onChange }: { step: MapStep; columns: Column[]; options?: BuilderOptions; onChange: (s: MapStep) => void }) {
+export function MapEditor({ step, columns, options, source, onChange }: { step: MapStep; columns: Column[]; options?: BuilderOptions; source?: { dataSourceId: string; table: string }; onChange: (s: MapStep) => void }) {
   const update = (i: number, patch: Partial<MapStep['fields'][number]>) => onChange({ ...step, fields: step.fields.map((f, j) => (j === i ? { ...f, ...patch } : f)) })
   const [templateMsg, setTemplateMsg] = useState('')
   const autoMap = () => {
@@ -306,6 +307,12 @@ export function MapEditor({ step, columns, options, onChange }: { step: MapStep;
             </option>
           ))}
         </select>
+        <AiMappingButton
+          columns={columns.filter((c) => !step.fields.some((f) => f.from === c.name))}
+          mapped={step.fields.map((f) => f.to).filter(Boolean)}
+          source={source}
+          onAccept={(added) => onChange({ ...step, fields: [...step.fields.filter((f) => f.from), ...added.filter((a) => !step.fields.some((f) => f.to === a.to))] })}
+        />
         <Button size="sm" variant="ghost" onClick={() => void saveTemplate()} disabled={!step.fields.some((f) => f.from && f.to)}>
           Save as template
         </Button>

@@ -39,7 +39,7 @@ export function currentWatermark(def: PipelineDefinition, state: unknown): strin
 
 export async function loadSource(workspaceId: string, dataSourceId: string): Promise<StoredDataSource> {
   const [source] = await db
-    .select({ id: dataSources.id, name: dataSources.name, sourceType: dataSources.sourceType, config: dataSources.config, credentials: dataSources.credentials })
+    .select({ id: dataSources.id, workspaceId: dataSources.workspaceId, name: dataSources.name, sourceType: dataSources.sourceType, config: dataSources.config, credentials: dataSources.credentials })
     .from(dataSources)
     .where(and(eq(dataSources.id, dataSourceId), eq(dataSources.workspaceId, workspaceId)))
     .limit(1)

@@ -13,6 +13,7 @@ import { describeRule } from '@/lib/rules/evaluate'
 import { ColumnPicker, ConditionsEditor, NativeSelect, newCondition, type Column } from '@/components/pipelines/step-editors'
 import { formatWhen } from '@/components/pipelines/run-history'
 import { useCan } from '@/components/workspace/workspace-context'
+import { AiRuleDraft } from '@/components/ai/ai-rule'
 
 type RuleRow = Awaited<ReturnType<typeof listRules>>[number]
 type TestRow = Awaited<ReturnType<typeof testRule>>[number]
@@ -431,6 +432,7 @@ function RuleEditor({ initial, datasets, pipelines, onClose, onSaved }: { initia
                 ))}
               </NativeSelect>
             </label>
+            {canEdit && <AiRuleDraft dataset={dataset} onDraft={(d) => setDraft({ ...draft, name: draft.name || d.name, description: draft.description || d.description, body: d.body })} />}
             <GroupEditor group={draft.body.when} columns={columns} depth={0} onChange={(when) => setDraft({ ...draft, body: { ...draft.body, when } })} />
             <ActionsEditor title="THEN" actions={draft.body.then} columns={columns} pipelines={pipelines} onChange={(then) => setDraft({ ...draft, body: { ...draft.body, then } })} />
             <ActionsEditor title="OTHERWISE (optional)" actions={draft.body.otherwise} columns={columns} pipelines={pipelines} onChange={(otherwise) => setDraft({ ...draft, body: { ...draft.body, otherwise } })} />
