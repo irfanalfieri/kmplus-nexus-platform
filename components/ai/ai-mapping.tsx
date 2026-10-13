@@ -8,10 +8,20 @@ import { suggestMapping } from '@/lib/actions/ai'
 import { DOMAIN_ENTITIES } from '@/lib/domain/model'
 import type { MapStep } from '@/lib/pipelines/definition'
 import { useAiStatus } from './use-ai'
+import { useT } from '@/components/i18n/i18n-provider'
+import type { MessageKey } from '@/lib/i18n/translate'
 
 type Suggestion = Awaited<ReturnType<typeof suggestMapping>>['suggestions'][number]
 
 const selectClass = 'h-7 rounded-md border border-input bg-card px-1.5 text-xs outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-60'
+
+/** Puts React nodes into a translated template's {placeholders}. */
+function rich(template: string, nodes: Record<string, React.ReactNode>) {
+  return template.split(/(\{\w+\})/).map((part, i) => {
+    const m = /^\{(\w+)\}$/.exec(part)
+    return m && m[1] in nodes ? <span key={i}>{nodes[m[1]]}</span> : part
+  })
+}
 
 /**
  * "Suggest with AI" for a Map step (#14): the model proposes source → target
@@ -19,6 +29,7 @@ const selectClass = 'h-7 rounded-md border border-input bg-card px-1.5 text-xs o
  */
 export function AiMappingButton({ columns, mapped, source, onAccept }: { columns: { name: string; type: string }[]; mapped: string[]; source?: { dataSourceId: string; table: string }; onAccept: (fields: MapStep['fields']) => void }) {
   const ai = useAiStatus()
+  const t = useT()
   const [open, setOpen] = useState(false)
   const [entity, setEntity] = useState('employee')
   const [busy, setBusy] = useState(false)
@@ -27,6 +38,12 @@ export function AiMappingButton({ columns, mapped, source, onAccept }: { columns
   const [picked, setPicked] = useState<Set<number>>(new Set())
   const [model, setModel] = useState('')
   if (!ai?.ready) return null
+  // Entity labels have translations by name; a new entity shows its model label.
+  const entityLabel = (name: string, fallback: string) => {
+    const key = `ops.ai.mapping.entities.${name}`
+    const text = t(key as MessageKey)
+    return text === key ? fallback : text
+  }
 
   const run = async () => {
     setBusy(true)
@@ -38,7 +55,7 @@ export function AiMappingButton({ columns, mapped, source, onAccept }: { columns
       setPicked(new Set(res.suggestions.map((_, i) => i)))
       setModel(res.model)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'The AI request failed')
+      setError(err instanceof Error ? err.message : t('ops.ai.failed'))
     } finally {
       setBusy(false)
     }
@@ -46,28 +63,28 @@ export function AiMappingButton({ columns, mapped, source, onAccept }: { columns
 
   if (!open) {
     return (
-      <Button size="sm" variant="outline" onClick={() => setOpen(true)} disabled={!columns.length} title="Ask the AI model to propose mappings for the unmapped columns">
-        <Sparkles aria-hidden /> Suggest with AI
+      <Button size="sm" variant="outline" onClick={() => setOpen(true)} disabled={!columns.length} title={t('ops.ai.mapping.openTitle')}>
+        <Sparkles aria-hidden /> {t('ops.ai.mapping.open')}
       </Button>
     )
   }
   return (
-    <div className="w-full space-y-2 rounded-md border border-border bg-muted/50 p-2 text-xs" role="group" aria-label="AI mapping suggestions">
+    <div className="w-full space-y-2 rounded-md border border-border bg-muted/50 p-2 text-xs" role="group" aria-label={t('ops.ai.mapping.group')}>
       <div className="flex flex-wrap items-center gap-2">
         <Sparkles className="size-4 text-primary" aria-hidden />
-        <label htmlFor="ai-map-entity">Map to</label>
+        <label htmlFor="ai-map-entity">{t('ops.ai.mapping.mapTo')}</label>
         <select id="ai-map-entity" className={selectClass} value={entity} onChange={(e) => setEntity(e.target.value)}>
           {DOMAIN_ENTITIES.map((e) => (
             <option key={e.name} value={e.name}>
-              {e.label} fields
+              {t('ops.ai.mapping.entityFields', { entity: entityLabel(e.name, e.label) })}
             </option>
           ))}
-          <option value="">clear names (no entity)</option>
+          <option value="">{t('ops.ai.mapping.noEntity')}</option>
         </select>
         <Button size="sm" onClick={() => void run()} disabled={busy}>
-          {busy && <Loader2 className="animate-spin" aria-hidden />} {busy ? 'Thinking…' : 'Suggest'}
+          {busy && <Loader2 className="animate-spin" aria-hidden />} {busy ? t('ops.ai.thinking') : t('ops.ai.mapping.suggest')}
         </Button>
-        <Button size="icon-sm" variant="ghost" className="ml-auto" onClick={() => setOpen(false)} aria-label="Close AI suggestions">
+        <Button size="icon-sm" variant="ghost" className="ml-auto" onClick={() => setOpen(false)} aria-label={t('ops.ai.mapping.close')}>
           <X aria-hidden />
         </Button>
       </div>
@@ -75,7 +92,7 @@ export function AiMappingButton({ columns, mapped, source, onAccept }: { columns
       {suggestions && (
         <>
           {suggestions.length === 0 ? (
-            <p className="text-muted-foreground">No confident suggestions for the remaining columns.</p>
+            <p className="text-muted-foreground">{t('ops.ai.mapping.none')}</p>
           ) : (
             <ul className="max-h-60 space-y-1 overflow-y-auto">
               {suggestions.map((s, i) => (
@@ -89,8 +106,8 @@ export function AiMappingButton({ columns, mapped, source, onAccept }: { columns
                     />
                     <span>
                       <span className="font-mono">{s.from}</span> <span aria-hidden>→</span>
-                      <span className="sr-only">to</span> <span className="font-mono font-medium">{s.to}</span> <span className="text-muted-foreground">({s.type})</span>
-                      {s.transforms.length > 0 && <span className="font-mono text-muted-foreground"> · {s.transforms.map((t) => `${t.fn}${t.args.length ? `(${t.args.join(', ')})` : ''}`).join(' → ')}</span>}
+                      <span className="sr-only">{t('ops.ai.mapping.to')}</span> <span className="font-mono font-medium">{s.to}</span> <span className="text-muted-foreground">({s.type})</span>
+                      {s.transforms.length > 0 && <span className="font-mono text-muted-foreground"> · {s.transforms.map((tr) => `${tr.fn}${tr.args.length ? `(${tr.args.join(', ')})` : ''}`).join(' → ')}</span>}
                       {s.reason && <span className="block text-muted-foreground">{s.reason}</span>}
                     </span>
                   </label>
@@ -108,10 +125,10 @@ export function AiMappingButton({ columns, mapped, source, onAccept }: { columns
                 setSuggestions(null)
               }}
             >
-              Add {picked.size} field{picked.size === 1 ? '' : 's'}
+              {t('ops.ai.mapping.addFields', { count: picked.size })}
             </Button>
             <span className="text-muted-foreground">
-              Suggested by <span className="font-mono">{model}</span>. Check them before publishing.
+              {rich(t('ops.ai.mapping.suggestedBy'), { model: <span className="font-mono">{model}</span> })}
             </span>
           </div>
         </>

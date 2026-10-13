@@ -1,4 +1,14 @@
 import type { Messages } from './en'
+import { auth } from './id/auth'
+import { ws } from './id/ws'
+import { editor } from './id/editor'
+import { steps } from './id/steps'
+import { ops } from './id/ops'
+import { insights } from './id/insights'
+import { connect } from './id/connect'
+import { overview } from './id/overview'
+import { email } from './id/email'
+import { assist } from './id/assist'
 
 /** Bahasa Indonesia. Same shape as en.ts; data and identifiers stay untranslated. */
 export const id: Messages = {
@@ -437,4 +447,14 @@ export const id: Messages = {
     sortBy: 'Urutkan menurut {column}',
     empty: 'Tidak ada baris',
   },
+  auth,
+  ws,
+  editor,
+  steps,
+  ops,
+  insights,
+  connect,
+  overview,
+  email,
+  assist,
 }

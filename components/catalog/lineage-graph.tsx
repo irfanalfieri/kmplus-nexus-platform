@@ -9,7 +9,9 @@ import type { LineageGraph, LineageKind, LineageNode } from '@/lib/catalog/linea
 import { cn } from '@/lib/utils'
 import { Notice } from '@/components/ui/notice'
 import { EmptyState } from '@/components/ui/empty-state'
-import { usePrefs } from '@/components/i18n/i18n-provider'
+import { usePrefs, useT } from '@/components/i18n/i18n-provider'
+import type { Translate } from '@/lib/i18n/translate'
+import { insights } from '@/lib/i18n/messages/en/insights'
 
 /*
  * Lineage as a single-line diagram: square nodes on 2px lines. The node's
@@ -17,13 +19,31 @@ import { usePrefs } from '@/components/i18n/i18n-provider'
  * held purple; pipelines, dashboards and API entities neutral), and every node
  * also says its kind in words.
  */
-const KIND: Record<LineageKind, { icon: typeof Database; label: string; border: string }> = {
-  source_table: { icon: Server, label: 'Source table', border: 'border-info' },
-  pipeline: { icon: Workflow, label: 'Pipeline', border: 'border-paused' },
-  dataset: { icon: Database, label: 'Dataset', border: 'border-live' },
-  destination_table: { icon: Upload, label: 'Written to', border: 'border-held' },
-  dashboard: { icon: BarChart3, label: 'Dashboard', border: 'border-paused' },
-  entity: { icon: Share2, label: 'Data API entity', border: 'border-paused' },
+// Kind labels live in `insights.lineage.kinds`.
+const KIND: Record<LineageKind, { icon: typeof Database; border: string }> = {
+  source_table: { icon: Server, border: 'border-info' },
+  pipeline: { icon: Workflow, border: 'border-paused' },
+  dataset: { icon: Database, border: 'border-live' },
+  destination_table: { icon: Upload, border: 'border-held' },
+  dashboard: { icon: BarChart3, border: 'border-paused' },
+  entity: { icon: Share2, border: 'border-paused' },
+}
+
+const kindLabel = (t: Translate, kind: LineageKind) => t(`insights.lineage.kinds.${kind}`)
+
+/** The server builds node labels and details in English; show the fixed ones in the interface language. */
+function localizeNode(t: Translate, node: LineageNode): { label: string; detail: string } {
+  let label = node.label
+  let detail = node.detail
+  if (node.kind === 'entity') {
+    const name = node.id.replace(/^entity:/, '')
+    if (name in insights.catalog.entities) label = t(`insights.catalog.entities.${name as keyof typeof insights.catalog.entities}`)
+  }
+  if (detail === 'pipeline') detail = t('insights.lineage.detailPipeline')
+  else if (detail === 'dashboard') detail = t('insights.lineage.detailDashboard')
+  else if (detail === 'Nexus dataset') detail = t('insights.lineage.detailDataset')
+  else if (node.kind === 'destination_table' && detail.startsWith('written to ')) detail = t('insights.lineage.detailWrittenTo', { name: detail.slice('written to '.length) })
+  return { label, detail }
 }
 
 const LINE = 'var(--muted-foreground)'
@@ -33,7 +53,9 @@ type Data = { node: LineageNode; focus: boolean; clickable: boolean }
 
 function LineageCard({ data }: NodeProps<Node<Data>>) {
   const { node, focus, clickable } = data
+  const t = useT()
   const Icon = KIND[node.kind].icon
+  const text = localizeNode(t, node)
   return (
     <div
       className={cn(
@@ -45,11 +67,11 @@ function LineageCard({ data }: NodeProps<Node<Data>>) {
     >
       <Handle type="target" position={Position.Left} style={handleStyle} isConnectable={false} />
       <div className="flex items-center gap-1.5 font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
-        <Icon className="h-3 w-3" aria-hidden /> {KIND[node.kind].label}
-        {focus && <span className="ml-auto normal-case">this item</span>}
+        <Icon className="h-3 w-3" aria-hidden /> {kindLabel(t, node.kind)}
+        {focus && <span className="ml-auto normal-case">{t('insights.lineage.thisItem')}</span>}
       </div>
-      <div className="truncate font-mono text-xs font-medium" title={node.label}>{node.label}</div>
-      <div className="truncate text-[11px] text-muted-foreground" title={node.detail}>{node.detail}</div>
+      <div className="truncate font-mono text-xs font-medium" title={text.label}>{text.label}</div>
+      <div className="truncate text-[11px] text-muted-foreground" title={text.detail}>{text.detail}</div>
       <Handle type="source" position={Position.Right} style={handleStyle} isConnectable={false} />
     </div>
   )
@@ -58,7 +80,7 @@ const nodeTypes = { lineage: LineageCard }
 
 /** Where an item's data comes from and where it goes (DC-4). Click a dataset or source table to open it. */
 export function LineageView({ catalogKey, onOpen }: { catalogKey: string; onOpen: (key: string) => void }) {
-  const { theme } = usePrefs()
+  const { theme, t } = usePrefs()
   const [graph, setGraph] = useState<LineageGraph | null>(null)
   const [error, setError] = useState('')
 
@@ -68,10 +90,11 @@ export function LineageView({ catalogKey, onOpen }: { catalogKey: string; onOpen
     setError('')
     getLineage(catalogKey)
       .then((g) => !cancelled && setGraph(g))
-      .catch((err) => !cancelled && setError(err instanceof Error ? err.message : 'Failed to load lineage'))
+      .catch((err) => !cancelled && setError(err instanceof Error ? err.message : t('insights.lineage.loadFailed')))
     return () => {
       cancelled = true
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [catalogKey])
 
   const { nodes, edges, height } = useMemo(() => {
@@ -106,20 +129,20 @@ export function LineageView({ catalogKey, onOpen }: { catalogKey: string; onOpen
   if (!graph)
     return (
       <p className="flex items-center text-sm text-muted-foreground">
-        <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> Loading lineage…
+        <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> {t('insights.lineage.loading')}
       </p>
     )
   if (graph.nodes.length <= 1)
     return (
-      <EmptyState compact icon={<GitFork />} title="No lineage yet">
-        No pipelines, dashboards or API entities use this yet.
+      <EmptyState compact icon={<GitFork />} title={t('insights.lineage.emptyTitle')}>
+        {t('insights.lineage.emptyBody')}
       </EmptyState>
     )
 
   const labelOf = (id: string) => {
     const n = graph.nodes.find((x) => x.id === id)
     if (!n) return id
-    const text = `${KIND[n.kind].label} ${n.label}`
+    const text = t('insights.lineage.edgeLabel', { kind: kindLabel(t, n.kind), name: localizeNode(t, n).label })
     return n.catalogKey && n.id !== graph.focus ? (
       <button
         type="button"
@@ -135,7 +158,7 @@ export function LineageView({ catalogKey, onOpen }: { catalogKey: string; onOpen
 
   return (
     <div>
-      <div className="rounded-md border border-border bg-card" style={{ height }} role="figure" aria-label="Lineage graph; the list view below has the same links">
+      <div className="rounded-md border border-border bg-card" style={{ height }} role="figure" aria-label={t('insights.lineage.graphLabel')}>
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -156,7 +179,7 @@ export function LineageView({ catalogKey, onOpen }: { catalogKey: string; onOpen
       </div>
       {/* Text version of the graph for screen readers, keyboards and copy-paste. */}
       <details className="mt-1 text-xs text-muted-foreground">
-        <summary className="cursor-pointer rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">List view</summary>
+        <summary className="cursor-pointer rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">{t('insights.lineage.listView')}</summary>
         <ul className="mt-1 list-disc space-y-0.5 pl-5">
           {graph.edges.map((e) => (
             <li key={`${e.from}>${e.to}`}>

@@ -5,12 +5,13 @@ import { Check, ChevronsUpDown, Loader2, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { createWorkspace, switchWorkspace } from '@/lib/actions/workspaces'
-import { ROLE_INFO } from '@/lib/auth/permissions'
+import { useT } from '@/components/i18n/i18n-provider'
 import { useWorkspace } from './workspace-context'
 import { EnvironmentBadge } from './environment-badge'
 
 export default function WorkspaceSwitcher() {
   const { workspace, role, workspaces } = useWorkspace()
+  const t = useT()
   const [open, setOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [name, setName] = useState('')
@@ -38,7 +39,7 @@ export default function WorkspaceSwitcher() {
       await action()
       window.location.reload()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Something went wrong')
+      setError(err instanceof Error ? err.message : t('common.somethingWrong'))
       setBusy(false)
     }
   }
@@ -49,7 +50,7 @@ export default function WorkspaceSwitcher() {
         onClick={() => setOpen((v) => !v)}
         className="flex w-full items-center gap-2.5 rounded-md border border-sidebar-border px-2.5 py-2 text-left text-sidebar-accent-foreground hover:bg-sidebar-accent"
         aria-haspopup="listbox"
-        aria-label={`Workspace: ${workspace.name}. Switch workspace`}
+        aria-label={t('auth.switcher.label', { name: workspace.name })}
         aria-expanded={open}
       >
         <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-sm bg-sidebar-primary text-xs font-semibold text-sidebar-primary-foreground" aria-hidden>
@@ -59,7 +60,7 @@ export default function WorkspaceSwitcher() {
           <div className="truncate text-sm font-medium">{workspace.name}</div>
           <div className="flex items-center gap-1.5 text-xs text-sidebar-foreground">
             <EnvironmentBadge environment={workspace.environment} />
-            {ROLE_INFO[role].label}
+            {t(`auth.roles.${role}.label`)}
           </div>
         </div>
         <ChevronsUpDown className="h-4 w-4 text-sidebar-muted" aria-hidden />
@@ -67,7 +68,7 @@ export default function WorkspaceSwitcher() {
 
       {open && (
         <div className="absolute left-0 right-0 top-full z-50 mt-1 rounded-lg border border-border bg-popover p-1 shadow-lg">
-          <div className="px-2 pt-1.5 pb-1 font-mono text-[11px] tracking-wide text-muted-foreground uppercase">Workspaces</div>
+          <div className="px-2 pt-1.5 pb-1 font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{t('auth.switcher.workspaces')}</div>
           <ul role="listbox" className="max-h-64 overflow-y-auto">
             {workspaces.map((w) => (
               <li key={w.id}>
@@ -80,7 +81,7 @@ export default function WorkspaceSwitcher() {
                 >
                   <span className="min-w-0 flex-1 truncate">{w.name}</span>
                   <EnvironmentBadge environment={w.environment} />
-                  <span className="text-xs text-muted-foreground">{ROLE_INFO[w.role].label}</span>
+                  <span className="text-xs text-muted-foreground">{t(`auth.roles.${w.role}.label`)}</span>
                   {w.id === workspace.id && <Check className="h-4 w-4 text-live-text" />}
                 </button>
               </li>
@@ -95,17 +96,17 @@ export default function WorkspaceSwitcher() {
                   void run(() => createWorkspace(name))
                 }}
               >
-                <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Workspace name, e.g. PT Contoh" aria-label="New workspace name" className="h-8" />
+                <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder={t('auth.switcher.namePlaceholder')} aria-label={t('auth.switcher.nameLabel')} className="h-8" />
                 <div className="flex gap-2">
                   <Button size="sm" type="submit" disabled={busy || !name.trim()} className="flex-1">
-                    {busy && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}Create
+                    {busy && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}{t('auth.switcher.create')}
                   </Button>
-                  <Button size="sm" type="button" variant="ghost" onClick={() => setCreating(false)}>Cancel</Button>
+                  <Button size="sm" type="button" variant="ghost" onClick={() => setCreating(false)}>{t('common.cancel')}</Button>
                 </div>
               </form>
             ) : (
               <button onClick={() => setCreating(true)} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted">
-                <Plus className="h-4 w-4" /> New workspace
+                <Plus className="h-4 w-4" aria-hidden /> {t('auth.switcher.newWorkspace')}
               </button>
             )}
             {error && <p role="alert" className="px-2 pb-1 text-xs text-danger-text">{error}</p>}

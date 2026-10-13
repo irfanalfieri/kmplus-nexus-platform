@@ -1,8 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { freshness } from '@/lib/catalog/definition'
-import { useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 import { ArrowDown, ArrowUp, BarChart3, Database, LayoutDashboard, Loader2, Pencil, Plus, RefreshCw, Save, Trash2 } from 'lucide-react'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -10,11 +9,11 @@ import { Notice } from '@/components/ui/notice'
 import { EmptyState } from '@/components/ui/empty-state'
 import { useConfirm } from '@/components/ui/dialog'
 import { PageHeader } from '@/components/dashboard/page-header'
-import { useT } from '@/components/i18n/i18n-provider'
+import { usePrefs } from '@/components/i18n/i18n-provider'
 import { cn } from '@/lib/utils'
 import { deleteDashboard, getAnalyticsDatasets, getDashboardData, listDashboards, saveDashboard } from '@/lib/actions/analytics'
 import type { Widget } from '@/lib/analytics/definition'
-import { WidgetView } from '@/components/analytics/charts'
+import { WidgetView, freshnessT } from '@/components/analytics/charts'
 import WidgetEditor, { newWidget } from '@/components/analytics/widget-editor'
 import { AiAsk } from '@/components/ai/ai-ask'
 
@@ -23,10 +22,10 @@ type Dash = List['dashboards'][number]
 type Datasets = Awaited<ReturnType<typeof getAnalyticsDatasets>>
 type Results = Awaited<ReturnType<typeof getDashboardData>>['results']
 
-const when = (d: Date | string) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jakarta', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(d)) + ' WIB'
-
 export default function AnalyticsDashboardLayer() {
-  const t = useT()
+  const { t, formatDateTime } = usePrefs()
+  const when = (d: Date | string) =>
+    t('insights.time.wib', { time: formatDateTime(d, { dateStyle: undefined, timeStyle: undefined, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) })
   const [confirm, confirmEl] = useConfirm()
   const [list, setList] = useState<List | null>(null)
   const [datasets, setDatasets] = useState<Datasets>([])
@@ -47,8 +46,9 @@ export default function AnalyticsDashboardLayer() {
       setSelectedId((cur) => (cur && l.dashboards.some((x) => x.id === cur) ? cur : l.dashboards[0]?.id ?? null))
       setError('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load Analytics')
+      setError(err instanceof Error ? err.message : t('insights.analytics.loadFailed'))
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
@@ -62,10 +62,11 @@ export default function AnalyticsDashboardLayer() {
     try {
       setResults((await getDashboardData(id)).results)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load dashboard data')
+      setError(err instanceof Error ? err.message : t('insights.analytics.dataFailed'))
     } finally {
       setLoadingData(false)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
@@ -91,7 +92,7 @@ export default function AnalyticsDashboardLayer() {
       await load()
       setSelectedId(id)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not create the dashboard')
+      setError(err instanceof Error ? err.message : t('insights.analytics.createFailed'))
     } finally {
       setBusy(false)
     }
@@ -103,7 +104,7 @@ export default function AnalyticsDashboardLayer() {
     try {
       await fn()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Something went wrong')
+      setError(err instanceof Error ? err.message : t('common.somethingWrong'))
     } finally {
       setBusy(false)
     }
@@ -120,9 +121,9 @@ export default function AnalyticsDashboardLayer() {
 
   const removeDashboard = async (d: Dash) => {
     const ok = await confirm({
-      title: `Delete dashboard “${d.name}”?`,
-      description: `Its ${d.widgets.length} widget${d.widgets.length === 1 ? '' : 's'} are deleted too. The datasets stay as they are.`,
-      confirmLabel: 'Delete dashboard',
+      title: t('insights.analytics.deleteTitle', { name: d.name }),
+      description: t('insights.analytics.deleteBody', { count: d.widgets.length }),
+      confirmLabel: t('insights.analytics.deleteDashboard'),
       tone: 'danger',
     })
     if (!ok) return
@@ -134,7 +135,12 @@ export default function AnalyticsDashboardLayer() {
   }
 
   const removeWidget = async (d: Dash, w: Widget) => {
-    const ok = await confirm({ title: `Remove widget “${w.title}”?`, description: `It is removed from ${d.name} for everyone.`, confirmLabel: 'Remove widget', tone: 'danger' })
+    const ok = await confirm({
+      title: t('insights.analytics.removeWidgetTitle', { name: w.title }),
+      description: t('insights.analytics.removeWidgetBody', { dashboard: d.name }),
+      confirmLabel: t('insights.analytics.removeWidget'),
+      tone: 'danger',
+    })
     if (ok) await act(() => persist(d, d.widgets.filter((x) => x.id !== w.id)))
   }
 
@@ -162,31 +168,31 @@ export default function AnalyticsDashboardLayer() {
       {!list ? (
         !error && (
           <div className="flex items-center justify-center rounded-lg border border-border bg-card p-10 text-muted-foreground" role="status">
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> Loading dashboards…
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> {t('insights.analytics.loading')}
           </div>
         )
       ) : !list.canView ? (
         <Notice tone="info" live={false}>
-          Your role can&apos;t see data contents, so dashboards aren&apos;t available. Ask a workspace admin for the Analyst role.
+          {t('insights.analytics.noAccess')}
         </Notice>
       ) : datasets.length === 0 ? (
         <div className="rounded-lg border border-border bg-card">
           <EmptyState
             icon={<Database />}
-            title="No datasets yet"
+            title={t('insights.analytics.noDatasetsTitle')}
             action={
               <Link href="/dashboard/pipelines" className={buttonVariants()}>
-                Go to Pipelines
+                {t('insights.analytics.goPipelines')}
               </Link>
             }
           >
-            Dashboards read the datasets your pipelines write. Create a pipeline with a &ldquo;Nexus dataset&rdquo; destination and run it once.
+            {t('insights.analytics.noDatasetsBody')}
           </EmptyState>
         </div>
       ) : (
         <div className="grid gap-6 lg:grid-cols-[240px_1fr]">
           <aside className="space-y-3">
-            <ul className="space-y-1" aria-label="Dashboards">
+            <ul className="space-y-1" aria-label={t('insights.analytics.dashboardsLabel')}>
               {list.dashboards.map((d) => (
                 <li key={d.id}>
                   <button
@@ -198,17 +204,17 @@ export default function AnalyticsDashboardLayer() {
                     )}
                   >
                     <div className="truncate font-medium">{d.name}</div>
-                    <div className="font-mono text-xs text-muted-foreground">{d.widgets.length} widget{d.widgets.length === 1 ? '' : 's'}</div>
+                    <div className="font-mono text-xs text-muted-foreground">{t('insights.analytics.widgets', { count: d.widgets.length })}</div>
                   </button>
                 </li>
               ))}
-              {list.dashboards.length === 0 && <li className="px-3 py-2 text-sm text-muted-foreground">No dashboards yet.</li>}
+              {list.dashboards.length === 0 && <li className="px-3 py-2 text-sm text-muted-foreground">{t('insights.analytics.noDashboards')}</li>}
             </ul>
             {list.canEdit && (
               <form onSubmit={create} className="space-y-2 rounded-lg border border-border bg-card p-3">
-                <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="New dashboard name" aria-label="New dashboard name" required />
+                <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder={t('insights.analytics.newName')} aria-label={t('insights.analytics.newName')} required />
                 <Button type="submit" size="sm" className="w-full" disabled={busy || !newName.trim()}>
-                  <Plus className="mr-1 h-4 w-4" aria-hidden /> Create dashboard
+                  <Plus className="mr-1 h-4 w-4" aria-hidden /> {t('insights.analytics.create')}
                 </Button>
               </form>
             )}
@@ -216,8 +222,8 @@ export default function AnalyticsDashboardLayer() {
 
           {!dash ? (
             <div className="rounded-lg border border-border bg-card">
-              <EmptyState icon={<LayoutDashboard />} title="No dashboard selected">
-                {list.canEdit ? 'Create your first dashboard on the left.' : 'No dashboards in this workspace yet.'}
+              <EmptyState icon={<LayoutDashboard />} title={t('insights.analytics.noneSelectedTitle')}>
+                {list.canEdit ? t('insights.analytics.noneSelectedCreate') : t('insights.analytics.noneSelectedEmpty')}
               </EmptyState>
             </div>
           ) : (
@@ -234,33 +240,39 @@ export default function AnalyticsDashboardLayer() {
                       })
                     }}
                   >
-                    <Input value={rename.name} onChange={(e) => setRename({ ...rename, name: e.target.value })} className="max-w-xs" aria-label="Dashboard name" required />
-                    <Input value={rename.description} onChange={(e) => setRename({ ...rename, description: e.target.value })} placeholder="Description (optional)" className="max-w-md" aria-label="Dashboard description" />
-                    <Button type="submit" size="sm" disabled={busy}><Save className="mr-1 h-4 w-4" aria-hidden /> Save</Button>
-                    <Button type="button" size="sm" variant="ghost" onClick={() => setRename(null)}>Cancel</Button>
+                    <Input value={rename.name} onChange={(e) => setRename({ ...rename, name: e.target.value })} className="max-w-xs" aria-label={t('insights.analytics.nameLabel')} required />
+                    <Input value={rename.description} onChange={(e) => setRename({ ...rename, description: e.target.value })} placeholder={t('insights.analytics.descriptionPlaceholder')} className="max-w-md" aria-label={t('insights.analytics.descriptionLabel')} />
+                    <Button type="submit" size="sm" disabled={busy}><Save className="mr-1 h-4 w-4" aria-hidden /> {t('common.save')}</Button>
+                    <Button type="button" size="sm" variant="ghost" onClick={() => setRename(null)}>{t('common.cancel')}</Button>
                   </form>
                 ) : (
                   <div className="min-w-0">
                     <h2 className="text-lg font-semibold">{dash.name}</h2>
                     <p className="text-xs text-muted-foreground">
-                      {dash.description ? `${dash.description} · ` : ''}updated <span className="font-mono">{when(dash.updatedAt)}</span>
+                      {dash.description ? `${dash.description} · ` : ''}
+                      {t('insights.analytics.updated').split('{when}').map((part, i) => (
+                        <Fragment key={i}>
+                          {i > 0 && <span className="font-mono">{when(dash.updatedAt)}</span>}
+                          {part}
+                        </Fragment>
+                      ))}
                     </p>
                   </div>
                 )}
                 {!rename && (
                   <div className="flex flex-wrap gap-2">
                     <Button size="sm" variant="outline" onClick={() => void loadData(dash.id)} disabled={loadingData || !dash.widgets.length}>
-                      <RefreshCw className={cn('mr-1 h-4 w-4', loadingData && 'animate-spin')} aria-hidden /> Refresh
+                      <RefreshCw className={cn('mr-1 h-4 w-4', loadingData && 'animate-spin')} aria-hidden /> {t('common.refresh')}
                     </Button>
                     {list.canEdit && (
                       <>
                         <Button size="sm" onClick={() => setEditing(newWidget(datasets[0].name))} disabled={dash.widgets.length >= 24}>
-                          <Plus className="mr-1 h-4 w-4" aria-hidden /> Add widget
+                          <Plus className="mr-1 h-4 w-4" aria-hidden /> {t('insights.analytics.addWidget')}
                         </Button>
-                        <Button size="icon-sm" variant="ghost" onClick={() => setRename({ name: dash.name, description: dash.description })} aria-label="Rename dashboard" title="Rename dashboard">
+                        <Button size="icon-sm" variant="ghost" onClick={() => setRename({ name: dash.name, description: dash.description })} aria-label={t('insights.analytics.rename')} title={t('insights.analytics.rename')}>
                           <Pencil className="h-4 w-4" aria-hidden />
                         </Button>
-                        <Button size="icon-sm" variant="ghost" disabled={busy} onClick={() => void removeDashboard(dash)} aria-label="Delete dashboard" title="Delete dashboard">
+                        <Button size="icon-sm" variant="ghost" disabled={busy} onClick={() => void removeDashboard(dash)} aria-label={t('insights.analytics.deleteDashboard')} title={t('insights.analytics.deleteDashboard')}>
                           <Trash2 className="h-4 w-4" aria-hidden />
                         </Button>
                       </>
@@ -273,16 +285,16 @@ export default function AnalyticsDashboardLayer() {
                 <div className="rounded-lg border border-border bg-card">
                   <EmptyState
                     icon={<BarChart3 />}
-                    title="No widgets yet"
+                    title={t('insights.analytics.noWidgetsTitle')}
                     action={
                       list.canEdit ? (
                         <Button onClick={() => setEditing(newWidget(datasets[0].name))}>
-                          <Plus className="mr-1 h-4 w-4" aria-hidden /> Add widget
+                          <Plus className="mr-1 h-4 w-4" aria-hidden /> {t('insights.analytics.addWidget')}
                         </Button>
                       ) : undefined
                     }
                   >
-                    {list.canEdit ? 'Empty dashboard. Add a widget: for example "Count rows by department".' : 'This dashboard has no widgets yet.'}
+                    {list.canEdit ? t('insights.analytics.noWidgetsEdit') : t('insights.analytics.noWidgetsView')}
                   </EmptyState>
                 </div>
               ) : (
@@ -296,21 +308,21 @@ export default function AnalyticsDashboardLayer() {
                             <h3 className="truncate font-medium">{w.title}</h3>
                             <p className="truncate text-xs text-muted-foreground">
                               <span className="font-mono">{w.dataset}</span>
-                              {w.filters.length ? ` · ${w.filters.length} filter${w.filters.length === 1 ? '' : 's'}` : ''}
-                              {r?.ok && r.result.lastLoadedAt ? ` · loaded ${freshness(r.result.lastLoadedAt)}` : ''}
+                              {w.filters.length ? ` · ${t('insights.analytics.filters', { count: w.filters.length })}` : ''}
+                              {r?.ok && r.result.lastLoadedAt ? ` · ${t('insights.analytics.loaded', { when: freshnessT(r.result.lastLoadedAt, t) })}` : ''}
                             </p>
                           </div>
                           {list.canEdit && (
                             <div className="flex shrink-0">
-                              <Button size="icon-sm" variant="ghost" onClick={() => move(i, -1)} disabled={busy || i === 0} aria-label={`Move ${w.title} up`}><ArrowUp className="h-4 w-4" aria-hidden /></Button>
-                              <Button size="icon-sm" variant="ghost" onClick={() => move(i, 1)} disabled={busy || i === dash.widgets.length - 1} aria-label={`Move ${w.title} down`}><ArrowDown className="h-4 w-4" aria-hidden /></Button>
-                              <Button size="icon-sm" variant="ghost" onClick={() => setEditing(w)} aria-label={`Edit ${w.title}`}><Pencil className="h-4 w-4" aria-hidden /></Button>
-                              <Button size="icon-sm" variant="ghost" disabled={busy} onClick={() => void removeWidget(dash, w)} aria-label={`Remove ${w.title}`}><Trash2 className="h-4 w-4" aria-hidden /></Button>
+                              <Button size="icon-sm" variant="ghost" onClick={() => move(i, -1)} disabled={busy || i === 0} aria-label={t('insights.analytics.moveUp', { name: w.title })}><ArrowUp className="h-4 w-4" aria-hidden /></Button>
+                              <Button size="icon-sm" variant="ghost" onClick={() => move(i, 1)} disabled={busy || i === dash.widgets.length - 1} aria-label={t('insights.analytics.moveDown', { name: w.title })}><ArrowDown className="h-4 w-4" aria-hidden /></Button>
+                              <Button size="icon-sm" variant="ghost" onClick={() => setEditing(w)} aria-label={t('insights.analytics.editWidget', { name: w.title })}><Pencil className="h-4 w-4" aria-hidden /></Button>
+                              <Button size="icon-sm" variant="ghost" disabled={busy} onClick={() => void removeWidget(dash, w)} aria-label={t('insights.analytics.removeWidgetLabel', { name: w.title })}><Trash2 className="h-4 w-4" aria-hidden /></Button>
                             </div>
                           )}
                         </div>
                         {!r ? (
-                          <div className="flex h-32 items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> Loading…</div>
+                          <div className="flex h-32 items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> {t('common.loading')}</div>
                         ) : r.ok ? (
                           <WidgetView widget={w} result={r.result} />
                         ) : (

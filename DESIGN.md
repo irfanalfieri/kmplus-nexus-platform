@@ -358,6 +358,10 @@ This is the mimic-panel signature. **FlowLine** draws `bus ─ breaker ─ bus` 
 ### EmptyState
 An honest empty screen. The icon sits on a dashed, open Paused Gray bus, followed by a semibold title, a muted explanation (at most 28rem wide) and the one next action. It is 56px tall in its spacious form or 32px when compact.
 
+### Email
+
+Every email Nexus sends uses one layout (`lib/email.ts` `render`), table-based with inline styles for mail clients: the board colour (#f2f4f8) around a 600px column; a Rail (#081a1c) band with the on-dark logo (74×40) and "Nexus" in light 18px; a 3px Rail Signal (#3ddbd9) line; a white card with a 22px/600 heading, 15px/24px body in gray-80, an optional state mark (soft fill, 1px mark border, square mark + words, never colour alone), an optional details table (mono uppercase labels, 1px gray-20 rules), one teal (#007d79) button with a "copy this link" fallback in mono, and a quieter note under a rule; a footer saying it was sent automatically and why. Plex Sans/Mono with Segoe UI/Arial and Consolas fallbacks; `color-scheme: light` so clients don't invert it. Every email has a plain-text twin.
+
 ## Do's and Don'ts
 
 ### Do:

@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useId, useState } from 'react'
+import { Fragment, useCallback, useEffect, useId, useState } from 'react'
 import { Loader2, Lock, Unlock } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -9,12 +9,18 @@ import { useConfirm } from '@/components/ui/dialog'
 import { SettingsPanel, nativeSelectClass } from '@/components/workspace/settings-panel'
 import { getEnvironments, linkEnvironment, setApprovalPolicy, setEnvironmentLock, setupEnvironments, unlinkEnvironment } from '@/lib/actions/environments'
 import { switchWorkspace } from '@/lib/actions/workspaces'
-import { APPROVAL_POLICIES, APPROVAL_POLICY_INFO, type ApprovalPolicy } from '@/lib/pipelines/approvals'
-import { ENVIRONMENTS, ENVIRONMENT_INFO, type Environment } from '@/lib/pipelines/promote'
-import { ROLE_INFO, isRole } from '@/lib/auth/permissions'
+import { APPROVAL_POLICIES, type ApprovalPolicy } from '@/lib/pipelines/approvals'
+import { ENVIRONMENTS, type Environment } from '@/lib/pipelines/promote'
+import { isRole } from '@/lib/auth/permissions'
+import { useT } from '@/components/i18n/i18n-provider'
 import { EnvironmentBadge } from './environment-badge'
 
 type Info = Awaited<ReturnType<typeof getEnvironments>>
+
+/** Fills {slots} in a translated sentence with elements. */
+function rich(text: string, slots: Record<string, React.ReactNode>) {
+  return text.split(/\{(\w+)\}/).map((part, i) => (i % 2 ? <Fragment key={i}>{slots[part] ?? `{${part}}`}</Fragment> : part))
+}
 
 /**
  * Settings → Approvals & environments (GV-6, GV-7). Admins choose who must
@@ -22,6 +28,9 @@ type Info = Awaited<ReturnType<typeof getEnvironments>>
  * so pipelines are promoted between them with each environment's own credentials.
  */
 export function EnvironmentsSettings() {
+  const t = useT()
+  const envLabel = (e: Environment) => t(`ws.env.names.${e}` as const)
+  const policyLabel = (p: ApprovalPolicy) => t(`ws.env.policies.${p}.label` as const)
   const id = useId()
   const [info, setInfo] = useState<Info | null>(null)
   const [busy, setBusy] = useState(false)
@@ -36,9 +45,9 @@ export function EnvironmentsSettings() {
     try {
       setInfo(await getEnvironments())
     } catch (err) {
-      setMessage({ kind: 'err', text: err instanceof Error ? err.message : 'Could not load environments' })
+      setMessage({ kind: 'err', text: err instanceof Error ? err.message : t('ws.env.loadFailed') })
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     void load()
@@ -53,7 +62,7 @@ export function EnvironmentsSettings() {
       setMessage({ kind: 'ok', text: ok })
       await load()
     } catch (err) {
-      setMessage({ kind: 'err', text: err instanceof Error ? err.message : 'Failed' })
+      setMessage({ kind: 'err', text: err instanceof Error ? err.message : t('ws.common.failed') })
     } finally {
       setBusy(false)
     }
@@ -63,12 +72,12 @@ export function EnvironmentsSettings() {
 
   if (!info) {
     return (
-      <SettingsPanel title="Publish approvals & environments">
+      <SettingsPanel title={t('ws.env.loadingTitle')}>
         {message?.kind === 'err' ? (
           messageEl
         ) : (
           <p className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" aria-hidden /> Loading approvals & environments…
+            <Loader2 className="size-4 animate-spin" aria-hidden /> {t('ws.env.loading')}
           </p>
         )}
       </SettingsPanel>
@@ -81,43 +90,43 @@ export function EnvironmentsSettings() {
 
   return (
     <>
-      <SettingsPanel title="Publish approvals" description="A second person (admin or data steward) approves pipeline versions before they run. Nobody approves their own change.">
+      <SettingsPanel title={t('ws.env.approvalsTitle')} description={t('ws.env.approvalsDescription')}>
         <div className="flex flex-wrap items-center gap-2">
           <Label htmlFor={`${id}-policy`} className="sr-only">
-            Publish approvals
+            {t('ws.env.approvalsTitle')}
           </Label>
           <select
             id={`${id}-policy`}
             className={nativeSelectClass}
             value={current.publishApproval}
             disabled={busy}
-            onChange={(e) => void act(() => setApprovalPolicy(e.target.value as ApprovalPolicy), 'Approval setting saved.', true)}
+            onChange={(e) => void act(() => setApprovalPolicy(e.target.value as ApprovalPolicy), t('ws.env.approvalSaved'), true)}
           >
             {APPROVAL_POLICIES.map((p) => (
               <option key={p} value={p}>
-                {APPROVAL_POLICY_INFO[p].label}
+                {policyLabel(p)}
               </option>
             ))}
           </select>
-          <span className="text-xs text-muted-foreground">{APPROVAL_POLICY_INFO[current.publishApproval].description}</span>
+          <span className="text-xs text-muted-foreground">{t(`ws.env.policies.${current.publishApproval}.description` as const)}</span>
         </div>
         {current.approvers < 2 && (
           <Notice tone="warning" className="mt-3" live={false}>
-            Needs at least two admins or data stewards in this workspace (<span className="font-mono">{current.approvers}</span> now).
+            {rich(t('ws.env.needsApprovers'), { count: <span className="font-mono">{current.approvers}</span> })}
           </Notice>
         )}
       </SettingsPanel>
 
       <SettingsPanel
-        title="Environments"
-        description="Link workspaces as Development → Staging → Production. Each keeps its own members, data sources and credentials; pipelines move forward with Promote, which matches data sources by name. Production starts locked, so its pipelines change only by promotion."
+        title={t('ws.env.envTitle')}
+        description={t('ws.env.envDescription')}
       >
         {!current.environment ? (
           <div className="space-y-3 rounded-md border border-border p-3 text-sm">
-            <h3 className="font-semibold">Set up environments</h3>
+            <h3 className="font-semibold">{t('ws.env.setupTitle')}</h3>
             <div className="flex flex-wrap items-center gap-2">
               <Label htmlFor={`${id}-setup`} className="font-normal">
-                This workspace is
+                {t('ws.env.thisIs')}
               </Label>
               <select
                 id={`${id}-setup`}
@@ -127,13 +136,13 @@ export function EnvironmentsSettings() {
               >
                 {ENVIRONMENTS.map((e) => (
                   <option key={e} value={e}>
-                    {ENVIRONMENT_INFO[e].label}
+                    {envLabel(e)}
                   </option>
                 ))}
               </select>
             </div>
             <fieldset className="flex flex-wrap gap-3">
-              <legend className="sr-only">Workspaces to create</legend>
+              <legend className="sr-only">{t('ws.env.toCreate')}</legend>
               {ENVIRONMENTS.filter((e) => e !== setupEnv).map((e) => (
                 <label key={e} className="flex items-center gap-2">
                   <input
@@ -142,35 +151,36 @@ export function EnvironmentsSettings() {
                     checked={create.includes(e)}
                     onChange={(ev) => setCreate(ev.target.checked ? [...create, e] : create.filter((x) => x !== e))}
                   />
-                  Create a {ENVIRONMENT_INFO[e].label} workspace
+                  {t('ws.env.createWorkspace', { env: envLabel(e) })}
                 </label>
               ))}
             </fieldset>
-            <Button size="sm" disabled={busy} onClick={() => void act(() => setupEnvironments({ environment: setupEnv, create }), 'Environments set up.', true)}>
-              {busy && <Loader2 className="animate-spin" aria-hidden />} Set up environments
+            <Button size="sm" disabled={busy} onClick={() => void act(() => setupEnvironments({ environment: setupEnv, create }), t('ws.env.setupDone'), true)}>
+              {busy && <Loader2 className="animate-spin" aria-hidden />} {t('ws.env.setupButton')}
             </Button>
           </div>
         ) : (
           <div className="space-y-3">
-            <ul className="divide-y divide-border rounded-md border border-border text-sm" aria-label="Linked environments">
+            <ul className="divide-y divide-border rounded-md border border-border text-sm" aria-label={t('ws.env.linked')}>
               {group.map((g) => (
                 <li key={g.id} className="flex flex-wrap items-center gap-2 p-3">
                   <EnvironmentBadge environment={g.environment} />
                   <span className="font-medium">{g.name}</span>
-                  {g.id === current.id && <span className="text-xs text-muted-foreground">(this workspace)</span>}
+                  {g.id === current.id && <span className="text-xs text-muted-foreground">{t('ws.env.thisWorkspace')}</span>}
                   {g.locked && (
                     <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                      <Lock className="size-3" aria-hidden /> locked
+                      <Lock className="size-3" aria-hidden /> {t('ws.env.locked')}
                     </span>
                   )}
                   <span className="text-xs text-muted-foreground">
-                    approvals:{' '}
-                    {APPROVAL_POLICY_INFO[(APPROVAL_POLICIES as readonly string[]).includes(g.publishApproval) ? (g.publishApproval as ApprovalPolicy) : 'off'].label.toLowerCase()}
+                    {t('ws.env.approvals', {
+                      policy: policyLabel((APPROVAL_POLICIES as readonly string[]).includes(g.publishApproval) ? (g.publishApproval as ApprovalPolicy) : 'off').toLocaleLowerCase(),
+                    })}
                   </span>
-                  <span className="ml-auto text-xs text-muted-foreground">{g.role && isRole(g.role) ? `you: ${ROLE_INFO[g.role].label}` : 'not a member'}</span>
+                  <span className="ml-auto text-xs text-muted-foreground">{g.role && isRole(g.role) ? t('ws.env.you', { role: t(`ws.roles.${g.role}` as const) }) : t('ws.env.notMember')}</span>
                   {g.id !== current.id && g.role && (
-                    <Button size="sm" variant="ghost" disabled={busy} aria-label={`Open ${g.name}`} onClick={() => void act(() => switchWorkspace(g.id), '', true)}>
-                      Open
+                    <Button size="sm" variant="ghost" disabled={busy} aria-label={t('ws.env.openLabel', { name: g.name })} onClick={() => void act(() => switchWorkspace(g.id), '', true)}>
+                      {t('ws.env.open')}
                     </Button>
                   )}
                   {g.role === 'admin' && (
@@ -178,18 +188,18 @@ export function EnvironmentsSettings() {
                       size="sm"
                       variant="ghost"
                       disabled={busy}
-                      aria-label={`Unlink ${g.name}`}
+                      aria-label={t('ws.env.unlinkLabel', { name: g.name })}
                       onClick={async () => {
                         const ok = await confirm({
-                          title: `Unlink ${g.name} from the environment group?`,
-                          description: 'Pipelines can no longer be promoted to or from it. Its data and pipelines stay as they are.',
-                          confirmLabel: 'Unlink',
+                          title: t('ws.env.unlinkTitle', { name: g.name }),
+                          description: t('ws.env.unlinkBody'),
+                          confirmLabel: t('ws.env.unlink'),
                           tone: 'danger',
                         })
-                        if (ok) void act(() => unlinkEnvironment(g.id), `${g.name} left the group.`, g.id === current.id)
+                        if (ok) void act(() => unlinkEnvironment(g.id), t('ws.env.unlinked', { name: g.name }), g.id === current.id)
                       }}
                     >
-                      Unlink
+                      {t('ws.env.unlink')}
                     </Button>
                   )}
                 </li>
@@ -203,46 +213,46 @@ export function EnvironmentsSettings() {
                 onClick={async () => {
                   if (current.locked) {
                     const ok = await confirm({
-                      title: 'Unlock this workspace?',
-                      description: 'Pipelines here can then be edited directly instead of only by promotion.',
-                      confirmLabel: 'Unlock',
+                      title: t('ws.env.unlockTitle'),
+                      description: t('ws.env.unlockBody'),
+                      confirmLabel: t('ws.env.unlockConfirm'),
                       tone: 'danger',
                     })
                     if (!ok) return
                   }
-                  void act(() => setEnvironmentLock(!current.locked), current.locked ? 'Unlocked: pipelines can be edited here.' : 'Locked: pipelines change only by promotion.', true)
+                  void act(() => setEnvironmentLock(!current.locked), current.locked ? t('ws.env.unlockedDone') : t('ws.env.lockedDone'), true)
                 }}
               >
                 {current.locked ? <Unlock aria-hidden /> : <Lock aria-hidden />}
-                {current.locked ? 'Unlock this workspace' : 'Lock this workspace'}
+                {current.locked ? t('ws.env.unlockButton') : t('ws.env.lockButton')}
               </Button>
               {info.next ? (
                 <span className="text-xs text-muted-foreground">
-                  Pipelines here promote to {ENVIRONMENT_INFO[info.next.environment].label} ({info.next.name}){info.next.member ? '' : ': ask its admin to add you as an editor'}.
+                  {t(info.next.member ? 'ws.env.promotesTo' : 'ws.env.promotesToAsk', { env: envLabel(info.next.environment), name: info.next.name })}
                 </span>
               ) : (
-                <span className="text-xs text-muted-foreground">This is the last environment.</span>
+                <span className="text-xs text-muted-foreground">{t('ws.env.lastEnv')}</span>
               )}
             </div>
             {freeEnvs.length > 0 && info.linkable.length > 0 && (
               <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3 text-sm">
-                <h3 className="sr-only">Link a workspace</h3>
+                <h3 className="sr-only">{t('ws.env.linkHeading')}</h3>
                 <Label htmlFor={`${id}-link`} className="font-normal">
-                  Link
+                  {t('ws.env.link')}
                 </Label>
-                <select id={`${id}-link`} className={nativeSelectClass} value={linkId} onChange={(e) => setLinkId(e.target.value)} aria-label="Workspace to link">
-                  <option value="">a workspace you administer…</option>
+                <select id={`${id}-link`} className={nativeSelectClass} value={linkId} onChange={(e) => setLinkId(e.target.value)} aria-label={t('ws.env.linkWorkspace')}>
+                  <option value="">{t('ws.env.linkPlaceholder')}</option>
                   {info.linkable.map((w) => (
                     <option key={w.id} value={w.id}>
                       {w.name}
                     </option>
                   ))}
                 </select>
-                <span aria-hidden>as</span>
-                <select className={nativeSelectClass} value={freeEnvs.includes(linkEnv) ? linkEnv : freeEnvs[0]} onChange={(e) => setLinkEnv(e.target.value as Environment)} aria-label="Its environment">
+                <span aria-hidden>{t('ws.env.as')}</span>
+                <select className={nativeSelectClass} value={freeEnvs.includes(linkEnv) ? linkEnv : freeEnvs[0]} onChange={(e) => setLinkEnv(e.target.value as Environment)} aria-label={t('ws.env.itsEnv')}>
                   {freeEnvs.map((e) => (
                     <option key={e} value={e}>
-                      {ENVIRONMENT_INFO[e].label}
+                      {envLabel(e)}
                     </option>
                   ))}
                 </select>
@@ -250,9 +260,9 @@ export function EnvironmentsSettings() {
                   size="sm"
                   variant="outline"
                   disabled={busy || !linkId}
-                  onClick={() => void act(() => linkEnvironment({ workspaceId: linkId, environment: freeEnvs.includes(linkEnv) ? linkEnv : freeEnvs[0] }), 'Workspace linked.')}
+                  onClick={() => void act(() => linkEnvironment({ workspaceId: linkId, environment: freeEnvs.includes(linkEnv) ? linkEnv : freeEnvs[0] }), t('ws.env.linkedDone'))}
                 >
-                  Link
+                  {t('ws.env.link')}
                 </Button>
               </div>
             )}

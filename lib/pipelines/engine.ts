@@ -1,4 +1,5 @@
 import { OTHERWISE, stepTitle, topoOrder, type DestinationStep, type PipelineDefinition, type PipelineNode, type Severity, type SourceStep } from './definition'
+import { checkText } from './check-messages'
 import { applyMap, matchesFilter, validateRow, type LookupTables, type Row } from './transforms'
 import { evalGroup } from './conditions'
 import { compareWatermarks, inferColumns, maxWatermark, type OutputColumn, type TypeHints } from './columns'
@@ -323,7 +324,7 @@ export function transformChunk(
           } else if (hold && keep) {
             stat.rejected++
             totals.heldCount++
-            result.rejects.push({ stepId: node.id, row: original, errors: [`Needs approval (${hold})`], severity: 'info', kind: 'approval' })
+            result.rejects.push({ stepId: node.id, row: original, errors: [checkText('needsApproval', { reason: hold })], severity: 'info', kind: 'approval' })
           } else if (keep) next.push(r)
         }
         stat.rowsOut += next.length

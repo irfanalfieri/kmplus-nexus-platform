@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { and, desc, eq, gte, inArray, isNull, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/lib/db'
-import { connectorInstalls, dataSources, executionLogs, nexusDatasets, notifications, pipelines } from '@/lib/db/schema'
+import { connectorInstalls, dataSources, executionLogs, nexusDatasets, notifications, pipelineApprovals, pipelineRunRejects, pipelines } from '@/lib/db/schema'
 import { requireWorkspace } from '@/lib/auth/session'
 import { scheduleSchema } from '@/lib/pipelines/definition'
 import { activeJobs } from '@/lib/pipelines/jobs'
@@ -186,7 +186,7 @@ async function markNotificationsReadImpl(ids?: string[]) {
 async function getOverviewImpl() {
   const ctx = await requireWorkspace()
   const since24h = new Date(Date.now() - 86_400_000)
-  const [[sources], [installs], [pipes], [runs24], [datasets], attention] = await Promise.all([
+  const [[sources], [installs], [pipes], [runs24], [datasets], attention, [held], [approvals], sourceList] = await Promise.all([
     db
       .select({ total: sql<number>`count(*)::int`, connected: sql<number>`count(*) filter (where ${dataSources.status} = 'connected')::int` })
       .from(dataSources)
@@ -222,8 +222,30 @@ async function getOverviewImpl() {
       .where(and(eq(pipelines.workspaceId, ctx.workspaceId), inArray(pipelines.lastRunStatus, ['failed', 'partial'])))
       .orderBy(desc(pipelines.lastRunAt))
       .limit(5),
+    // Rows waiting in the quarantine (counts only), by kind.
+    db
+      .select({
+        total: sql<number>`count(*)::int`,
+        invalid: sql<number>`count(*) filter (where ${pipelineRunRejects.kind} = 'invalid')::int`,
+        approval: sql<number>`count(*) filter (where ${pipelineRunRejects.kind} = 'approval')::int`,
+        flag: sql<number>`count(*) filter (where ${pipelineRunRejects.kind} = 'flag')::int`,
+      })
+      .from(pipelineRunRejects)
+      .where(and(eq(pipelineRunRejects.workspaceId, ctx.workspaceId), eq(pipelineRunRejects.status, 'open'))),
+    db
+      .select({ pending: sql<number>`count(*)::int` })
+      .from(pipelineApprovals)
+      .where(and(eq(pipelineApprovals.workspaceId, ctx.workspaceId), eq(pipelineApprovals.status, 'pending'))),
+    db
+      .select({ id: dataSources.id, name: dataSources.name, status: dataSources.status, sourceType: dataSources.sourceType })
+      .from(dataSources)
+      .where(eq(dataSources.workspaceId, ctx.workspaceId))
+      .orderBy(dataSources.name),
   ])
   return {
+    held: held ?? { total: 0, invalid: 0, approval: 0, flag: 0 },
+    approvalsPending: approvals?.pending ?? 0,
+    sourceList,
     sources,
     connectorsInstalled: installs?.installed ?? 0,
     pipelines: pipes,

@@ -8,6 +8,7 @@ import { auditSsoLogin, emailAllowedForProvider, enforcedProviderFor, provisionS
 import { SsoConfigPlugin } from '@/lib/auth/sso-config-plugin'
 import { pool } from '@/lib/db'
 import { emailEnabled, sendEmail } from '@/lib/email'
+import { requestLocale, verifyEmail } from '@/lib/email-templates'
 
 export const APP_NAME = 'KMPlus Nexus'
 
@@ -120,17 +121,7 @@ export const auth = betterAuth({
     expiresIn: 60 * 60 * 24,
     sendVerificationEmail: async ({ user, url }) => {
       try {
-        await sendEmail({
-          to: user.email,
-          subject: 'Verify your email for KMPlus Nexus',
-          lines: [
-            `Hi ${user.name || user.email},`,
-            'Confirm this is your email address to finish creating your KMPlus Nexus account. The link works for 24 hours.',
-            'Next you will set up two-factor authentication with an authenticator app (Google Authenticator, Microsoft Authenticator, 1Password, Authy, …).',
-            "If you didn't sign up, ignore this email.",
-          ],
-          action: { label: 'Verify email', url },
-        })
+        await sendEmail({ to: user.email, ...verifyEmail({ name: user.name || user.email, url, locale: await requestLocale() }) })
       } catch (err) {
         console.error('[auth] verification email failed:', err instanceof Error ? err.message : err)
         throw err

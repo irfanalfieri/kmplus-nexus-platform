@@ -14,7 +14,7 @@ import { FlowLine, StateMark, type FlowState } from '@/components/ui/flow-line'
 import { useToast } from '@/components/ui/toast'
 import { deletePipeline, discardDraft, getBuilderOptions, publishPipeline, getDatasetPreview, getRunStatus, listPipelines, resetSyncPosition, runPipelineNow, setPipelineEnabled } from '@/lib/actions/pipelines'
 import { DEFAULT_SCHEDULE, DEFAULT_SETTINGS, definitionSchema, scheduleSchema, topoOrder, type PipelineDefinition } from '@/lib/pipelines/definition'
-import { describeSchedule } from '@/lib/pipelines/schedule'
+import { describeScheduleT } from '@/lib/pipelines/schedule'
 import PipelineEditor, { blankPipeline, SampleTable, type EditablePipeline } from '@/components/pipelines/pipeline-editor'
 import TemplatePicker from '@/components/pipelines/template-picker'
 import RunHistory from '@/components/pipelines/run-history'
@@ -30,7 +30,7 @@ import PromoteDialog from '@/components/pipelines/promote-dialog'
 import { listPromotionStatus } from '@/lib/actions/environments'
 import { ENVIRONMENT_INFO, isEnvironment } from '@/lib/pipelines/promote'
 
-type PipelineRow = Awaited<ReturnType<typeof listPipelines>>[number]
+import { ends, lineState, type PipelineRow } from '@/components/pipelines/line-state'
 
 function toEditable(p: PipelineRow): EditablePipeline {
   // Edit the unpublished draft when there is one, else the published definition.
@@ -52,33 +52,6 @@ function toEditable(p: PipelineRow): EditablePipeline {
   }
 }
 
-/** The two ends of the line: source table → destination(s). */
-function ends(def: PipelineDefinition | null, sourceName: (id: string) => string, t: Translate) {
-  if (!def) return { from: t('pipelines.noSource'), table: '', to: t('pipelines.noDestination') }
-  const order = topoOrder(def.nodes, def.edges) ?? def.nodes
-  const src = order.find((n) => n.type === 'source')
-  const dests = order.flatMap((d) => (d.type !== 'destination' ? [] : d.kind === 'dataset' ? [d.datasetName] : [`${sourceName(d.dataSourceId)} · ${d.table}`]))
-  return {
-    // The source bus names the system and table; the destination bus the dataset, product or table it feeds.
-    from: src?.type === 'source' ? sourceName(src.dataSourceId) : t('pipelines.noSource'),
-    table: src?.type === 'source' ? src.table : '',
-    to: dests.length ? (dests.length > 1 ? `${dests[0]} +${dests.length - 1}` : dests[0]) : t('pipelines.noDestination'),
-  }
-}
-
-/** A pipeline reads like a breaker: what state is its line in? */
-function lineState(p: PipelineRow, running: boolean, t: Translate): { state: FlowState; label: string } {
-  const schedule = scheduleSchema.safeParse(p.schedule ?? {}).data ?? DEFAULT_SCHEDULE
-  if (running || p.lastRunStatus === 'running' || p.lastRunStatus === 'queued') return { state: 'running', label: t('state.running') }
-  if (p.pendingApproval) return { state: 'held', label: t('state.awaitingApproval') }
-  if (p.lastRunStatus === 'failed') return { state: 'tripped', label: t('state.failed') }
-  if (p.heldRows > 0) return { state: 'tripped', label: t('state.held', { count: p.heldRows }) }
-  if (!(p.version ?? 0)) return { state: 'idle', label: t('state.draft') }
-  if (schedule.type !== 'manual' && !p.enabled) return { state: 'paused', label: t('state.paused') }
-  if (!p.lastRunStatus) return { state: 'idle', label: t('state.neverRun') }
-  if (p.lastRunStatus === 'cancelled') return { state: 'paused', label: t('state.cancelled') }
-  return { state: 'live', label: t('state.succeeded') }
-}
 
 export default function PipelineDesignerLayer() {
   const { t, formatDateTime, formatNumber } = usePrefs()
@@ -412,7 +385,7 @@ export default function PipelineDesignerLayer() {
                   const src = def?.nodes.find((n) => n.type === 'source')
                   const incremental = src?.type === 'source' && src.mode === 'incremental' ? src : null
                   const meta = [
-                    describeSchedule(schedule) + (schedule.type === 'after' ? ` (${items.find((x) => x.id === schedule.afterPipelineId)?.name ?? '—'})` : ''),
+                    describeScheduleT(schedule, t) + (schedule.type === 'after' ? ` (${items.find((x) => x.id === schedule.afterPipelineId)?.name ?? '—'})` : ''),
                     schedule.type !== 'manual' && p.enabled && p.nextRunAt ? t('pipelines.next', { when: when(p.nextRunAt) }) : null,
                     p.webhookTrigger ? t('pipelines.webhook') : null,
                   ].filter(Boolean)

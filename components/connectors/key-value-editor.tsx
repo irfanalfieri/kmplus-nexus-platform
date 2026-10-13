@@ -3,6 +3,7 @@
 import { Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { useT } from '@/components/i18n/i18n-provider'
 import {
   EMPTY_KV,
   parseKeyValueList,
@@ -25,15 +26,19 @@ interface KeyValueEditorProps {
 export default function KeyValueEditor({
   value,
   onChange,
-  keyPlaceholder = 'Key',
-  valuePlaceholder = 'Value',
+  keyPlaceholder: keyPlaceholderProp,
+  valuePlaceholder: valuePlaceholderProp,
   showDescription = false,
   keyLabel,
   valueLabel,
 }: KeyValueEditorProps) {
+  const t = useT()
+  const keyPlaceholder = keyPlaceholderProp ?? t('connect.kv.key')
+  const valuePlaceholder = valuePlaceholderProp ?? t('connect.kv.value')
   const pairs = parseKeyValueList(value)
-  const keyName = keyLabel ?? `${keyPlaceholder} name`
-  const valueName = valueLabel ?? (valuePlaceholder === 'Value' ? `${keyPlaceholder} value` : valuePlaceholder)
+  const keyName = keyLabel ?? t('connect.kv.keyName', { name: keyPlaceholder })
+  const valueName =
+    valueLabel ?? (valuePlaceholder === t('connect.kv.value') ? t('connect.kv.valueName', { name: keyPlaceholder }) : valuePlaceholder)
   const rowName = keyPlaceholder.toLowerCase()
 
   const update = (next: KeyValuePair[]) => {
@@ -69,19 +74,19 @@ export default function KeyValueEditor({
               checked={pair.enabled}
               onChange={(e) => setPair(index, { enabled: e.target.checked })}
               className="size-4 rounded border-input accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-              aria-label={`Send ${rowName} row ${n}`}
+              aria-label={t('connect.kv.sendRow', { name: rowName, n })}
             />
             <Input
               className="h-8 font-mono text-xs"
               placeholder={keyPlaceholder}
-              aria-label={`${keyName}, row ${n}`}
+              aria-label={t('connect.kv.fieldRow', { label: keyName, n })}
               value={pair.key}
               onChange={(e) => setPair(index, { key: e.target.value })}
             />
             <Input
               className="h-8 font-mono text-xs"
               placeholder={valuePlaceholder}
-              aria-label={`${valueName}, row ${n}`}
+              aria-label={t('connect.kv.fieldRow', { label: valueName, n })}
               value={pair.value}
               onChange={(e) => setPair(index, { value: e.target.value })}
               type={valuePlaceholder.toLowerCase().includes('secret') ? 'password' : 'text'}
@@ -92,15 +97,15 @@ export default function KeyValueEditor({
               variant="ghost"
               className="shrink-0"
               onClick={() => removeRow(index)}
-              aria-label={`Remove ${rowName} row ${n}`}
+              aria-label={t('connect.kv.removeRow', { name: rowName, n })}
             >
               <Trash2 className="size-3.5" aria-hidden />
             </Button>
             {showDescription && (
               <Input
                 className="col-span-4 h-8 font-mono text-xs"
-                placeholder="Description (optional)"
-                aria-label={`Description, ${rowName} row ${n}`}
+                placeholder={t('connect.kv.description')}
+                aria-label={t('connect.kv.descriptionRow', { name: rowName, n })}
                 value={pair.description ?? ''}
                 onChange={(e) => setPair(index, { description: e.target.value })}
               />
@@ -110,7 +115,7 @@ export default function KeyValueEditor({
       })}
       <Button type="button" size="sm" variant="outline" onClick={addRow}>
         <Plus aria-hidden />
-        Add row
+        {t('connect.kv.addRow')}
       </Button>
     </div>
   )

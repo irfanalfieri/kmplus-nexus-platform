@@ -11,11 +11,12 @@ import { PageHeader } from '@/components/dashboard/page-header'
 import { usePrefs } from '@/components/i18n/i18n-provider'
 import { getConnectorMarketplace, installConnector, uninstallConnector } from '@/lib/actions/connectors'
 import { useCan } from '@/components/workspace/workspace-context'
+import type { MessageKey } from '@/lib/i18n/translate'
 
 type MarketplaceConnector = Awaited<ReturnType<typeof getConnectorMarketplace>>[number]
 
 export default function ConnectorLayer() {
-  const { t } = usePrefs()
+  const { t, formatNumber } = usePrefs()
   const [connectors, setConnectors] = useState<MarketplaceConnector[]>([])
   const [loading, setLoading] = useState(true)
   const [installingSlug, setInstallingSlug] = useState<string | null>(null)
@@ -28,11 +29,11 @@ export default function ConnectorLayer() {
     try {
       setConnectors(await getConnectorMarketplace())
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load connectors')
+      setError(err instanceof Error ? err.message : t('ops.connectors.loadFailed'))
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     void load()
@@ -51,12 +52,17 @@ export default function ConnectorLayer() {
     }
   }
   const handleInstall = async (connector: MarketplaceConnector) => {
-    if (connector.locked && !(await confirm({ title: `Purchase ${connector.name}?`, description: 'This premium connector is purchased for the workspace, then installed.', confirmLabel: 'Purchase & install' }))) return
-    await runAction(connector.slug, () => installConnector(connector.slug), 'Install failed')
+    if (connector.locked && !(await confirm({ title: t('ops.connectors.purchaseTitle', { name: connector.name }), description: t('ops.connectors.purchaseBody'), confirmLabel: t('ops.connectors.purchaseInstall') }))) return
+    await runAction(connector.slug, () => installConnector(connector.slug), t('ops.connectors.installFailed'))
   }
   const handleUninstall = async (connector: MarketplaceConnector) => {
-    if (!(await confirm({ title: `Uninstall ${connector.name}?`, description: 'It will no longer be offered when adding a data source.', confirmLabel: 'Uninstall', tone: 'danger' }))) return
-    await runAction(connector.slug, () => uninstallConnector(connector.slug), 'Uninstall failed')
+    if (!(await confirm({ title: t('ops.connectors.uninstallTitle', { name: connector.name }), description: t('ops.connectors.uninstallBody'), confirmLabel: t('ops.connectors.uninstall'), tone: 'danger' }))) return
+    await runAction(connector.slug, () => uninstallConnector(connector.slug), t('ops.connectors.uninstallFailed'))
+  }
+  // Catalog categories and descriptions have translations by name/slug; anything new shows as the catalog wrote it.
+  const tOr = (key: string, fallback: string) => {
+    const text = t(key as MessageKey)
+    return text === key ? fallback : text
   }
   const billing = connectors[0]?.billing ?? false
   const hasLocked = connectors.some((c) => c.locked && !c.installed)
@@ -69,33 +75,33 @@ export default function ConnectorLayer() {
       <PageHeader
         title={t('pages.connectors.title')}
         description={t('pages.connectors.description')}
-        meta={loading && connectors.length === 0 ? undefined : `${installedCount} installed · ${connectors.length} available · ${premiumCount} premium`}
+        meta={loading && connectors.length === 0 ? undefined : t('ops.connectors.meta', { installed: formatNumber(installedCount), available: formatNumber(connectors.length), premium: formatNumber(premiumCount) })}
       />
 
       <p className="max-w-3xl text-sm text-muted-foreground">
-        Install connectors to unlock source types in Data sources. Only installed connectors appear when adding a data source.
+        {t('ops.connectors.intro')}
       </p>
 
       {!canManage && (
         <Notice tone="info" live={false}>
-          Only workspace admins can install or uninstall connectors.
+          {t('ops.connectors.adminsOnly')}
         </Notice>
       )}
       {billing && hasLocked && (
         <Notice tone="info" live={false}>
-          Premium connectors require purchase before install.
+          {t('ops.connectors.premiumNotice')}
         </Notice>
       )}
       {error && <Notice tone="danger">{error}</Notice>}
 
       {loading && connectors.length === 0 ? (
         <div className="flex items-center justify-center rounded-lg border border-border bg-card p-10 text-sm text-muted-foreground" role="status">
-          <Loader2 className="mr-2 size-4 animate-spin" aria-hidden /> Loading connectors…
+          <Loader2 className="mr-2 size-4 animate-spin" aria-hidden /> {t('ops.connectors.loading')}
         </div>
       ) : connectors.length === 0 ? (
         <div className="rounded-lg border border-border bg-card">
-          <EmptyState icon={<Plug />} title="No connectors available">
-            No connectors are offered to this workspace yet.
+          <EmptyState icon={<Plug />} title={t('ops.connectors.emptyTitle')}>
+            {t('ops.connectors.emptyBody')}
           </EmptyState>
         </div>
       ) : (
@@ -106,18 +112,19 @@ export default function ConnectorLayer() {
               <li key={connector.slug} className="flex flex-col rounded-lg border border-border bg-card p-4">
                 <h2 className="font-semibold">{connector.name}</h2>
                 <div className="mt-1 font-mono text-xs text-muted-foreground">
-                  {connector.category} · v{connector.version}
-                  {connector.premium ? ' · Premium' : ' · Included'}
+                  {tOr(`ops.connectors.categories.${connector.category}`, connector.category)} · v{connector.version}
+                  {' · '}
+                  {connector.premium ? t('ops.connectors.premium') : t('ops.connectors.included')}
                 </div>
-                <p className="mt-2 flex-1 text-sm text-muted-foreground">{connector.description}</p>
+                <p className="mt-2 flex-1 text-sm text-muted-foreground">{tOr(`ops.connectors.descriptions.${connector.slug}`, connector.description)}</p>
                 <div className="mt-4 flex min-h-8 items-center gap-2">
                   {connector.installed ? (
                     <>
                       <StateMark state="live" className="mr-auto">
-                        Installed
+                        {t('ops.connectors.installed')}
                       </StateMark>
                       {canManage && (
-                        <Button size="icon-sm" variant="ghost" onClick={() => void handleUninstall(connector)} disabled={busy} aria-label={`Uninstall ${connector.name}`} title="Uninstall">
+                        <Button size="icon-sm" variant="ghost" onClick={() => void handleUninstall(connector)} disabled={busy} aria-label={t('ops.connectors.uninstallNamed', { name: connector.name })} title={t('ops.connectors.uninstall')}>
                           {busy ? <Loader2 className="animate-spin" aria-hidden /> : <Trash2 aria-hidden />}
                         </Button>
                       )}
@@ -125,18 +132,18 @@ export default function ConnectorLayer() {
                   ) : (
                     <>
                       <StateMark state="idle" className="mr-auto">
-                        Not installed
+                        {t('ops.connectors.notInstalled')}
                       </StateMark>
                       {connector.locked && (
                         <span className="flex items-center gap-1 text-xs text-muted-foreground">
                           <Lock className="size-3" aria-hidden />
-                          Locked
+                          {t('ops.connectors.locked')}
                         </span>
                       )}
                       {canManage && (
                         <Button size="sm" variant="outline" onClick={() => void handleInstall(connector)} disabled={busy}>
                           {busy ? <Loader2 className="animate-spin" aria-hidden /> : <Download aria-hidden />}
-                          {connector.locked ? (busy ? 'Purchasing…' : 'Purchase & install') : busy ? 'Installing…' : 'Install'}
+                          {connector.locked ? (busy ? t('ops.connectors.purchasing') : t('ops.connectors.purchaseInstall')) : busy ? t('ops.connectors.installing') : t('ops.connectors.install')}
                         </Button>
                       )}
                     </>

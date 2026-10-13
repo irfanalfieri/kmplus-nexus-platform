@@ -18,6 +18,8 @@ import { usePrefs } from '@/components/i18n/i18n-provider'
 import { PageHeader } from '@/components/dashboard/page-header'
 import { nativeSelectClass } from '@/components/workspace/settings-panel'
 import type { MessageKey } from '@/lib/i18n/translate'
+import { localizeCheck } from '@/lib/pipelines/check-messages'
+import { localizeStepTitle } from '@/components/pipelines/step-title'
 
 type Overview = Awaited<ReturnType<typeof getQualityOverview>>
 type Item = Awaited<ReturnType<typeof listQuarantine>>['rows'][number]
@@ -50,7 +52,8 @@ function failingFields(item: Item) {
 }
 
 export default function DataQualityLayer() {
-  const { t, formatDateTime, formatNumber } = usePrefs()
+  const { t, locale, formatDateTime, formatNumber } = usePrefs()
+  const say = (m: string) => localizeCheck(m, locale)
   const toast = useToast()
   const [confirm, confirmEl] = useConfirm()
   const [overview, setOverview] = useState<Overview | null>(null)
@@ -191,7 +194,7 @@ export default function DataQualityLayer() {
             {i.fixedRow && <span className="ml-2 rounded-sm bg-live-soft px-1.5 py-px text-xs font-medium text-live-text">{t('quality.fixedBadge')}</span>}
           </span>
         </div>
-        <p className="mt-0.5 pl-[18px] text-sm text-pretty">{i.messages.join('; ')}</p>
+        <p className="mt-0.5 pl-[18px] text-sm text-pretty">{i.messages.map(say).join('; ')}</p>
         {i.replayRunId && <p className="mt-0.5 pl-[18px] font-mono text-xs text-muted-foreground">{t('quality.replayStatus', { run: i.replayRunId.slice(-6) })}</p>}
       </div>
     )
@@ -218,7 +221,7 @@ export default function DataQualityLayer() {
     canManage && (status === 'open' || status === 'fixed') ? (
       <span className="inline-flex gap-1.5">
         {i.kind === 'approval' && status === 'open' ? (
-          <Button size="sm" variant="outline" onClick={() => void approveAndReplay(i)} disabled={busy} aria-label={`${t('quality.approve')} · ${i.messages[0] ?? i.pipelineName}`}>
+          <Button size="sm" variant="outline" onClick={() => void approveAndReplay(i)} disabled={busy} aria-label={`${t('quality.approve')} · ${i.messages[0] ? say(i.messages[0]) : i.pipelineName}`}>
             <CheckCheck /> {t('quality.approve')}
           </Button>
         ) : i.kind !== 'flag' ? (
@@ -228,12 +231,12 @@ export default function DataQualityLayer() {
             onClick={() => setFixing(index)}
             disabled={!i.editable}
             title={i.editable ? undefined : t('quality.maskedNoEdit')}
-            aria-label={`${t('quality.fix')} · ${i.messages[0] ?? i.pipelineName}`}
+            aria-label={`${t('quality.fix')} · ${i.messages[0] ? say(i.messages[0]) : i.pipelineName}`}
           >
             <Wrench /> {t('quality.fix')}
           </Button>
         ) : null}
-        <Button size="icon-sm" variant="ghost" onClick={() => void dismiss([i.id])} disabled={busy} aria-label={`${t('quality.dismiss')} · ${i.messages[0] ?? i.pipelineName}`}>
+        <Button size="icon-sm" variant="ghost" onClick={() => void dismiss([i.id])} disabled={busy} aria-label={`${t('quality.dismiss')} · ${i.messages[0] ? say(i.messages[0]) : i.pipelineName}`}>
           <X />
         </Button>
       </span>
@@ -386,7 +389,7 @@ export default function DataQualityLayer() {
                       {problem(i)}
                       <div className="font-mono text-xs leading-5 break-words">{fieldsOf(i, 3)}</div>
                       <div className="text-xs text-muted-foreground">
-                        {i.pipelineName} · {i.step} · <span className="font-mono">{when(i.createdAt)}</span>
+                        {i.pipelineName} · {localizeStepTitle(i.step, t)} · <span className="font-mono">{when(i.createdAt)}</span>
                       </div>
                       {actionsOf(i, index)}
                     </div>
@@ -425,7 +428,7 @@ export default function DataQualityLayer() {
                       <Td className="max-w-md font-mono text-xs leading-5">{fieldsOf(i, 6)}</Td>
                       <Td className="text-xs">
                         <div className="font-medium">{i.pipelineName}</div>
-                        <div className="text-muted-foreground">{i.step}</div>
+                        <div className="text-muted-foreground">{localizeStepTitle(i.step, t)}</div>
                       </Td>
                       <Td className="font-mono text-xs whitespace-nowrap text-muted-foreground">{when(i.createdAt)}</Td>
                       <Td className="text-right whitespace-nowrap">{actionsOf(i, index)}</Td>
@@ -513,7 +516,7 @@ export default function DataQualityLayer() {
                       <Tr key={i} className="align-top">
                         <Td className="text-right font-mono text-xs text-danger-text">{formatNumber(p.n)}</Td>
                         <Td>
-                          <div className="text-sm text-pretty">{p.message ?? t('quality.unknownProblem')}</div>
+                          <div className="text-sm text-pretty">{p.message ? say(p.message) : t('quality.unknownProblem')}</div>
                           <div className="text-xs text-muted-foreground">{p.pipelineName}</div>
                         </Td>
                       </Tr>
@@ -550,7 +553,7 @@ function FixDialog({
   onMove: (delta: number) => void
   onSaved: (message: string) => void | Promise<void>
 }) {
-  const { t } = usePrefs()
+  const { t, locale } = usePrefs()
   const [ask, askEl] = useConfirm()
   const original = (item.fixedRow ?? item.row) as Record<string, unknown>
   const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(Object.entries(original).map(([k, v]) => [k, show(v)])))
@@ -623,7 +626,7 @@ function FixDialog({
         dirty={dirty}
         size="lg"
         title={t('quality.fixTitle', { pipeline: item.pipelineName })}
-        description={`${t('quality.heldAt')}: ${item.step}`}
+        description={`${t('quality.heldAt')}: ${localizeStepTitle(item.step, t)}`}
         footer={
           <>
             <div className="mr-auto flex items-center gap-1">
@@ -648,7 +651,7 @@ function FixDialog({
       >
         <div className="space-y-4">
           <Notice tone="danger" title={t('quality.reason')} live={false}>
-            {item.messages.join('; ')}
+            {item.messages.map((m) => localizeCheck(m, locale)).join('; ')}
           </Notice>
           {error && <Notice tone="danger">{error}</Notice>}
           {failing.length > 0 && (

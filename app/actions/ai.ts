@@ -1,10 +1,10 @@
 'use server'
 
 import { z } from 'zod'
-import { and, eq, isNull } from 'drizzle-orm'
+import { and, desc, eq, isNull, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/lib/db'
-import { agents, dataSources, nexusDatasets, workspaces } from '@/lib/db/schema'
+import { agents, dataSources, executionLogs, nexusDatasets, pipelineRunRejects, pipelines, workspaces } from '@/lib/db/schema'
 import { requireWorkspace } from '@/lib/auth/session'
 import { recordAudit } from '@/lib/audit'
 import { diffObjects } from '@/lib/audit-diff'
@@ -17,6 +17,10 @@ import { askPrompt, checkAsk, checkMapping, checkRule, mappingPrompt, rulePrompt
 import { runWidget } from '@/lib/analytics/run'
 import type { DatasetColumn } from '@/lib/analytics/query'
 import { guard } from '@/lib/server-action'
+import { applyFix, checkDiagnosis, checkPipelinePlan, diagnosisPrompt, pipelinePrompt, redactMessage, FIX_KINDS, type PlanSource } from '@/lib/ai/pipelines'
+import { definitionSchema, scheduleSchema, stepTitle, DEFAULT_SCHEDULE, SEVERITIES, TRANSFORMS, type PipelineNode } from '@/lib/pipelines/definition'
+import { savePipelineAs } from '@/lib/pipelines/publish'
+import type { SchemaScanResult } from '@/lib/connectors/types'
 
 /**
  * AI assistant (#14) on an open-source model: mapping suggestions, business
@@ -141,6 +145,136 @@ async function askDataImpl(input: z.input<typeof askInput>) {
   return { widget: value.widget, explanation: value.explanation, result, model }
 }
 
+// ── AI-2: pipeline drafts from a description ─────────────────────────────────
+
+const pipelineInput = z.object({ text: z.string().trim().min(10, 'Describe the pipeline in a sentence or two').max(2000) })
+
+/** A draft pipeline for the editor. Nothing is saved: the person reviews it there and saves it themselves. */
+async function draftPipelineImpl(input: z.input<typeof pipelineInput>) {
+  const ctx = await requireWorkspace('pipelines:edit')
+  const data = pipelineInput.parse(input)
+  const [sourceRows, datasetRows] = await Promise.all([
+    db.select({ id: dataSources.id, name: dataSources.name, sourceType: dataSources.sourceType, config: dataSources.config }).from(dataSources).where(eq(dataSources.workspaceId, ctx.workspaceId)).orderBy(dataSources.name),
+    db.select({ name: nexusDatasets.name, columns: nexusDatasets.columns }).from(nexusDatasets).where(eq(nexusDatasets.workspaceId, ctx.workspaceId)).orderBy(nexusDatasets.name),
+  ])
+  // Schema only (names and types), never sample values.
+  const sources: PlanSource[] = sourceRows.map((r) => {
+    const config = (r.config ?? {}) as { role?: 'source' | 'destination'; schemaScan?: SchemaScanResult }
+    return {
+      id: r.id,
+      name: r.name,
+      sourceType: r.sourceType,
+      role: config.role ?? 'source',
+      tables: (config.schemaScan?.tables ?? []).slice(0, 60).map((t) => ({ name: t.name, columns: t.columns.slice(0, 80).map((c) => ({ name: c.name, type: c.type })) })),
+    }
+  })
+  if (!sources.some((x) => x.role === 'source' && x.tables.length)) throw new Error('Connect and scan a data source first: the assistant plans pipelines from your real tables.')
+  const datasets = datasetRows.map((d) => ({ name: d.name, columns: ((d.columns as DatasetColumn[]) ?? []).map((c) => ({ name: c.name, type: c.type })) }))
+  const { value, model } = await askModel(ctx, 'pipeline', pipelinePrompt({ text: data.text, sources, datasets }), (answer) => checkPipelinePlan(answer, { sources, datasets }))
+  return { ...value, model }
+}
+
+// ── AI-3: run error diagnosis ────────────────────────────────────────────────
+
+/** One line per step: what it does, never data. */
+function describeNode(n: PipelineNode): string {
+  switch (n.type) {
+    case 'source':
+      return `reads ${n.table} (${n.mode})`
+    case 'filter':
+      return n.conditions.map((c) => `${c.field} ${c.operator} ${c.value}`).join(n.match === 'all' ? ' AND ' : ' OR ') || '(rule)'
+    case 'map':
+      return n.fields
+        .map((f) => `${f.from}→${f.to}:${f.type}${f.transforms.length ? ` [${f.transforms.map((t) => [t.fn, ...(t.args ?? [])].join(' ')).join(', ')}]` : ''}`)
+        .join('; ')
+        .slice(0, 1500)
+    case 'validate':
+      return n.rules.map((r) => `${r.field}:${r.rule}${r.value ? `(${r.value})` : ''}[${r.severity}]`).join('; ').slice(0, 1500)
+    case 'rules':
+      return `${n.ruleIds.length} business rule(s)`
+    case 'router':
+      return n.branches.map((b) => b.label).join(', ')
+    case 'destination':
+      return n.kind === 'dataset' ? `dataset ${n.datasetName} (${n.mode})` : `table ${n.table} (${n.mode})`
+  }
+}
+
+const diagnoseInput = z.object({ runId: z.string().min(1).max(100) })
+
+/** Explains a failed run (or one that held rows back) and may propose a fix to apply as a draft. */
+async function diagnoseRunImpl(input: z.input<typeof diagnoseInput>) {
+  const ctx = await requireWorkspace('pipelines:run')
+  const { runId } = diagnoseInput.parse(input)
+  const [run] = await db.select().from(executionLogs).where(and(eq(executionLogs.id, runId), eq(executionLogs.workspaceId, ctx.workspaceId))).limit(1)
+  if (!run) throw new Error('Run not found.')
+  if (run.status === 'success' || run.status === 'running') throw new Error('Only failed runs and runs that held rows back can be diagnosed.')
+  const [pipeline] = await db.select().from(pipelines).where(and(eq(pipelines.id, run.pipelineId), eq(pipelines.workspaceId, ctx.workspaceId))).limit(1)
+  if (!pipeline) throw new Error('The pipeline was deleted.')
+  const definition = definitionSchema.parse(pipeline.draftConfig ?? pipeline.config)
+  const titles = new Map(definition.nodes.map((n) => [n.id, stepTitle(n)]))
+  const firstMessage = sql<string>`${pipelineRunRejects.errors}->'messages'->>0`
+  const problems = await db
+    .select({ nodeId: pipelineRunRejects.nodeId, message: firstMessage, n: sql<number>`count(*)::int` })
+    .from(pipelineRunRejects)
+    .where(and(eq(pipelineRunRejects.workspaceId, ctx.workspaceId), eq(pipelineRunRejects.runId, runId)))
+    .groupBy(pipelineRunRejects.nodeId, firstMessage)
+    .orderBy(desc(sql`count(*)`))
+    .limit(15)
+  const details = (run.executionDetails ?? {}) as { steps?: { id: string; label: string; rowsIn: number; rowsOut: number; rejected: number }[] }
+  const { value, model } = await askModel(
+    ctx,
+    'diagnosis',
+    diagnosisPrompt({
+      pipeline: pipeline.name,
+      status: run.status,
+      error: run.errorMessage ? redactMessage(run.errorMessage) : null,
+      steps: definition.nodes.map((n) => ({ id: n.id, title: stepTitle(n), type: n.type, detail: describeNode(n) })),
+      stats: (details.steps ?? []).map((st) => ({ step: st.label, rowsIn: st.rowsIn, rowsOut: st.rowsOut, rejected: st.rejected })),
+      problems: problems.filter((p) => p.message).map((p) => ({ message: redactMessage(p.message), count: p.n, step: (p.nodeId && titles.get(p.nodeId)) || '' })),
+    }),
+    (answer) => checkDiagnosis(answer, { definition }),
+  )
+  return { ...value, model, pipelineId: pipeline.id, stepTitles: Object.fromEntries(titles) }
+}
+
+const fixInput = z.object({
+  pipelineId: z.string().min(1).max(100),
+  fix: z.object({
+    kind: z.enum(FIX_KINDS),
+    stepId: z.string().max(100).optional(),
+    field: z.string().max(128).optional(),
+    transform: z.object({ fn: z.enum(TRANSFORMS), args: z.array(z.string().max(200)).max(4).default([]) }).optional(),
+    rule: z.string().max(40).optional(),
+    severity: z.enum(SEVERITIES).optional(),
+  }),
+})
+
+/** Applies a diagnosis fix as a new draft version (never published); the person reviews and publishes it. */
+async function applyDiagnosisFixImpl(input: z.input<typeof fixInput>) {
+  const ctx = await requireWorkspace('pipelines:edit')
+  const data = fixInput.parse(input)
+  if (data.fix.kind === 'none') throw new Error('This diagnosis has no fix to apply.')
+  const [pipeline] = await db.select().from(pipelines).where(and(eq(pipelines.id, data.pipelineId), eq(pipelines.workspaceId, ctx.workspaceId))).limit(1)
+  if (!pipeline) throw new Error('Pipeline not found.')
+  const definition = applyFix(definitionSchema.parse(pipeline.draftConfig ?? pipeline.config), data.fix)
+  const saved = await savePipelineAs(
+    ctx,
+    {
+      id: pipeline.id,
+      name: pipeline.name,
+      description: pipeline.description ?? '',
+      definition,
+      schedule: scheduleSchema.safeParse(pipeline.schedule ?? {}).data ?? DEFAULT_SCHEDULE,
+      enabled: pipeline.enabled ?? false,
+      changeNote: `AI diagnosis fix: ${data.fix.kind}${data.fix.field ? ` on ${data.fix.field}` : ''}`,
+      publish: false,
+    },
+    { auditExtra: { ai: 'diagnosis_fix', fix: data.fix.kind } },
+  )
+  revalidatePath('/dashboard', 'layout')
+  return saved
+}
+
 export async function getAiSettings(...args: Parameters<typeof getAiSettingsImpl>) {
   return guard(() => getAiSettingsImpl(...args))
 }
@@ -159,4 +293,16 @@ export async function draftRule(...args: Parameters<typeof draftRuleImpl>) {
 
 export async function askData(...args: Parameters<typeof askDataImpl>) {
   return guard(() => askDataImpl(...args))
+}
+
+export async function draftPipeline(...args: Parameters<typeof draftPipelineImpl>) {
+  return guard(() => draftPipelineImpl(...args))
+}
+
+export async function diagnoseRun(...args: Parameters<typeof diagnoseRunImpl>) {
+  return guard(() => diagnoseRunImpl(...args))
+}
+
+export async function applyDiagnosisFix(...args: Parameters<typeof applyDiagnosisFixImpl>) {
+  return guard(() => applyDiagnosisFixImpl(...args))
 }

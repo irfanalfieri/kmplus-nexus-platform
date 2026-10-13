@@ -8,7 +8,7 @@ import { definitionSchema, scheduleSchema, settingsSchema } from '@/lib/pipeline
 import { checkDestination, emptyContext, newRunTotals, runEngine, transformChunk } from '@/lib/pipelines/engine'
 import type { BusinessRule } from '@/lib/rules/definition'
 import { describeSchedule, nextRunTimes } from '@/lib/pipelines/schedule'
-import { applyTransform, checkManagers, formatDate, parseDate } from '@/lib/pipelines/transforms'
+import { applyTransform, checkManagers, formatDate, parseDate, validateRow } from '@/lib/pipelines/transforms'
 import { widgetSchema } from '@/lib/analytics/definition'
 import { buildWidgetSql, WidgetQueryError } from '@/lib/analytics/query'
 import { suggestColumnPolicy } from '@/lib/governance/definition'
@@ -24,6 +24,11 @@ import { diffObjects, diffPipelineDefinitions } from '@/lib/audit-diff'
 import { DOMAIN_ENTITIES, suggestCanonicalField } from '@/lib/domain/model'
 import { createTranslator, MESSAGES } from '@/lib/i18n/translate'
 import { landingSection, settingsHref } from '@/lib/navigation'
+import { localizeCheck, parseCheck } from '@/lib/pipelines/check-messages'
+import { applyFix, checkDiagnosis, checkPipelinePlan, redactMessage } from '@/lib/ai/pipelines'
+import { render } from '@/lib/email'
+import { localizeStepTitle } from '@/components/pipelines/step-title'
+import { alertEmail, inviteEmail } from '@/lib/email-templates'
 import { BUILTIN_MAPPING_TEMPLATES, PIPELINE_TEMPLATES, applyMappingTemplate, buildPipelineTemplate, mapToEntity } from '@/lib/pipelines/templates'
 import { buildLineage } from '@/lib/catalog/lineage'
 import { signPayload } from '@/lib/webhooks/deliver'
@@ -790,6 +795,89 @@ async function main() {
     assert.throws(() => checkAsk({ widget: { dataset: 'employees', type: 'bar', measure: { agg: 'count' }, dimension: { column: 'nope' } } }, { datasets }), /not in employees/)
   })
 
+  await test('check messages: the engine writes English; the inbox reads them back in Indonesian', () => {
+    const rules = [
+      { rule: 'required', field: 'email' },
+      { rule: 'nik', field: 'national_id' },
+      { rule: 'one_of', field: 'gender', value: 'L, P' },
+      { rule: 'compare', field: 'end_date', otherField: 'start_date', operator: 'greater_or_equal' },
+    ] as const
+    const issues = validateRow(
+      { email: '', national_id: '123', gender: 'X', end_date: '2020-01-01', start_date: '2021-01-01' },
+      { id: 'v', type: 'validate', position: { x: 0, y: 0 }, onFail: 'reject', rules: rules.map((r) => ({ value: '', severity: 'error', otherField: '', operator: 'greater_or_equal', ruleId: '', ...r })) } as never,
+      new Map(),
+    ).map((i) => i.message)
+    assert.deepEqual(issues, [
+      'email is required',
+      'national_id "123" is not a valid NIK (16 digits with a birth date)',
+      'gender "X" is not one of L, P',
+      'end_date (2020-01-01) must be greater or equal start_date (2021-01-01)',
+    ], 'English text is unchanged for stored rows')
+    assert.deepEqual(parseCheck(issues[1]), { code: 'nik', params: { field: 'national_id', value: '123' } })
+    assert.equal(localizeCheck(issues[0], 'id'), 'email wajib diisi')
+    assert.equal(localizeCheck(issues[3], 'id'), 'end_date (2020-01-01) harus lebih besar atau sama dengan start_date (2021-01-01)')
+    assert.equal(localizeCheck('birth_date: "31/02/1990" is not a date', 'id'), 'birth_date: "31/02/1990" bukan tanggal', 'Map conversion errors keep their field prefix')
+    assert.equal(localizeCheck('Needs approval (Contract employee)', 'id'), 'Perlu persetujuan (Contract employee)')
+    assert.equal(localizeCheck('Refused by KMS: duplicate key', 'id'), 'Refused by KMS: duplicate key', 'unknown text is shown as written')
+    assert.equal(localizeCheck(issues[0], 'en'), issues[0])
+  })
+
+  await test('AI-2/AI-3: plans become checked pipelines; fixes apply as drafts; personal values are hidden', () => {
+    const sources = [
+      { id: 'src1', name: 'HR exports', sourceType: 'file', role: 'source' as const, tables: [{ name: 'people', columns: [{ name: 'id', type: 'integer' }, { name: 'status', type: 'text' }, { name: 'email', type: 'text' }] }] },
+      { id: 'kms', name: 'KMS', sourceType: 'kmplus', role: 'destination' as const, tables: [] },
+    ]
+    const plan = { name: 'Active people', template: 'csv-dataset', dataSourceId: 'src1', table: 'people', datasetName: 'people', filter: { match: 'all', conditions: [{ field: 'status', operator: 'equals', value: 'active' }] }, schedule: { type: 'weekly', time: '02:00', weekdays: [1, 3] } }
+    const draft = checkPipelinePlan(plan, { sources, datasets: [] })
+    assert.deepEqual(draft.definition.nodes.map((n) => n.type).sort(), ['destination', 'filter', 'map', 'source'])
+    const filterNode = draft.definition.nodes.find((n) => n.type === 'filter')!
+    const sourceNode = draft.definition.nodes.find((n) => n.type === 'source')!
+    assert.ok(draft.definition.edges.some((e) => e.from === sourceNode.id && e.to === filterNode.id), 'source → filter → map')
+    assert.deepEqual([draft.schedule.type, draft.schedule.weekdays, draft.schedule.timezone], ['weekly', [1, 3], 'Asia/Jakarta'])
+    assert.throws(() => checkPipelinePlan({ ...plan, table: 'payroll' }, { sources, datasets: [] }), /not in HR exports/)
+    assert.throws(() => checkPipelinePlan({ ...plan, filter: { match: 'all', conditions: [{ field: 'salary', operator: 'equals', value: '1' }] } }, { sources, datasets: [] }), /salary/)
+    assert.throws(() => checkPipelinePlan({ ...plan, dataSourceId: 'kms' }, { sources, datasets: [] }), /Unknown data source/)
+    assert.throws(() => checkPipelinePlan({ ...plan, kmplusDestinationId: 'src1' }, { sources, datasets: [] }), /not a KMPlus product/)
+
+    const def = draft.definition
+    const mapNode = def.nodes.find((n) => n.type === 'map')!
+    const withTrim = applyFix(def, { kind: 'add_transform', field: 'email', transform: { fn: 'trim', args: [] } })
+    const mapped = withTrim.nodes.find((n) => n.id === mapNode.id)
+    assert.ok(mapped?.type === 'map' && mapped.fields.find((f) => f.to === 'email')?.transforms.some((t) => t.fn === 'trim'))
+    assert.throws(() => applyFix(def, { kind: 'add_transform', field: 'nope', transform: { fn: 'trim', args: [] } }), /No Map step/)
+    const withRules = definitionSchema.parse({
+      ...def,
+      nodes: [...def.nodes, { id: 'val', type: 'validate', position: { x: 0, y: 0 }, rules: [{ field: 'email', rule: 'email' }, { field: 'id', rule: 'required' }] }],
+      edges: [...def.edges.map((e) => (e.from === mapNode.id ? { ...e, from: 'val' } : e)), { id: 'e_val', from: mapNode.id, to: 'val', branch: '' }],
+    })
+    const softened = applyFix(withRules, { kind: 'change_severity', stepId: 'val', field: 'email', rule: 'email', severity: 'warning' })
+    assert.equal(softened.nodes.find((n) => n.id === 'val')?.type === 'validate' && (softened.nodes.find((n) => n.id === 'val') as { rules: { severity: string }[] }).rules[0].severity, 'warning')
+    assert.throws(() => checkDiagnosis({ summary: 'x', fix: { kind: 'remove_rule', field: 'id', rule: 'required' } }, { definition: withRules }), /Do not remove required/)
+    assert.equal(checkDiagnosis({ summary: 'Source down', fix: { kind: 'none' } }, { definition: withRules }).fix.kind, 'none')
+
+    assert.equal(redactMessage('national_id "3171012345678901" is not a valid NIK (16 digits with a birth date)'), 'national_id "<hidden>" is not a valid NIK (16 digits with a birth date)')
+    assert.equal(redactMessage('status "x" is not one of active, inactive'), 'status "x" is not one of active, inactive', 'values of public fields stay')
+    assert.equal(redactMessage('Lookup failed for "Budi Santoso" 081234567890'), 'Lookup failed for "<hidden>" <hidden>')
+  })
+
+  await test('email: branded layout, escaped text, plain-text twin, both languages', () => {
+    const msg = render({ to: 'x@example.com', subject: 'S', heading: 'Hello <b>', lines: ['Line & one'], details: [{ label: 'Role', value: 'Admin' }], action: { label: 'Open', url: 'https://example.com/a?b=1&c=2' }, status: { tone: 'danger', label: 'Needs attention' }, locale: 'id' })
+    assert.match(msg.html, /\/brand\/kmplus-logo-on-dark\.png/)
+    assert.match(msg.html, /Hello &lt;b&gt;/)
+    assert.match(msg.html, /Line &amp; one/)
+    assert.match(msg.html, /href="https:\/\/example\.com\/a\?b=1&amp;c=2"/)
+    assert.match(msg.html, /lang="id"/)
+    assert.match(msg.html, /Tombol tidak berfungsi/)
+    assert.match(msg.text, /Open: https:\/\/example\.com\/a\?b=1&c=2/)
+    assert.match(msg.text, /\[Needs attention\]/)
+    const invite = inviteEmail({ inviter: 'Dewi', workspace: 'PT Contoh', role: 'Analyst', email: 'a@b.co', url: 'https://x/invite/1', locale: 'en' })
+    assert.equal(invite.subject, 'Dewi invited you to PT Contoh on KMPlus Nexus')
+    const alert = alertEmail({ title: 'SAP failed', level: 'error', locale: 'en', pipelineId: 'p', lines: ['Pipeline: SAP', 'Result: 401', 'Something odd'] })
+    assert.deepEqual(alert.details?.map((d) => d.label), ['Pipeline', 'Result'])
+    assert.deepEqual(alert.lines, ['Something odd'])
+    assert.match(alert.action!.url, /\/dashboard\/pipelines$/)
+  })
+
   await test('i18n: both languages, plurals, fallbacks; landing and settings URLs', () => {
     const leaves = (o: object, p = ''): string[] => Object.entries(o).flatMap(([k, v]) => (typeof v === 'string' ? [p + k] : leaves(v, `${p}${k}.`)))
     assert.deepEqual(leaves(MESSAGES.id).sort(), leaves(MESSAGES.en).sort(), 'Indonesian has every English key')
@@ -799,6 +887,9 @@ async function main() {
     assert.equal(en('quality.dismissTitle', { count: '1,200' }), 'Dismiss 1,200 rows?')
     assert.equal(en('pipelines.runFor', { name: 'SAP' }), 'Run SAP now')
     assert.equal(createTranslator('id')('nav.pipelines'), 'Pipeline')
+    assert.equal(localizeStepTitle('Validate (16 rules)', createTranslator('en')), 'Validate (16 rules)')
+    assert.notEqual(localizeStepTitle('Validate (16 rules)', createTranslator('id')), 'Validate (16 rules)', 'step titles from the server are translated')
+    assert.equal(localizeStepTitle('Something else', createTranslator('id')), 'Something else')
     assert.equal(landingSection('steward'), 'quality')
     assert.equal(landingSection('admin'), 'overview')
     assert.equal(settingsHref('general'), '/dashboard/settings')

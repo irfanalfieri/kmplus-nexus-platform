@@ -3,6 +3,17 @@
  * shape (the compiler checks it). Data, column names and identifiers are never
  * translated. Placeholders look like {name}.
  */
+import { auth } from './en/auth'
+import { ws } from './en/ws'
+import { editor } from './en/editor'
+import { steps } from './en/steps'
+import { ops } from './en/ops'
+import { insights } from './en/insights'
+import { connect } from './en/connect'
+import { overview } from './en/overview'
+import { email } from './en/email'
+import { assist } from './en/assist'
+
 export const en = {
   common: {
     cancel: 'Cancel',
@@ -439,6 +450,16 @@ export const en = {
     sortBy: 'Sort by {column}',
     empty: 'No rows',
   },
+  auth,
+  ws,
+  editor,
+  steps,
+  ops,
+  insights,
+  connect,
+  overview,
+  email,
+  assist,
 } as const
 
 type Widen<T> = T extends string ? string : { [K in keyof T]: Widen<T[K]> }

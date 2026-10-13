@@ -1,4 +1,5 @@
 import type { ColumnType, Condition, ConditionGroup, FilterStep, MapStep, Severity, Transform, ValidateStep } from './definition'
+import { checkText } from './check-messages'
 import type { BusinessRule } from '@/lib/rules/definition'
 import { asString, evalCondition, evalGroup, isEmpty, type Row } from './conditions'
 import { sha256Hex } from './sha256'
@@ -149,20 +150,20 @@ export function applyTransform(value: unknown, t: Transform, row: Row = {}, tabl
       if (isEmpty(value)) return value
       // args: [outputPattern, inputFormat?, timezone?]
       const date = parseDate(value, b)
-      if (!date) throw new Error(`"${asString(value)}" is not a recognizable date`)
+      if (!date) throw new Error(checkText('notRecognizableDate', { value: asString(value) }))
       return formatDateIn(date, a || 'yyyy-MM-dd', c)
     }
     case 'round': {
       if (isEmpty(value)) return value
       const n = Number(value)
-      if (Number.isNaN(n)) throw new Error(`"${asString(value)}" is not a number`)
+      if (Number.isNaN(n)) throw new Error(checkText('notNumber', { value: asString(value) }))
       const f = 10 ** (Number(a) || 0)
       return Math.round(n * f) / f
     }
     case 'number_format': {
       if (isEmpty(value)) return value
       const n = Number(typeof value === 'string' ? value.replace(/,/g, '') : value)
-      if (!Number.isFinite(n)) throw new Error(`"${asString(value)}" is not a number`)
+      if (!Number.isFinite(n)) throw new Error(checkText('notNumber', { value: asString(value) }))
       const digits = Number(a) || 0
       return new Intl.NumberFormat(b || 'id-ID', { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(n)
     }
@@ -173,7 +174,7 @@ export function applyTransform(value: unknown, t: Transform, row: Row = {}, tabl
       if (/^-?\d{1,3}(\.\d{3})+(,\d+)?$/.test(s)) s = s.replace(/\./g, '').replace(',', '.')
       else s = s.replace(/,/g, '')
       const n = Number(s)
-      if (Number.isNaN(n)) throw new Error(`"${asString(value)}" is not a number`)
+      if (Number.isNaN(n)) throw new Error(checkText('notNumber', { value: asString(value) }))
       return n
     }
     case 'to_boolean':
@@ -197,7 +198,7 @@ function toBoolean(value: unknown): boolean | null {
   const s = asString(value).trim().toLowerCase()
   if (['true', '1', 'yes', 'y', 'ya', 'active', 'aktif', 't'].includes(s)) return true
   if (['false', '0', 'no', 'n', 'tidak', 'inactive', 'nonaktif', 'f'].includes(s)) return false
-  throw new Error(`"${asString(value)}" is not a boolean`)
+  throw new Error(checkText('notBoolean', { value: asString(value) }))
 }
 
 /** Converts a value to the column type declared in a Map step. */
@@ -208,24 +209,24 @@ export function coerce(value: unknown, type: ColumnType): unknown {
       return asString(value)
     case 'integer': {
       const n = Number(typeof value === 'string' ? value.replace(/,/g, '') : value)
-      if (!Number.isFinite(n) || !Number.isInteger(n)) throw new Error(`"${asString(value)}" is not an integer`)
+      if (!Number.isFinite(n) || !Number.isInteger(n)) throw new Error(checkText('notInteger', { value: asString(value) }))
       return n
     }
     case 'numeric': {
       const n = Number(typeof value === 'string' ? value.replace(/,/g, '') : value)
-      if (!Number.isFinite(n)) throw new Error(`"${asString(value)}" is not a number`)
+      if (!Number.isFinite(n)) throw new Error(checkText('notNumber', { value: asString(value) }))
       return n
     }
     case 'boolean':
       return toBoolean(value)
     case 'date': {
       const d = parseDate(value)
-      if (!d) throw new Error(`"${asString(value)}" is not a date`)
+      if (!d) throw new Error(checkText('notDate', { value: asString(value) }))
       return formatDate(d, 'yyyy-MM-dd')
     }
     case 'timestamp': {
       const d = parseDate(value)
-      if (!d) throw new Error(`"${asString(value)}" is not a timestamp`)
+      if (!d) throw new Error(checkText('notTimestamp', { value: asString(value) }))
       return d.toISOString()
     }
     case 'json':
@@ -322,75 +323,75 @@ export function validateRow(row: Row, step: ValidateStep, ctx: ValidateContext |
     const fail = (message: string) => issues.push({ message, severity: spec.severity ?? 'error' })
     switch (rule) {
       case 'required':
-        if (isEmpty(raw)) fail(`${field} is required`)
+        if (isEmpty(raw)) fail(checkText('required', { field }))
         break
       case 'email':
-        if (!isEmpty(raw) && !EMAIL.test(s.trim())) fail(`${field} is not a valid email`)
+        if (!isEmpty(raw) && !EMAIL.test(s.trim())) fail(checkText('email', { field }))
         break
       case 'phone':
-        if (!isEmpty(raw) && !isValidPhone(s)) fail(`${field} "${s}" is not a valid phone number`)
+        if (!isEmpty(raw) && !isValidPhone(s)) fail(checkText('phone', { field, value: s }))
         break
       case 'nik':
-        if (!isEmpty(raw) && !isValidNik(s)) fail(`${field} "${s}" is not a valid NIK (16 digits with a birth date)`)
+        if (!isEmpty(raw) && !isValidNik(s)) fail(checkText('nik', { field, value: s }))
         break
       case 'npwp':
-        if (!isEmpty(raw) && !isValidNpwp(s)) fail(`${field} "${s}" is not a valid NPWP (15 or 16 digits)`)
+        if (!isEmpty(raw) && !isValidNpwp(s)) fail(checkText('npwp', { field, value: s }))
         break
       case 'unique': {
         if (isEmpty(raw)) break
         if (!c.seen.has(field)) c.seen.set(field, new Set())
         const set = c.seen.get(field)!
-        if (set.has(s)) fail(`${field} "${s}" is duplicated`)
+        if (set.has(s)) fail(checkText('duplicate', { field, value: s }))
         else set.add(s)
         break
       }
       case 'regex':
         try {
-          if (!isEmpty(raw) && !new RegExp(value).test(s)) fail(`${field} doesn't match ${value}`)
+          if (!isEmpty(raw) && !new RegExp(value).test(s)) fail(checkText('regex', { field, pattern: value }))
         } catch {
-          fail(`Invalid regex "${value}" on ${field}`)
+          fail(checkText('badRegex', { field, pattern: value }))
         }
         break
       case 'min_length':
-        if (!isEmpty(raw) && s.length < Number(value)) fail(`${field} is shorter than ${value}`)
+        if (!isEmpty(raw) && s.length < Number(value)) fail(checkText('minLength', { field, limit: value }))
         break
       case 'max_length':
-        if (!isEmpty(raw) && s.length > Number(value)) fail(`${field} is longer than ${value}`)
+        if (!isEmpty(raw) && s.length > Number(value)) fail(checkText('maxLength', { field, limit: value }))
         break
       case 'min':
-        if (!isEmpty(raw) && Number(raw) < Number(value)) fail(`${field} is below ${value}`)
+        if (!isEmpty(raw) && Number(raw) < Number(value)) fail(checkText('min', { field, limit: value }))
         break
       case 'max':
-        if (!isEmpty(raw) && Number(raw) > Number(value)) fail(`${field} is above ${value}`)
+        if (!isEmpty(raw) && Number(raw) > Number(value)) fail(checkText('max', { field, limit: value }))
         break
       case 'one_of': {
         const allowed = value.split(',').map((v) => v.trim().toLowerCase())
-        if (!isEmpty(raw) && !allowed.includes(s.toLowerCase())) fail(`${field} "${s}" is not one of ${value}`)
+        if (!isEmpty(raw) && !allowed.includes(s.toLowerCase())) fail(checkText('oneOf', { field, value: s, allowed: value }))
         break
       }
       case 'date':
-        if (!isEmpty(raw) && !parseDate(raw, value)) fail(`${field} "${s}" is not a valid date`)
+        if (!isEmpty(raw) && !parseDate(raw, value)) fail(checkText('date', { field, value: s }))
         break
       case 'not_future': {
         if (isEmpty(raw)) break
         const d = parseDate(raw)
-        if (!d) fail(`${field} "${s}" is not a valid date`)
-        else if (d.getTime() > Date.now()) fail(`${field} ${formatDate(d)} is in the future`)
+        if (!d) fail(checkText('date', { field, value: s }))
+        else if (d.getTime() > Date.now()) fail(checkText('future', { field, value: formatDate(d) }))
         break
       }
       case 'compare': {
         const other = row[spec.otherField]
         if (isEmpty(raw) || isEmpty(other)) break
         if (!evalCondition(row, { field, operator: spec.operator, value: '', valueField: spec.otherField })) {
-          fail(`${field} (${s}) must be ${spec.operator.replace(/_/g, ' ')} ${spec.otherField} (${asString(other)})`)
+          fail(checkText('compare', { field, value: s, operator: spec.operator.replace(/_/g, ' '), other: spec.otherField, otherValue: asString(other) }))
         }
         break
       }
       case 'exists_in': {
         if (isEmpty(raw)) break
         const set = c.lookups?.get(value)
-        if (!set) fail(`Lookup ${value} isn't available`)
-        else if (!set.has(s)) fail(`${field} "${s}" is not in ${value}`)
+        if (!set) fail(checkText('lookupMissing', { lookup: value }))
+        else if (!set.has(s)) fail(checkText('notIn', { field, value: s, lookup: value }))
         break
       }
       case 'condition': {
@@ -398,12 +399,12 @@ export function validateRow(row: Row, step: ValidateStep, ctx: ValidateContext |
         if (spec.ruleId) {
           const r = c.rules?.get(spec.ruleId)
           if (!r) {
-            fail(`Business rule ${spec.ruleId} not found`)
+            fail(checkText('ruleMissing', { rule: spec.ruleId }))
             break
           }
           group = r.when
         }
-        if (!evalGroup(row, group)) fail(spec.ruleId ? `${field}: rule "${c.rules?.get(spec.ruleId)?.name}" not met` : `${field}: condition not met`)
+        if (!evalGroup(row, group)) fail(spec.ruleId ? checkText('ruleNotMet', { field, rule: String(c.rules?.get(spec.ruleId)?.name) }) : checkText('conditionNotMet', { field }))
         break
       }
       case 'manager':
@@ -425,12 +426,12 @@ export function checkManagers(pairs: { key: string; manager: string }[]): { key:
   for (const p of pairs) {
     if (!p.manager) continue
     if (p.manager === p.key) {
-      out.push({ ...p, message: `${p.key} is their own manager` })
+      out.push({ ...p, message: checkText('ownManager', { key: p.key }) })
       inCycle.add(p.key)
       continue
     }
     if (!keys.has(p.manager)) {
-      out.push({ ...p, message: `manager ${p.manager} of ${p.key} is not an employee in this run` })
+      out.push({ ...p, message: checkText('unknownManager', { manager: p.manager, key: p.key }) })
       continue
     }
     // Walk up the chain; a repeat means a cycle.
@@ -440,7 +441,7 @@ export function checkManagers(pairs: { key: string; manager: string }[]): { key:
       if (visited.has(cur)) {
         if (cur === p.key && !inCycle.has(p.key)) {
           inCycle.add(p.key)
-          out.push({ ...p, message: `${p.key} is in a circular reporting line` })
+          out.push({ ...p, message: checkText('managerCycle', { key: p.key }) })
         }
         break
       }

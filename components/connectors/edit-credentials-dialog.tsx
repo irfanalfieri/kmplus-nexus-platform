@@ -11,6 +11,8 @@ import { getEditableCredentials, updateDataSourceCredentials } from '@/lib/actio
 import { previewRestConnection } from '@/lib/actions/connector-source'
 import RestConnectorForm from '@/components/connectors/rest-connector-form'
 import SalesforceConnectorForm from '@/components/connectors/salesforce-connector-form'
+import { credentialFieldLabel } from '@/components/connectors/connector-credential-form'
+import { useT } from '@/components/i18n/i18n-provider'
 import type { RestRequestPreview } from '@/lib/connectors/rest-client'
 
 type Editable = Awaited<ReturnType<typeof getEditableCredentials>>
@@ -31,6 +33,7 @@ export default function EditCredentialsDialog({ sourceId, sourceName, onClose, o
   const [restSending, setRestSending] = useState(false)
   const [touched, setTouched] = useState(false)
   const uid = useId()
+  const t = useT()
   const formId = `${uid}-form`
 
   useEffect(() => {
@@ -39,8 +42,8 @@ export default function EditCredentialsDialog({ sourceId, sourceName, onClose, o
         setForm(res)
         if (res.supported) setValues(res.values)
       })
-      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load'))
-  }, [sourceId])
+      .catch((err) => setError(err instanceof Error ? err.message : t('connect.editCredentials.loadFailed')))
+  }, [sourceId]) // eslint-disable-line react-hooks/exhaustive-deps -- load once per source, not per language
 
   const setValue = useCallback((key: string, value: string) => {
     setTouched(true)
@@ -52,10 +55,10 @@ export default function EditCredentialsDialog({ sourceId, sourceName, onClose, o
     setError('')
     try {
       const res = await updateDataSourceCredentials(sourceId, values)
-      if (!res.ok) setError(`Connection test failed, nothing was saved: ${res.message}`)
+      if (!res.ok) setError(t('connect.editCredentials.testFailed', { message: res.message }))
       else onSaved()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Save failed')
+      setError(err instanceof Error ? err.message : t('connect.editCredentials.saveFailed'))
     } finally {
       setBusy(false)
     }
@@ -69,13 +72,15 @@ export default function EditCredentialsDialog({ sourceId, sourceName, onClose, o
       setRestPreview(preview)
       if (!preview.ok) setError(preview.message)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Request failed')
+      setError(err instanceof Error ? err.message : t('connect.editCredentials.requestFailed'))
     } finally {
       setRestSending(false)
     }
   }
 
   const custom = form?.supported ? form.custom : null
+  const MARK = '\u0001'
+  const notSupported = t('connect.editCredentials.notSupported', { type: MARK }).split(MARK)
 
   return (
     <Modal
@@ -84,18 +89,18 @@ export default function EditCredentialsDialog({ sourceId, sourceName, onClose, o
       size={custom ? 'lg' : 'md'}
       title={
         <span className="flex items-center gap-2">
-          <KeyRound className="size-4 text-primary" aria-hidden /> Edit credentials
+          <KeyRound className="size-4 text-primary" aria-hidden /> {t('connect.editCredentials.title')}
         </span>
       }
       description={sourceName}
       footer={
         <>
           <Button type="button" variant="outline" onClick={onClose}>
-            Cancel
+            {t('common.cancel')}
           </Button>
           {form?.supported && (
             <Button type="submit" form={formId} disabled={busy}>
-              {busy && <Loader2 className="animate-spin" aria-hidden />}Test & save
+              {busy && <Loader2 className="animate-spin" aria-hidden />}{t('connect.editCredentials.testSave')}
             </Button>
           )}
         </>
@@ -104,12 +109,14 @@ export default function EditCredentialsDialog({ sourceId, sourceName, onClose, o
       {!form ? (
         error ? null : (
           <div className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
-            <Loader2 className="size-4 animate-spin" aria-hidden /> Loading…
+            <Loader2 className="size-4 animate-spin" aria-hidden /> {t('common.loading')}
           </div>
         )
       ) : !form.supported ? (
         <p className="text-sm text-muted-foreground">
-          Credentials for this connector (<span className="font-mono">{form.sourceType}</span>) can&apos;t be edited here. Delete and re-create the data source to change them.
+          {notSupported[0]}
+          <span className="font-mono">{form.sourceType}</span>
+          {notSupported[1]}
         </p>
       ) : (
         <form
@@ -131,14 +138,14 @@ export default function EditCredentialsDialog({ sourceId, sourceName, onClose, o
               return (
                 <div key={f.key} className="space-y-1.5">
                   <Label htmlFor={inputId} className="text-xs text-muted-foreground">
-                    {f.label}
+                    {credentialFieldLabel(t, f)}
                     {f.required ? ' *' : ''}
                   </Label>
                   <Input
                     id={inputId}
                     type={f.type === 'password' ? 'password' : f.type === 'number' ? 'number' : 'text'}
                     value={values[f.key] ?? ''}
-                    placeholder={f.type === 'password' ? (secretStored ? '•••••••• unchanged (type to replace)' : 'not set') : f.placeholder}
+                    placeholder={f.type === 'password' ? (secretStored ? t('connect.editCredentials.secretUnchanged') : t('connect.editCredentials.notSet')) : f.placeholder}
                     autoComplete="off"
                     onChange={(e) => setValue(f.key, e.target.value)}
                   />
@@ -147,10 +154,8 @@ export default function EditCredentialsDialog({ sourceId, sourceName, onClose, o
             })
           )}
           <p className="text-xs text-muted-foreground">
-            {custom
-              ? 'Saved secrets show as ••••••••; leave them to keep the current value, or replace them. '
-              : 'Leave secret fields blank to keep the current value. '}
-            Saving tests the connection first and re-scans the schema.
+            {custom ? t('connect.editCredentials.customHint') : t('connect.editCredentials.simpleHint')}{' '}
+            {t('connect.editCredentials.testHint')}
           </p>
           {error && <Notice tone="danger">{error}</Notice>}
         </form>

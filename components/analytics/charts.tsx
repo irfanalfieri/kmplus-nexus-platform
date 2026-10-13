@@ -2,9 +2,11 @@
 
 import { useId, useMemo, useState } from 'react'
 import type { Widget, WidgetResult } from '@/lib/analytics/definition'
-import { describeMeasure } from '@/lib/analytics/definition'
 import { isTimeSeries } from '@/lib/analytics/query'
 import { Table, TBody, THead, Td, Th, Tr } from '@/components/ui/data-table'
+import { usePrefs } from '@/components/i18n/i18n-provider'
+import { LOCALE_INFO } from '@/lib/i18n/config'
+import type { MessageKey, Translate } from '@/lib/i18n/translate'
 
 /**
  * Analytics widget renderers (data-viz rules):
@@ -21,22 +23,67 @@ import { Table, TBody, THead, Td, Th, Tr } from '@/components/ui/data-table'
 export const SERIES_COLORS = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)'] as const
 const SERIES = SERIES_COLORS[0]
 const fmt = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 })
-const compact = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 })
 export const formatValue = (v: number | null) => (v === null ? '—' : fmt.format(v))
-const labelOf = (l: string | null) => (l === null || l === '' ? '(empty)' : l)
+
+/** `describeMeasure` in the interface language ("Rows", "Average of salary"). */
+export function describeMeasureT(w: Pick<Widget, 'measure'>, t: Translate) {
+  return w.measure.agg === 'count'
+    ? t('insights.charts.rowsMeasure')
+    : t('insights.charts.measureOf', { agg: t(`insights.widgetEditor.aggs.${w.measure.agg}` as MessageKey), column: w.measure.column })
+}
+
+/** `defaultTitle` in the interface language ("Rows by department (month)"). */
+export function defaultTitleT(w: Pick<Widget, 'measure' | 'dimension' | 'dataset'>, t: Translate) {
+  const measure = describeMeasureT(w, t)
+  if (!w.dimension) return t('insights.charts.ofDataset', { measure, dataset: w.dataset })
+  return w.dimension.grain !== 'none'
+    ? t('insights.charts.byGrain', { measure, column: w.dimension.column, grain: t(`insights.widgetEditor.grains.${w.dimension.grain}` as MessageKey) })
+    : t('insights.charts.by', { measure, column: w.dimension.column })
+}
+
+/** `freshness()` from lib/catalog/definition in the interface language ("12 min ago"). */
+export function freshnessT(at: Date | string | null | undefined, t: Translate, now = Date.now()): string {
+  if (!at) return t('insights.time.neverLoaded')
+  const ms = now - new Date(at).getTime()
+  if (ms < 60_000) return t('insights.time.justNow')
+  const min = Math.floor(ms / 60_000)
+  if (min < 60) return t('insights.time.minutesAgo', { count: min })
+  const h = Math.floor(min / 60)
+  if (h < 48) return t('insights.time.hoursAgo', { count: h })
+  return t('insights.time.daysAgo', { count: Math.floor(h / 24) })
+}
+
+/** Number formatting and empty labels that follow the interface language. */
+function useChartText() {
+  const { t, locale } = usePrefs()
+  return useMemo(() => {
+    const intl = LOCALE_INFO[locale].intl
+    const num = new Intl.NumberFormat(intl, { maximumFractionDigits: 2 })
+    const short = new Intl.NumberFormat(intl, { notation: 'compact', maximumFractionDigits: 1 })
+    return {
+      t,
+      num,
+      short,
+      value: (v: number | null) => (v === null ? '—' : num.format(v)),
+      label: (l: string | null) => (l === null || l === '' ? t('insights.charts.empty') : l),
+      measure: (w: Pick<Widget, 'measure'>) => describeMeasureT(w, t),
+    }
+  }, [t, locale])
+}
 
 export function WidgetView({ widget, result }: { widget: Widget; result: WidgetResult }) {
   const [table, setTable] = useState(false)
+  const { t } = usePrefs()
   if (widget.type === 'kpi') return <Kpi widget={widget} value={result.rows[0]?.value ?? null} />
-  if (!result.rows.length) return <p className="py-8 text-center text-sm text-muted-foreground">No rows match.</p>
+  if (!result.rows.length) return <p className="py-8 text-center text-sm text-muted-foreground">{t('insights.charts.noRows')}</p>
   return (
     <div className="space-y-2">
       {widget.type === 'table' || table ? <ResultTable widget={widget} result={result} /> : widget.type === 'line' ? <Line widget={widget} result={result} /> : <Bars widget={widget} result={result} />}
       <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span className="font-mono">
           {result.truncated
-            ? isTimeSeries(widget) ? `Latest ${widget.limit} periods shown` : `Top ${widget.limit} groups shown`
-            : `${result.rows.length} ${isTimeSeries(widget) ? 'period' : 'group'}${result.rows.length === 1 ? '' : 's'}`}
+            ? isTimeSeries(widget) ? t('insights.charts.latestPeriods', { count: widget.limit }) : t('insights.charts.topGroups', { count: widget.limit })
+            : t(isTimeSeries(widget) ? 'insights.charts.periods' : 'insights.charts.groups', { count: result.rows.length })}
         </span>
         {widget.type !== 'table' && (
           <button
@@ -45,7 +92,7 @@ export function WidgetView({ widget, result }: { widget: Widget; result: WidgetR
             className="rounded-sm font-medium text-info-text underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
             onClick={() => setTable((t) => !t)}
           >
-            {table ? 'Show chart' : 'Show table'}
+            {table ? t('insights.charts.showChart') : t('insights.charts.showTable')}
           </button>
         )}
       </div>
@@ -54,6 +101,7 @@ export function WidgetView({ widget, result }: { widget: Widget; result: WidgetR
 }
 
 function Kpi({ widget, value }: { widget: Widget; value: number | null }) {
+  const { num: fmt, short: compact, measure: describeMeasure } = useChartText()
   const big = value !== null && Math.abs(value) >= 1_000_000
   return (
     <div className="py-4">
@@ -67,6 +115,7 @@ function Kpi({ widget, value }: { widget: Widget; value: number | null }) {
 
 /** Horizontal bars: long category labels stay readable; value at each bar's end. */
 function Bars({ widget, result }: { widget: Widget; result: WidgetResult }) {
+  const { value: formatValue, label: labelOf, measure: describeMeasure } = useChartText()
   const max = Math.max(0, ...result.rows.map((r) => r.value ?? 0))
   return (
     <ul className="space-y-1.5" aria-label={describeMeasure(widget)}>
@@ -90,6 +139,7 @@ function Bars({ widget, result }: { widget: Widget; result: WidgetResult }) {
 /** Line over time with a crosshair tooltip; endpoint labelled. */
 function Line({ widget, result }: { widget: Widget; result: WidgetResult }) {
   const id = useId()
+  const { t, value: formatValue, label: labelOf, measure: describeMeasure } = useChartText()
   const [hover, setHover] = useState<number | null>(null)
   const W = 600
   const H = 220
@@ -128,7 +178,7 @@ function Line({ widget, result }: { widget: Widget; result: WidgetResult }) {
         onPointerMove={onMove}
         onPointerLeave={() => setHover(null)}
       >
-        <title id={`${id}-t`}>{`${describeMeasure(widget)} by ${widget.dimension?.column}`}</title>
+        <title id={`${id}-t`}>{t('insights.charts.by', { measure: describeMeasure(widget), column: widget.dimension?.column ?? '' })}</title>
         {grid.map((y) => (
           <line key={y} x1={pad.l} x2={W - pad.r} y1={y} y2={y} stroke="var(--border)" strokeWidth={1} />
         ))}
@@ -166,6 +216,7 @@ function Line({ widget, result }: { widget: Widget; result: WidgetResult }) {
 }
 
 function ResultTable({ widget, result }: { widget: Widget; result: WidgetResult }) {
+  const { t, value: formatValue, label: labelOf, measure: describeMeasure } = useChartText()
   return (
     <div className="max-h-72 overflow-auto rounded-md border border-border">
       <Table label={describeMeasure(widget)}>
@@ -173,7 +224,7 @@ function ResultTable({ widget, result }: { widget: Widget; result: WidgetResult 
           <tr>
             <Th>
               {widget.dimension?.column ?? ''}
-              {widget.dimension && widget.dimension.grain !== 'none' ? ` (${widget.dimension.grain})` : ''}
+              {widget.dimension && widget.dimension.grain !== 'none' ? ` (${t(`insights.widgetEditor.grains.${widget.dimension.grain}` as MessageKey)})` : ''}
             </Th>
             <Th className="text-right">{describeMeasure(widget)}</Th>
           </tr>

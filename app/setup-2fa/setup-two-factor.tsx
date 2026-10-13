@@ -9,11 +9,13 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Notice } from '@/components/ui/notice'
 import { AuthShell } from '@/components/auth-form'
+import { useT } from '@/components/i18n/i18n-provider'
 
 type Step = 'password' | 'scan' | 'codes'
 
 /** Mandatory TOTP enrollment: confirm password → scan QR → enter code → save backup codes. */
 export default function SetupTwoFactor({ email, next }: { email: string; next: string }) {
+  const t = useT()
   const [step, setStep] = useState<Step>('password')
   const [password, setPassword] = useState('')
   const [qr, setQr] = useState('')
@@ -31,7 +33,7 @@ export default function SetupTwoFactor({ email, next }: { email: string; next: s
     setError('')
     const { data, error } = await authClient.twoFactor.enable({ password })
     setBusy(false)
-    if (error || !data) return setError(error?.message ?? 'Could not start two-factor setup.')
+    if (error || !data) return setError(error?.message ?? t('auth.setup2fa.startFailed'))
     setPassword('')
     setBackupCodes(data.backupCodes)
     setSecret(new URL(data.totpURI).searchParams.get('secret') ?? '')
@@ -45,11 +47,11 @@ export default function SetupTwoFactor({ email, next }: { email: string; next: s
     setError('')
     const { error } = await authClient.twoFactor.verifyTotp({ code: code.replace(/\s/g, '') })
     setBusy(false)
-    if (error) return setError(error.message ?? 'That code is not valid. Check the time on your phone and try the newest code.')
+    if (error) return setError(error.message ?? t('auth.setup2fa.invalidCode'))
     setStep('codes')
   }
 
-  const codesText = `KMPlus Nexus backup codes for ${email}\nEach code works once. Keep them somewhere safe.\n\n${backupCodes.join('\n')}\n`
+  const codesText = `${t('auth.setup2fa.fileHeader', { email })}\n${t('auth.setup2fa.fileNote')}\n\n${backupCodes.join('\n')}\n`
 
   const copyCodes = async () => {
     try {
@@ -72,23 +74,23 @@ export default function SetupTwoFactor({ email, next }: { email: string; next: s
   return (
     <AuthShell className="max-w-md space-y-5">
       <div>
-        <p className="mb-2 font-mono text-xs tracking-wide text-muted-foreground uppercase">Step {step === 'password' ? 1 : step === 'scan' ? 2 : 3} of 3</p>
-        <h1 className="text-xl font-semibold tracking-tight">Set up two-factor authentication</h1>
+        <p className="mb-2 font-mono text-xs tracking-wide text-muted-foreground uppercase">{t('auth.setup2fa.step', { step: step === 'password' ? 1 : step === 'scan' ? 2 : 3 })}</p>
+        <h1 className="text-xl font-semibold tracking-tight">{t('auth.setup2fa.title')}</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          KMPlus Nexus requires a code from an authenticator app (Google Authenticator, Microsoft Authenticator, 1Password, Authy, …) every time you sign in.
+          {t('auth.setup2fa.intro')}
         </p>
       </div>
 
       {step === 'password' && (
         <form onSubmit={start} className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="password">Confirm your password</Label>
+            <Label htmlFor="password">{t('auth.setup2fa.confirmPassword')}</Label>
             <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete="current-password" autoFocus />
-            <p className="text-xs text-muted-foreground">Signed in as {email}.</p>
+            <p className="text-xs text-muted-foreground">{t('auth.setup2fa.signedInAs', { email })}</p>
           </div>
           {error && <Notice tone="danger">{error}</Notice>}
           <Button type="submit" size="lg" className="w-full" disabled={busy || !password}>
-            {busy && <Loader2 className="animate-spin" aria-hidden />}Continue
+            {busy && <Loader2 className="animate-spin" aria-hidden />}{t('auth.setup2fa.continue')}
           </Button>
         </form>
       )}
@@ -96,16 +98,16 @@ export default function SetupTwoFactor({ email, next }: { email: string; next: s
       {step === 'scan' && (
         <form onSubmit={confirm} className="space-y-4">
           <div className="space-y-2 text-sm">
-            <p>1. Open your authenticator app and scan this QR code.</p>
+            <p>{t('auth.setup2fa.scan')}</p>
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={qr} alt="QR code for your authenticator app" width={220} height={220} className="mx-auto rounded-md border border-border bg-white p-2" />
+            <img src={qr} alt={t('auth.setup2fa.qrAlt')} width={220} height={220} className="mx-auto rounded-md border border-border bg-white p-2" />
             <details className="text-xs text-muted-foreground">
-              <summary className="cursor-pointer text-info-text">Can&apos;t scan? Enter this key instead</summary>
+              <summary className="cursor-pointer text-info-text">{t('auth.setup2fa.cantScan')}</summary>
               <code className="mt-2 block rounded-sm bg-muted p-2 font-mono break-all text-foreground">{secret}</code>
             </details>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="code">2. Enter the 6-digit code it shows</Label>
+            <Label htmlFor="code">{t('auth.setup2fa.enterCode')}</Label>
             <Input
               id="code"
               inputMode="numeric"
@@ -122,7 +124,7 @@ export default function SetupTwoFactor({ email, next }: { email: string; next: s
           </div>
           {error && <Notice tone="danger">{error}</Notice>}
           <Button type="submit" size="lg" className="w-full" disabled={busy || code.replace(/\s/g, '').length !== 6}>
-            {busy && <Loader2 className="animate-spin" aria-hidden />}Verify and turn on
+            {busy && <Loader2 className="animate-spin" aria-hidden />}{t('auth.setup2fa.verifyAndEnable')}
           </Button>
         </form>
       )}
@@ -130,9 +132,10 @@ export default function SetupTwoFactor({ email, next }: { email: string; next: s
       {step === 'codes' && (
         <div className="space-y-4">
           <p className="text-sm">
-            Two-factor authentication is on. Save these <span className="font-medium">backup codes</span>: if you lose your phone, each one lets you sign in once. They are shown only now.
+            {t('auth.setup2fa.enabledBefore')} <span className="font-medium">{t('auth.setup2fa.backupCodesWord')}</span>
+            {t('auth.setup2fa.enabledAfter')}
           </p>
-          <ul className="grid grid-cols-2 gap-2 rounded-md border border-border bg-muted p-3 font-mono text-sm" aria-label="Backup codes">
+          <ul className="grid grid-cols-2 gap-2 rounded-md border border-border bg-muted p-3 font-mono text-sm" aria-label={t('auth.setup2fa.backupCodes')}>
             {backupCodes.map((c) => (
               <li key={c}>{c}</li>
             ))}
@@ -140,18 +143,18 @@ export default function SetupTwoFactor({ email, next }: { email: string; next: s
           <div className="flex gap-2">
             <Button type="button" variant="outline" className="flex-1" onClick={() => void copyCodes()}>
               {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
-              {copied ? 'Copied' : 'Copy'}
+              {copied ? t('auth.setup2fa.copied') : t('auth.setup2fa.copy')}
             </Button>
             <Button type="button" variant="outline" className="flex-1" onClick={downloadCodes}>
-              <Download aria-hidden /> Download
+              <Download aria-hidden /> {t('auth.setup2fa.download')}
             </Button>
           </div>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={saved} onChange={(e) => setSaved(e.target.checked)} className="size-4 accent-primary" />
-            I saved my backup codes
+            {t('auth.setup2fa.savedCodes')}
           </label>
           <Button size="lg" className="w-full" disabled={!saved} onClick={() => window.location.assign(next)}>
-            Continue to KMPlus Nexus
+            {t('auth.setup2fa.continueToApp')}
           </Button>
         </div>
       )}

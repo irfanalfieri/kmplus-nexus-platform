@@ -14,64 +14,99 @@ import { PageHeader } from '@/components/dashboard/page-header'
 import { usePrefs } from '@/components/i18n/i18n-provider'
 import { getMonitoringOverview, type PipelineHealth } from '@/lib/actions/monitoring'
 import { cancelPipelineRun, getDatasetPreview, retryPipelineRun } from '@/lib/actions/pipelines'
-import RunHistory, { formatWhen } from '@/components/pipelines/run-history'
+import RunHistory from '@/components/pipelines/run-history'
 import { SampleTable } from '@/components/pipelines/pipeline-editor'
 import { useCan } from '@/components/workspace/workspace-context'
+import { localizeCheck } from '@/lib/pipelines/check-messages'
+import type { Locale } from '@/lib/i18n/config'
+import type { Translate } from '@/lib/i18n/translate'
 
 type Overview = Awaited<ReturnType<typeof getMonitoringOverview>>
 
 // Run outcomes in the chart: state colours, always paired with a label (legend + table view).
 const STATUS = {
-  success: { bar: 'bg-live', label: 'Success' },
-  partial: { bar: 'bg-warning', label: 'Partial (rows rejected)' },
-  failed: { bar: 'bg-danger', label: 'Failed' },
+  success: { bar: 'bg-live' },
+  partial: { bar: 'bg-warning' },
+  failed: { bar: 'bg-danger' },
 } as const
 
-type HealthMeta = { label: string } & ({ state: FlowState } | { warning: typeof AlertTriangle })
+type HealthMeta = { state: FlowState } | { warning: typeof AlertTriangle }
 const HEALTH: Record<PipelineHealth, HealthMeta> = {
-  healthy: { label: 'Healthy', state: 'live' },
-  warning: { label: 'Rejected rows', warning: AlertTriangle },
-  failed: { label: 'Failed', state: 'tripped' },
-  delayed: { label: 'Delayed', warning: Clock },
-  paused: { label: 'Paused', state: 'paused' },
-  never_run: { label: 'Never run', state: 'idle' },
+  healthy: { state: 'live' },
+  warning: { warning: AlertTriangle },
+  failed: { state: 'tripped' },
+  delayed: { warning: Clock },
+  paused: { state: 'paused' },
+  never_run: { state: 'idle' },
+}
+
+// Health reasons the server writes in English; a failed run's own error is shown as a check message.
+const REASONS: Record<string, 'waiting' | 'paused' | 'overdue' | 'lastFailed' | 'rejected'> = {
+  'A run has been waiting for the background worker for over 10 minutes': 'waiting',
+  'Schedule paused': 'paused',
+  'Scheduled run is overdue': 'overdue',
+  'Last run failed': 'lastFailed',
+  'Last run rejected some rows': 'rejected',
+}
+const healthReason = (reason: string, t: Translate, locale: Locale) => (reason in REASONS ? t(`ops.monitoring.reasons.${REASONS[reason]}`) : localizeCheck(reason, locale))
+
+const TRIGGERS = ['manual', 'schedule', 'replay', 'api', 'webhook', 'chain'] as const
+const triggerLabel = (trigger: string, t: Translate) => ((TRIGGERS as readonly string[]).includes(trigger) ? t(`ops.monitoring.triggers.${trigger as (typeof TRIGGERS)[number]}`) : trigger)
+
+/** "13 Oct, 09:05:12 WIB" in the interface language. */
+function useWhen() {
+  const { formatDateTime } = usePrefs()
+  return (value: Date | string | null | undefined) =>
+    value ? `${formatDateTime(value, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', dateStyle: undefined, timeStyle: undefined })} WIB` : '—'
+}
+
+/** Puts React nodes into a translated template's {placeholders}. */
+function rich(template: string, nodes: Record<string, React.ReactNode>) {
+  return template.split(/(\{\w+\})/).map((part, i) => {
+    const m = /^\{(\w+)\}$/.exec(part)
+    return m && m[1] in nodes ? <span key={i}>{nodes[m[1]]}</span> : part
+  })
 }
 
 function HealthMark({ health }: { health: PipelineHealth }) {
+  const { t } = usePrefs()
   const meta = HEALTH[health]
-  if ('state' in meta) return <StateMark state={meta.state}>{meta.label}</StateMark>
+  const label = t(`ops.monitoring.health.${health}`)
+  if ('state' in meta) return <StateMark state={meta.state}>{label}</StateMark>
   const Icon = meta.warning
   return (
     <span className="inline-flex items-center gap-2 text-sm font-medium whitespace-nowrap text-warning-text">
       <Icon className="size-3.5 text-warning" aria-hidden />
-      {meta.label}
+      {label}
     </span>
   )
 }
 
 /** A run's status as breaker + words. */
 function RunState({ status }: { status: string | null | undefined }) {
+  const { t } = usePrefs()
   const [state, label]: [FlowState, string] =
     status === 'success'
-      ? ['live', 'Succeeded']
+      ? ['live', t('state.succeeded')]
       : status === 'partial'
-        ? ['tripped', 'Partial']
+        ? ['tripped', t('ops.monitoring.run.partial')]
         : status === 'failed'
-          ? ['tripped', 'Failed']
+          ? ['tripped', t('state.failed')]
           : status === 'running'
-            ? ['running', 'Running']
+            ? ['running', t('state.running')]
             : status === 'queued'
-              ? ['idle', 'Queued']
+              ? ['idle', t('state.queued')]
               : status === 'cancelled'
-                ? ['paused', 'Cancelled']
-                : ['idle', 'Never run']
+                ? ['paused', t('state.cancelled')]
+                : ['idle', t('ops.monitoring.run.neverRun')]
   return <StateMark state={state}>{label}</StateMark>
 }
 
 const REFRESH_MS = 30_000
 
 export default function SchedulerMonitoringLayer() {
-  const { t } = usePrefs()
+  const { t, locale, formatNumber } = usePrefs()
+  const formatWhen = useWhen()
   const [data, setData] = useState<Overview | null>(null)
   const [error, setError] = useState('')
   const [refreshing, setRefreshing] = useState(false)
@@ -89,11 +124,11 @@ export default function SchedulerMonitoringLayer() {
       setData(await getMonitoringOverview())
       setError('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load monitoring data')
+      setError(err instanceof Error ? err.message : t('ops.monitoring.loadFailed'))
     } finally {
       setRefreshing(false)
     }
-  }, [])
+  }, [t])
 
   const runAction = async (key: string, fn: () => Promise<{ message: string }>) => {
     setActing(key)
@@ -102,7 +137,7 @@ export default function SchedulerMonitoringLayer() {
       toast({ message: (await fn()).message })
       await load()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Action failed')
+      setError(err instanceof Error ? err.message : t('ops.monitoring.actionFailed'))
     } finally {
       setActing(null)
     }
@@ -110,10 +145,10 @@ export default function SchedulerMonitoringLayer() {
 
   const cancelJob = async (job: { id: string; pipelineName: string }) => {
     const ok = await confirm({
-      title: `Cancel the run of ${job.pipelineName}?`,
-      description: 'A queued run is cancelled at once; a running one stops after the chunk it is writing now.',
-      confirmLabel: 'Cancel run',
-      cancelLabel: 'Keep running',
+      title: t('ops.monitoring.cancelTitle', { name: job.pipelineName }),
+      description: t('ops.monitoring.cancelBody'),
+      confirmLabel: t('ops.monitoring.cancelConfirm'),
+      cancelLabel: t('ops.monitoring.keepRunning'),
       tone: 'danger',
     })
     if (ok) await runAction(`cancel:${job.id}`, () => cancelPipelineRun(job.id))
@@ -121,9 +156,9 @@ export default function SchedulerMonitoringLayer() {
 
   const retryRun = async (run: { id: string; pipelineName: string }) => {
     const ok = await confirm({
-      title: `Run ${run.pipelineName} again?`,
-      description: 'A new run of the current published version is queued.',
-      confirmLabel: 'Retry run',
+      title: t('ops.monitoring.retryTitle', { name: run.pipelineName }),
+      description: t('ops.monitoring.retryBody'),
+      confirmLabel: t('ops.monitoring.retryConfirm'),
     })
     if (ok) await runAction(`retry:${run.id}`, () => retryPipelineRun(run.id))
   }
@@ -146,7 +181,7 @@ export default function SchedulerMonitoringLayer() {
       const res = await getDatasetPreview(name)
       setPreview({ name, rows: res.rows })
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Preview failed')
+      setError(err instanceof Error ? err.message : t('ops.monitoring.previewFailed'))
     }
   }
 
@@ -168,7 +203,7 @@ export default function SchedulerMonitoringLayer() {
       <PageHeader
         title={t('pages.monitoring.title')}
         description={t('pages.monitoring.description')}
-        meta="Pipeline health, run outcomes and produced datasets · refreshes every 30 seconds"
+        meta={t('ops.monitoring.meta')}
         actions={
           <Button variant="outline" onClick={() => void load()} disabled={refreshing}>
             <RefreshCw className={cn(refreshing && 'animate-spin')} aria-hidden /> {t('common.refresh')}
@@ -181,18 +216,18 @@ export default function SchedulerMonitoringLayer() {
       {!data ? (
         !error && (
           <div className="flex items-center justify-center rounded-lg border border-border bg-card p-10 text-sm text-muted-foreground" role="status">
-            <Loader2 className="mr-2 size-4 animate-spin" aria-hidden /> Loading monitoring data…
+            <Loader2 className="mr-2 size-4 animate-spin" aria-hidden /> {t('ops.monitoring.loading')}
           </div>
         )
       ) : (
         <>
           <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-3 xl:grid-cols-6">
-            <Stat label="Runs today · success" value={data.today.success} />
-            <Stat label="Runs today · partial" value={data.today.partial} />
-            <Stat label="Runs today · failed" value={data.today.failed} danger={data.today.failed > 0} />
-            <Stat label="Running now" value={data.today.running} />
-            <Stat label="Rows written · 24h" value={data.rowsWritten24h.toLocaleString()} />
-            <Stat label="Rows rejected · 24h" value={data.rowsRejected24h.toLocaleString()} />
+            <Stat label={t('ops.monitoring.stats.success')} value={formatNumber(data.today.success)} />
+            <Stat label={t('ops.monitoring.stats.partial')} value={formatNumber(data.today.partial)} />
+            <Stat label={t('ops.monitoring.stats.failed')} value={formatNumber(data.today.failed)} danger={data.today.failed > 0} />
+            <Stat label={t('ops.monitoring.stats.running')} value={formatNumber(data.today.running)} />
+            <Stat label={t('ops.monitoring.stats.written')} value={formatNumber(data.rowsWritten24h)} />
+            <Stat label={t('ops.monitoring.stats.rejected')} value={formatNumber(data.rowsRejected24h)} />
           </div>
 
           <div className="grid gap-6 xl:grid-cols-[1fr_1.2fr]">
@@ -200,12 +235,12 @@ export default function SchedulerMonitoringLayer() {
 
             <section className="rounded-lg border border-border bg-card p-5" aria-labelledby="mon-health">
               <h2 id="mon-health" className="text-base font-semibold">
-                Pipeline health
+                {t('ops.monitoring.healthTitle')}
               </h2>
-              <p className="mb-3 text-sm text-muted-foreground">Problems first. Success rate covers the last 7 days.</p>
+              <p className="mb-3 text-sm text-muted-foreground">{t('ops.monitoring.healthHelp')}</p>
               {data.health.length === 0 ? (
-                <EmptyState compact icon={<Activity />} title="No pipelines yet">
-                  Create one in Pipelines.
+                <EmptyState compact icon={<Activity />} title={t('ops.monitoring.noPipelinesTitle')}>
+                  {t('ops.monitoring.noPipelinesBody')}
                 </EmptyState>
               ) : (
                 <ul className="divide-y divide-border">
@@ -216,13 +251,13 @@ export default function SchedulerMonitoringLayer() {
                       </span>
                       <div className="min-w-0 flex-1">
                         <div className="truncate font-medium">{h.name}</div>
-                        <div className="truncate text-xs text-muted-foreground" title={h.reason}>
-                          {h.reason || (h.scheduled ? `Next ${formatWhen(h.nextRunAt)}` : 'Manual')} · last {formatWhen(h.lastRunAt)}
+                        <div className="truncate text-xs text-muted-foreground" title={h.reason ? healthReason(h.reason, t, locale) : undefined}>
+                          {h.reason ? healthReason(h.reason, t, locale) : h.scheduled ? t('ops.monitoring.next', { when: formatWhen(h.nextRunAt) }) : t('ops.monitoring.manual')} · {t('ops.monitoring.last', { when: formatWhen(h.lastRunAt) })}
                         </div>
                       </div>
-                      <span className="w-20 text-right font-mono text-xs text-muted-foreground">{h.successRate7d === null ? '—' : `${h.successRate7d}% of ${h.runs7d}`}</span>
-                      <Button size="sm" variant="ghost" onClick={() => setHistoryFor({ id: h.id, name: h.name, version: h.version })} aria-label={`Run history of ${h.name}`}>
-                        <History aria-hidden /> History
+                      <span className="w-20 text-right font-mono text-xs text-muted-foreground">{h.successRate7d === null ? '—' : t('ops.monitoring.rate', { rate: formatNumber(h.successRate7d), runs: formatNumber(h.runs7d) })}</span>
+                      <Button size="sm" variant="ghost" onClick={() => setHistoryFor({ id: h.id, name: h.name, version: h.version })} aria-label={t('ops.monitoring.historyOf', { name: h.name })}>
+                        <History aria-hidden /> {t('ops.monitoring.history')}
                       </Button>
                     </li>
                   ))}
@@ -234,9 +269,9 @@ export default function SchedulerMonitoringLayer() {
           {data.jobs.length > 0 && (
             <section className="rounded-lg border border-border bg-card p-5" aria-labelledby="mon-jobs" aria-live="polite">
               <h2 id="mon-jobs" className="text-base font-semibold">
-                Background runs
+                {t('ops.monitoring.jobs.title')}
               </h2>
-              <p className="mb-3 text-sm text-muted-foreground">Runs execute in chunks of 5,000 rows in the background worker and survive restarts. This list refreshes every 5 seconds.</p>
+              <p className="mb-3 text-sm text-muted-foreground">{t('ops.monitoring.jobs.help')}</p>
               <ul className="divide-y divide-border">
                 {data.jobs.map((j) => {
                   const retrying = j.status === 'queued' && j.attempts > 0
@@ -244,19 +279,20 @@ export default function SchedulerMonitoringLayer() {
                   return (
                     <li key={j.id} className="flex flex-wrap items-center gap-3 py-2.5 text-sm">
                       <span className="w-28">
-                        <StateMark state={cancelling ? 'paused' : j.status === 'running' ? 'running' : 'idle'}>{cancelling ? 'Cancelling' : j.status === 'running' ? 'Running' : retrying ? 'Retrying' : 'Queued'}</StateMark>
+                        <StateMark state={cancelling ? 'paused' : j.status === 'running' ? 'running' : 'idle'}>{cancelling ? t('ops.monitoring.jobs.cancelling') : j.status === 'running' ? t('state.running') : retrying ? t('ops.monitoring.jobs.retrying') : t('state.queued')}</StateMark>
                       </span>
                       <span className="min-w-0 flex-1 truncate font-medium">{j.pipelineName}</span>
                       <span className="font-mono text-xs text-muted-foreground">
-                        {j.rowsRead.toLocaleString()} read · {j.rowsWritten.toLocaleString()} written{j.chunks ? ` · ${j.chunks} chunk${j.chunks === 1 ? '' : 's'}` : ''}
+                        {t('ops.monitoring.jobs.progress', { read: formatNumber(j.rowsRead), written: formatNumber(j.rowsWritten) })}
+                        {j.chunks ? ` · ${t('ops.monitoring.jobs.chunks', { count: j.chunks })}` : ''}
                       </span>
                       <span className="w-48 text-right font-mono text-xs text-muted-foreground">
-                        {retrying ? `attempt ${j.attempts + 1} at ${formatWhen(j.availableAt)}` : `${j.trigger} · queued ${formatWhen(j.createdAt)}`}
+                        {retrying ? t('ops.monitoring.jobs.attempt', { attempt: j.attempts + 1, when: formatWhen(j.availableAt) }) : t('ops.monitoring.jobs.queuedAt', { trigger: triggerLabel(j.trigger, t), when: formatWhen(j.createdAt) })}
                       </span>
                       {canRun && !cancelling && (
-                        <Button size="sm" variant="outline" disabled={acting !== null} onClick={() => void cancelJob(j)} aria-label={`Cancel the run of ${j.pipelineName}`}>
+                        <Button size="sm" variant="outline" disabled={acting !== null} onClick={() => void cancelJob(j)} aria-label={t('ops.monitoring.jobs.cancelNamed', { name: j.pipelineName })}>
                           {acting === `cancel:${j.id}` ? <Loader2 className="animate-spin" aria-hidden /> : <Square aria-hidden />}
-                          Cancel
+                          {t('ops.monitoring.jobs.cancel')}
                         </Button>
                       )}
                     </li>
@@ -268,25 +304,25 @@ export default function SchedulerMonitoringLayer() {
 
           <section className="rounded-lg border border-border bg-card" aria-labelledby="mon-runs">
             <h2 id="mon-runs" className="px-5 pt-5 pb-3 text-base font-semibold">
-              Recent runs
+              {t('ops.monitoring.runs.title')}
             </h2>
             {data.recentRuns.length === 0 ? (
-              <EmptyState compact icon={<History />} title="No runs in the last 7 days" />
+              <EmptyState compact icon={<History />} title={t('ops.monitoring.runs.empty')} />
             ) : (
-              <Table label="Recent runs" className="min-w-[760px]">
+              <Table label={t('ops.monitoring.runs.title')} className="min-w-[760px]">
                 <THead>
                   <tr>
-                    <Th>Started</Th>
-                    <Th>Pipeline</Th>
-                    <Th>Trigger</Th>
-                    <Th>Status</Th>
-                    <Th className="text-right">Read</Th>
-                    <Th className="text-right">Written</Th>
-                    <Th className="text-right">Rejected</Th>
-                    <Th className="text-right">Duration</Th>
+                    <Th>{t('ops.monitoring.runs.started')}</Th>
+                    <Th>{t('ops.monitoring.runs.pipeline')}</Th>
+                    <Th>{t('ops.monitoring.runs.trigger')}</Th>
+                    <Th>{t('ops.monitoring.runs.status')}</Th>
+                    <Th className="text-right">{t('ops.monitoring.runs.read')}</Th>
+                    <Th className="text-right">{t('ops.monitoring.runs.written')}</Th>
+                    <Th className="text-right">{t('ops.monitoring.runs.rejected')}</Th>
+                    <Th className="text-right">{t('ops.monitoring.runs.duration')}</Th>
                     {canRun && (
                       <Th>
-                        <span className="sr-only">Actions</span>
+                        <span className="sr-only">{t('ops.monitoring.runs.actions')}</span>
                       </Th>
                     )}
                   </tr>
@@ -302,28 +338,28 @@ export default function SchedulerMonitoringLayer() {
                           onClick={() => setHistoryFor({ id: r.pipelineId, name: r.pipelineName, version: versionOf(r.pipelineId) })}
                         >
                           {r.pipelineName}
-                          <span className="sr-only"> — open run history</span>
+                          <span className="sr-only">{t('ops.monitoring.runs.openHistory')}</span>
                         </button>
                         {r.errorMessage && (
-                          <p className="truncate text-xs text-danger-text" title={r.errorMessage}>
-                            {r.errorMessage}
+                          <p className="truncate text-xs text-danger-text" title={localizeCheck(r.errorMessage, locale)}>
+                            {localizeCheck(r.errorMessage, locale)}
                           </p>
                         )}
                       </Td>
-                      <Td className="font-mono text-xs text-muted-foreground">{r.trigger}</Td>
+                      <Td className="font-mono text-xs text-muted-foreground">{r.trigger ? triggerLabel(r.trigger, t) : null}</Td>
                       <Td>
                         <RunState status={r.status} />
                       </Td>
-                      <Td className="text-right font-mono">{(r.recordsProcessed ?? 0).toLocaleString()}</Td>
-                      <Td className="text-right font-mono">{(r.recordsSuccess ?? 0).toLocaleString()}</Td>
-                      <Td className="text-right font-mono">{(r.recordsError ?? 0).toLocaleString()}</Td>
+                      <Td className="text-right font-mono">{formatNumber(r.recordsProcessed ?? 0)}</Td>
+                      <Td className="text-right font-mono">{formatNumber(r.recordsSuccess ?? 0)}</Td>
+                      <Td className="text-right font-mono">{formatNumber(r.recordsError ?? 0)}</Td>
                       <Td className="text-right font-mono">{r.duration != null ? `${r.duration}s` : '—'}</Td>
                       {canRun && (
                         <Td className="text-right">
                           {(r.status === 'failed' || r.status === 'cancelled' || r.status === 'partial') && (
-                            <Button size="sm" variant="ghost" disabled={acting !== null} onClick={() => void retryRun(r)} aria-label={`Run ${r.pipelineName} again`}>
+                            <Button size="sm" variant="ghost" disabled={acting !== null} onClick={() => void retryRun(r)} aria-label={t('ops.monitoring.runs.retryNamed', { name: r.pipelineName })}>
                               {acting === `retry:${r.id}` ? <Loader2 className="animate-spin" aria-hidden /> : <RotateCcw aria-hidden />}
-                              Retry
+                              {t('ops.monitoring.runs.retry')}
                             </Button>
                           )}
                         </Td>
@@ -338,11 +374,11 @@ export default function SchedulerMonitoringLayer() {
           <section className="rounded-lg border border-border bg-card p-5" aria-labelledby="mon-datasets">
             <h2 id="mon-datasets" className="mb-3 flex items-center gap-2 text-base font-semibold">
               <Database className="size-4 text-primary" aria-hidden />
-              Produced datasets
+              {t('ops.monitoring.datasets.title')}
             </h2>
             {data.datasets.length === 0 ? (
-              <EmptyState compact icon={<Database />} title="No datasets yet">
-                Pipelines that write to a Nexus dataset will show their output here.
+              <EmptyState compact icon={<Database />} title={t('ops.monitoring.datasets.emptyTitle')}>
+                {t('ops.monitoring.datasets.emptyBody')}
               </EmptyState>
             ) : (
               <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
@@ -353,7 +389,7 @@ export default function SchedulerMonitoringLayer() {
                     onClick={() => void openPreview(d.name)}
                     disabled={!canPreview}
                     aria-pressed={preview?.name === d.name}
-                    title={canPreview ? undefined : 'Your role cannot view dataset contents'}
+                    title={canPreview ? undefined : t('ops.monitoring.datasets.noAccess')}
                     className={cn(
                       'rounded-md border p-3 text-left text-sm outline-none hover:bg-muted/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:hover:bg-transparent',
                       preview?.name === d.name ? 'border-primary bg-accent text-accent-foreground' : 'border-border',
@@ -361,8 +397,9 @@ export default function SchedulerMonitoringLayer() {
                   >
                     <div className="font-mono font-medium">{d.name}</div>
                     <div className="mt-1 text-xs text-muted-foreground">
-                      <span className="font-mono">{(d.rowCount ?? 0).toLocaleString()}</span> rows · <span className="font-mono">{d.columnCount}</span> columns · loaded {formatWhen(d.lastLoadedAt)}
-                      {d.pipelineName ? ` · by ${d.pipelineName}` : ''}
+                      <span className="font-mono">{formatNumber(d.rowCount ?? 0)}</span> {t('ops.monitoring.datasets.rows', { count: d.rowCount ?? 0 })} · <span className="font-mono">{formatNumber(d.columnCount)}</span>{' '}
+                      {t('ops.monitoring.datasets.columns', { count: d.columnCount })} · {t('ops.monitoring.datasets.loaded', { when: formatWhen(d.lastLoadedAt) })}
+                      {d.pipelineName ? ` · ${t('ops.monitoring.datasets.by', { name: d.pipelineName })}` : ''}
                     </div>
                   </button>
                 ))}
@@ -371,14 +408,12 @@ export default function SchedulerMonitoringLayer() {
             {preview && (
               <div className="mt-3">
                 <div className="flex items-center justify-between text-sm">
-                  <h3>
-                    Latest rows in <span className="font-mono">{preview.name}</span>
-                  </h3>
+                  <h3>{rich(t('ops.monitoring.datasets.previewTitle'), { name: <span className="font-mono">{preview.name}</span> })}</h3>
                   <Button size="sm" variant="ghost" onClick={() => setPreview(null)}>
-                    Close preview
+                    {t('ops.monitoring.datasets.closePreview')}
                   </Button>
                 </div>
-                {preview.rows.length ? <SampleTable rows={preview.rows} /> : <p className="text-sm text-muted-foreground">The dataset is empty.</p>}
+                {preview.rows.length ? <SampleTable rows={preview.rows} /> : <p className="text-sm text-muted-foreground">{t('ops.monitoring.datasets.empty')}</p>}
               </div>
             )}
           </section>
@@ -402,15 +437,16 @@ function Stat({ label, value, danger }: { label: string; value: number | string;
 
 /** Stacked columns: runs per day by outcome (last 7 days, WIB). */
 function RunTrend({ trend }: { trend: Overview['trend'] }) {
+  const { t, formatDateTime } = usePrefs()
   const [hover, setHover] = useState<number | null>(null)
   const [asTable, setAsTable] = useState(false)
-  const max = useMemo(() => Math.max(1, ...trend.map((t) => t.success + t.partial + t.failed)), [trend])
+  const max = useMemo(() => Math.max(1, ...trend.map((d) => d.success + d.partial + d.failed)), [trend])
   const ticks = useMemo(() => {
     const step = Math.max(1, Math.ceil(max / 4))
     return Array.from({ length: Math.floor(max / step) + 1 }, (_, i) => i * step)
   }, [max])
   const top = ticks[ticks.length - 1] || 1
-  const dayLabel = (d: string) => new Date(`${d}T00:00:00Z`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', timeZone: 'UTC' })
+  const dayLabel = (d: string) => formatDateTime(`${d}T00:00:00Z`, { weekday: 'short', day: 'numeric', timeZone: 'UTC', dateStyle: undefined, timeStyle: undefined })
   const H = 160
 
   return (
@@ -418,70 +454,70 @@ function RunTrend({ trend }: { trend: Overview['trend'] }) {
       <div className="flex items-start justify-between gap-2">
         <div>
           <h2 id="mon-trend" className="text-base font-semibold">
-            Runs per day
+            {t('ops.monitoring.trend.title')}
           </h2>
-          <p className="text-sm text-muted-foreground">Last 7 days, by outcome</p>
+          <p className="text-sm text-muted-foreground">{t('ops.monitoring.trend.subtitle')}</p>
         </div>
         <Button size="sm" variant="ghost" onClick={() => setAsTable((v) => !v)} aria-pressed={asTable}>
-          {asTable ? 'Show chart' : 'Show table'}
+          {asTable ? t('ops.monitoring.trend.showChart') : t('ops.monitoring.trend.showTable')}
         </Button>
       </div>
       <div className="mt-2 flex flex-wrap gap-4 text-xs text-muted-foreground" aria-hidden={asTable}>
         {(Object.keys(STATUS) as (keyof typeof STATUS)[]).map((k) => (
           <span key={k} className="flex items-center gap-1.5">
             <span className={cn('inline-block size-2.5 rounded-[1px]', STATUS[k].bar)} />
-            {STATUS[k].label}
+            {t(`ops.monitoring.outcome.${k}`)}
           </span>
         ))}
       </div>
 
       {asTable ? (
-        <Table label="Runs per day" className="mt-4">
+        <Table label={t('ops.monitoring.trend.title')} className="mt-4">
           <THead>
             <tr>
-              <Th>Day</Th>
-              <Th className="text-right">Success</Th>
-              <Th className="text-right">Partial</Th>
-              <Th className="text-right">Failed</Th>
+              <Th>{t('ops.monitoring.trend.day')}</Th>
+              <Th className="text-right">{t('ops.monitoring.trend.success')}</Th>
+              <Th className="text-right">{t('ops.monitoring.trend.partial')}</Th>
+              <Th className="text-right">{t('ops.monitoring.trend.failed')}</Th>
             </tr>
           </THead>
           <TBody>
-            {trend.map((t) => (
-              <Tr key={t.day}>
-                <Td>{dayLabel(t.day)}</Td>
-                <Td className="text-right font-mono">{t.success}</Td>
-                <Td className="text-right font-mono">{t.partial}</Td>
-                <Td className="text-right font-mono">{t.failed}</Td>
+            {trend.map((d) => (
+              <Tr key={d.day}>
+                <Td>{dayLabel(d.day)}</Td>
+                <Td className="text-right font-mono">{d.success}</Td>
+                <Td className="text-right font-mono">{d.partial}</Td>
+                <Td className="text-right font-mono">{d.failed}</Td>
               </Tr>
             ))}
           </TBody>
         </Table>
       ) : (
-        <div className="relative mt-4 flex gap-2" role="img" aria-label={`Runs per day: ${trend.map((t) => `${dayLabel(t.day)} ${t.success} success, ${t.partial} partial, ${t.failed} failed`).join('; ')}`}>
+        <div className="relative mt-4 flex gap-2" role="img" aria-label={t('ops.monitoring.trend.aria', { days: trend.map((d) => t('ops.monitoring.trend.ariaDay', { day: dayLabel(d.day), success: d.success, partial: d.partial, failed: d.failed })).join('; ') })}>
           <div className="flex flex-col justify-between text-right font-mono text-[10px] text-muted-foreground tabular-nums" style={{ height: H }}>
-            {[...ticks].reverse().map((t) => (
-              <span key={t}>{t}</span>
+            {[...ticks].reverse().map((tick) => (
+              <span key={tick}>{tick}</span>
             ))}
           </div>
           <div className="relative flex-1">
             <div className="pointer-events-none absolute inset-x-0 top-0 flex flex-col justify-between" style={{ height: H }}>
-              {ticks.map((t) => (
-                <div key={t} className="border-t border-border/60" />
+              {ticks.map((tick) => (
+                <div key={tick} className="border-t border-border/60" />
               ))}
             </div>
             <div className="relative flex items-end gap-2" style={{ height: H }}>
-              {trend.map((t, i) => {
-                const total = t.success + t.partial + t.failed
+              {trend.map((d, i) => {
+                const total = d.success + d.partial + d.failed
                 return (
-                  <div key={t.day} className="relative flex h-full flex-1 flex-col justify-end" onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
+                  <div key={d.day} className="relative flex h-full flex-1 flex-col justify-end" onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
                     {/* Stack bottom → top: success, partial, failed; 2px surface gaps between segments. */}
                     <div className="mx-auto flex w-full max-w-[36px] flex-col-reverse gap-[2px]">
                       {(['success', 'partial', 'failed'] as const)
-                        .filter((k) => t[k] > 0)
+                        .filter((k) => d[k] > 0)
                         .map((k, idx, arr) => (
                           <div
                             key={k}
-                            style={{ height: Math.max(2, (t[k] / top) * H - 2), opacity: hover === null || hover === i ? 1 : 0.45 }}
+                            style={{ height: Math.max(2, (d[k] / top) * H - 2), opacity: hover === null || hover === i ? 1 : 0.45 }}
                             className={cn(STATUS[k].bar, idx === arr.length - 1 && 'rounded-t-[2px]')}
                           />
                         ))}
@@ -489,15 +525,15 @@ function RunTrend({ trend }: { trend: Overview['trend'] }) {
                     {hover === i && (
                       <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 w-36 -translate-x-1/2 rounded-md border border-border bg-popover p-2 text-xs shadow-raised">
                         <div className="mb-1 font-medium">
-                          {dayLabel(t.day)} · {total} run{total === 1 ? '' : 's'}
+                          {t('ops.monitoring.trend.tooltip', { day: dayLabel(d.day), count: total })}
                         </div>
                         {(['success', 'partial', 'failed'] as const).map((k) => (
                           <div key={k} className="flex items-center justify-between gap-2">
                             <span className="flex items-center gap-1.5">
                               <span className={cn('inline-block size-2 rounded-[1px]', STATUS[k].bar)} />
-                              {k}
+                              {t(`ops.monitoring.series.${k}`)}
                             </span>
-                            <span className="font-mono tabular-nums">{t[k]}</span>
+                            <span className="font-mono tabular-nums">{d[k]}</span>
                           </div>
                         ))}
                       </div>
@@ -507,9 +543,9 @@ function RunTrend({ trend }: { trend: Overview['trend'] }) {
               })}
             </div>
             <div className="mt-1 flex gap-2">
-              {trend.map((t) => (
-                <span key={t.day} className="flex-1 text-center text-[10px] text-muted-foreground">
-                  {dayLabel(t.day)}
+              {trend.map((d) => (
+                <span key={d.day} className="flex-1 text-center text-[10px] text-muted-foreground">
+                  {dayLabel(d.day)}
                 </span>
               ))}
             </div>

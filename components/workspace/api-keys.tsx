@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useId, useState } from 'react'
+import { Fragment, useCallback, useEffect, useId, useState } from 'react'
 import { Check, Copy, KeySquare, Loader2, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -12,12 +12,24 @@ import { StateMark } from '@/components/ui/flow-line'
 import { Table, TBody, Td, Th, THead, Tr } from '@/components/ui/data-table'
 import { SettingsPanel, nativeSelectClass } from '@/components/workspace/settings-panel'
 import { createApiKey, listApiKeys, revokeApiKey } from '@/lib/actions/api-keys'
-import { formatWhen } from '@/components/pipelines/run-history'
+import { usePrefs } from '@/components/i18n/i18n-provider'
+import { isRole } from '@/lib/auth/permissions'
 
 type Key = Awaited<ReturnType<typeof listApiKeys>>[number]
 
+/** Short date and time in WIB, in the interface language. */
+const WHEN: Intl.DateTimeFormatOptions = { dateStyle: undefined, timeStyle: undefined, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' }
+const DAY: Intl.DateTimeFormatOptions = { dateStyle: undefined, timeStyle: undefined, day: '2-digit', month: 'short', year: 'numeric' }
+
+/** Fills {slots} in a translated sentence with elements. */
+function rich(text: string, slots: Record<string, React.ReactNode>) {
+  return text.split(/\{(\w+)\}/).map((part, i) => (i % 2 ? <Fragment key={i}>{slots[part] ?? `{${part}}`}</Fragment> : part))
+}
+
 /** Data API keys (API-1): admins create scoped keys (shown once) and revoke them. */
 export function ApiKeys() {
+  const { t, formatDateTime } = usePrefs()
+  const roleLabel = (r: string) => (isRole(r) ? t(`ws.roles.${r}` as const) : r)
   const id = useId()
   const [keys, setKeys] = useState<Key[] | null>(null)
   const [error, setError] = useState('')
@@ -36,9 +48,9 @@ export function ApiKeys() {
     try {
       setKeys(await listApiKeys())
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load API keys')
+      setError(err instanceof Error ? err.message : t('ws.apiKeys.loadFailed'))
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     void load()
@@ -61,7 +73,7 @@ export function ApiKeys() {
       setName('')
       await load()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not create the key')
+      setError(err instanceof Error ? err.message : t('ws.apiKeys.createFailed'))
     } finally {
       setBusy(false)
     }
@@ -69,9 +81,9 @@ export function ApiKeys() {
 
   const revoke = async (k: Key) => {
     const ok = await confirm({
-      title: `Revoke API key "${k.name}"?`,
-      description: 'Apps using it stop working right away. This cannot be undone.',
-      confirmLabel: 'Revoke key',
+      title: t('ws.apiKeys.revokeTitle', { name: k.name }),
+      description: t('ws.apiKeys.revokeBody'),
+      confirmLabel: t('ws.apiKeys.revokeConfirm'),
       tone: 'danger',
     })
     if (!ok) return
@@ -79,7 +91,7 @@ export function ApiKeys() {
       await revokeApiKey(k.id)
       await load()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Revoke failed')
+      setError(err instanceof Error ? err.message : t('ws.apiKeys.revokeFailed'))
     }
   }
 
@@ -87,34 +99,37 @@ export function ApiKeys() {
 
   return (
     <SettingsPanel
-      title="Data API keys"
-      description={
-        <>
-          Apps read datasets and business entities, start pipelines and follow runs over HTTPS with a key: <span className="font-mono text-xs">GET {origin}/api/v1/datasets/&lt;name&gt;</span>,{' '}
-          <span className="font-mono text-xs">/api/v1/domains/employee</span>, <span className="font-mono text-xs">POST /api/v1/pipelines/&lt;id&gt;/runs</span>. Masking and row-level access follow the key&apos;s role; each key has a per-minute request
-          limit.{' '}
+      title={t('ws.apiKeys.title')}
+      description={rich(t('ws.apiKeys.description'), {
+        examples: (
+          <>
+            <span className="font-mono text-xs">GET {origin}/api/v1/datasets/&lt;name&gt;</span>, <span className="font-mono text-xs">/api/v1/domains/employee</span>,{' '}
+            <span className="font-mono text-xs">POST /api/v1/pipelines/&lt;id&gt;/runs</span>
+          </>
+        ),
+        spec: (
           <a className="text-info-text underline-offset-4 hover:underline" href="/api/v1/openapi.json" target="_blank" rel="noreferrer">
-            OpenAPI spec
+            {t('ws.apiKeys.spec')}
           </a>
-        </>
-      }
+        ),
+      })}
     >
       <div className="space-y-3">
         {!creating && (
           <Button onClick={() => setCreating(true)}>
-            <Plus aria-hidden /> New key
+            <Plus aria-hidden /> {t('ws.apiKeys.newKey')}
           </Button>
         )}
 
         {created && (
           <div className="space-y-2 rounded-md border border-warning/50 bg-warning-soft p-3 text-sm" role="status">
-            <h3 className="font-semibold">Copy the key now. It won&apos;t be shown again.</h3>
+            <h3 className="font-semibold">{t('ws.apiKeys.copyNow')}</h3>
             <div className="flex gap-2">
-              <Input readOnly value={created} className="bg-card font-mono text-xs" onFocus={(e) => e.target.select()} aria-label="New API key" />
+              <Input readOnly value={created} className="bg-card font-mono text-xs" onFocus={(e) => e.target.select()} aria-label={t('ws.apiKeys.keyLabel')} />
               <Button
                 size="icon"
                 variant="outline"
-                aria-label={copied ? 'API key copied' : 'Copy API key'}
+                aria-label={copied ? t('ws.apiKeys.keyCopied') : t('ws.apiKeys.copyKey')}
                 onClick={() => {
                   void navigator.clipboard.writeText(created).then(() => setCopied(true))
                 }}
@@ -122,7 +137,7 @@ export function ApiKeys() {
                 {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
               </Button>
               <Button variant="ghost" onClick={() => setCreated(null)}>
-                Done
+                {t('ws.common.done')}
               </Button>
             </div>
             <div className="font-mono text-xs text-muted-foreground">
@@ -139,45 +154,45 @@ export function ApiKeys() {
               void create()
             }}
           >
-            <h3 className="text-sm font-semibold md:col-span-4">New API key</h3>
+            <h3 className="text-sm font-semibold md:col-span-4">{t('ws.apiKeys.formTitle')}</h3>
             <div className="space-y-1.5 md:col-span-2">
-              <Label htmlFor={`${id}-name`}>Name</Label>
-              <Input id={`${id}-name`} value={name} onChange={(e) => setName(e.target.value)} placeholder="KMS production" />
+              <Label htmlFor={`${id}-name`}>{t('ws.apiKeys.name')}</Label>
+              <Input id={`${id}-name`} value={name} onChange={(e) => setName(e.target.value)} placeholder={t('ws.apiKeys.namePlaceholder')} />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor={`${id}-role`}>Reads as</Label>
+              <Label htmlFor={`${id}-role`}>{t('ws.apiKeys.readsAs')}</Label>
               <select id={`${id}-role`} className={`${nativeSelectClass} w-full`} value={role} onChange={(e) => setRole(e.target.value as 'analyst' | 'steward')}>
-                <option value="analyst">Analyst (masked personal data)</option>
-                <option value="steward">Data steward (real values)</option>
+                <option value="analyst">{t('ws.apiKeys.roleAnalyst')}</option>
+                <option value="steward">{t('ws.apiKeys.roleSteward')}</option>
               </select>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor={`${id}-expires`}>Expires</Label>
+              <Label htmlFor={`${id}-expires`}>{t('ws.apiKeys.expires')}</Label>
               <select id={`${id}-expires`} className={`${nativeSelectClass} w-full`} value={expires} onChange={(e) => setExpires(e.target.value)}>
-                <option value="30">in 30 days</option>
-                <option value="90">in 90 days</option>
-                <option value="365">in 1 year</option>
-                <option value="">never</option>
+                <option value="30">{t('ws.apiKeys.in30')}</option>
+                <option value="90">{t('ws.apiKeys.in90')}</option>
+                <option value="365">{t('ws.apiKeys.in365')}</option>
+                <option value="">{t('ws.apiKeys.never')}</option>
               </select>
             </div>
             <div className="flex flex-wrap items-center gap-3 text-sm md:col-span-4">
               <div className="flex items-center gap-1.5">
-                <Label htmlFor={`${id}-rate`}>Limit</Label>
-                <select id={`${id}-rate`} className={`${nativeSelectClass} w-36`} value={rate} onChange={(e) => setRate(e.target.value)} aria-label="Requests per minute">
+                <Label htmlFor={`${id}-rate`}>{t('ws.apiKeys.limit')}</Label>
+                <select id={`${id}-rate`} className={`${nativeSelectClass} w-36`} value={rate} onChange={(e) => setRate(e.target.value)} aria-label={t('ws.apiKeys.perMinuteLabel')}>
                   {['60', '120', '300', '600', '1200'].map((r) => (
                     <option key={r} value={r}>
-                      {r} / minute
+                      {t('ws.apiKeys.perMinute', { count: r })}
                     </option>
                   ))}
                 </select>
               </div>
               <fieldset className="flex flex-wrap items-center gap-3">
-                <legend className="sr-only">Scopes</legend>
+                <legend className="sr-only">{t('ws.apiKeys.scopes')}</legend>
                 {[
-                  ['datasets:read', 'Read datasets'],
-                  ['domains:read', 'Read business entities'],
-                  ['pipelines:run', 'Run pipelines'],
-                  ['runs:read', 'Read run status'],
+                  ['datasets:read', t('ws.apiKeys.scopeDatasets')],
+                  ['domains:read', t('ws.apiKeys.scopeDomains')],
+                  ['pipelines:run', t('ws.apiKeys.scopeRun')],
+                  ['runs:read', t('ws.apiKeys.scopeRuns')],
                 ].map(([s, label]) => (
                   <label key={s} className="flex items-center gap-1.5">
                     <input
@@ -192,10 +207,10 @@ export function ApiKeys() {
               </fieldset>
               <span className="flex-1" />
               <Button type="button" size="sm" variant="ghost" onClick={() => setCreating(false)}>
-                Cancel
+                {t('common.cancel')}
               </Button>
               <Button type="submit" size="sm" disabled={busy || !name.trim() || !scopes.length}>
-                {busy && <Loader2 className="animate-spin" aria-hidden />} Create key
+                {busy && <Loader2 className="animate-spin" aria-hidden />} {t('ws.apiKeys.create')}
               </Button>
             </div>
           </form>
@@ -205,23 +220,23 @@ export function ApiKeys() {
 
         {!keys ? (
           <p className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" aria-hidden /> Loading…
+            <Loader2 className="size-4 animate-spin" aria-hidden /> {t('common.loading')}
           </p>
         ) : keys.length === 0 ? (
-          <EmptyState compact icon={<KeySquare />} title="No API keys yet">
-            Create a key for each app that reads Nexus data, so you can revoke one without touching the others.
+          <EmptyState compact icon={<KeySquare />} title={t('ws.apiKeys.emptyTitle')}>
+            {t('ws.apiKeys.emptyBody')}
           </EmptyState>
         ) : (
           <div className="-mx-5 border-y border-border">
-            <Table label="Data API keys" className="min-w-[720px]">
+            <Table label={t('ws.apiKeys.title')} className="min-w-[720px]">
               <THead>
                 <tr>
-                  <Th className="pl-5">Key</Th>
-                  <Th>Access</Th>
-                  <Th>Status</Th>
-                  <Th>Usage</Th>
+                  <Th className="pl-5">{t('ws.apiKeys.colKey')}</Th>
+                  <Th>{t('ws.apiKeys.colAccess')}</Th>
+                  <Th>{t('ws.apiKeys.colStatus')}</Th>
+                  <Th>{t('ws.apiKeys.colUsage')}</Th>
                   <Th className="pr-5">
-                    <span className="sr-only">Actions</span>
+                    <span className="sr-only">{t('ws.apiKeys.colActions')}</span>
                   </Th>
                 </tr>
               </THead>
@@ -236,7 +251,7 @@ export function ApiKeys() {
                       </Td>
                       <Td>
                         <div className="text-sm">
-                          {k.role} · <span className="font-mono">{k.rateLimitPerMinute}/min</span>
+                          {roleLabel(k.role)} · <span className="font-mono">{t('ws.apiKeys.rate', { count: k.rateLimitPerMinute })}</span>
                         </div>
                         <div className="mt-1 flex flex-wrap gap-1">
                           {k.scopes.map((s) => (
@@ -248,20 +263,20 @@ export function ApiKeys() {
                       </Td>
                       <Td>
                         <StateMark state={k.revokedAt ? 'tripped' : expired ? 'paused' : 'live'} className="text-xs">
-                          {k.revokedAt ? 'Revoked' : expired ? 'Expired' : 'Active'}
+                          {k.revokedAt ? t('ws.common.revoked') : expired ? t('ws.apiKeys.expired') : t('ws.common.active')}
                         </StateMark>
                       </Td>
                       <Td className="text-xs text-muted-foreground">
-                        <div>by {k.createdByEmail ?? 'unknown'}</div>
+                        <div>{t('ws.apiKeys.by', { email: k.createdByEmail ?? t('ws.apiKeys.unknown') })}</div>
                         <div className="font-mono">
-                          last used {k.lastUsedAt ? formatWhen(k.lastUsedAt) : 'never'}
-                          {k.expiresAt ? ` · expires ${new Date(k.expiresAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}` : ' · never expires'}
+                          {t('ws.common.lastUsed', { when: k.lastUsedAt ? `${formatDateTime(k.lastUsedAt, WHEN)} WIB` : t('ws.common.never') })}
+                          {k.expiresAt ? ` · ${t('ws.apiKeys.expiresOn', { date: formatDateTime(k.expiresAt, DAY) })}` : ` · ${t('ws.apiKeys.neverExpires')}`}
                         </div>
                       </Td>
                       <Td className="pr-5 text-right">
                         {!k.revokedAt && (
-                          <Button size="sm" variant="destructive" aria-label={`Revoke API key ${k.name}`} onClick={() => void revoke(k)}>
-                            Revoke
+                          <Button size="sm" variant="destructive" aria-label={t('ws.apiKeys.revokeLabel', { name: k.name })} onClick={() => void revoke(k)}>
+                            {t('ws.common.revoke')}
                           </Button>
                         )}
                       </Td>

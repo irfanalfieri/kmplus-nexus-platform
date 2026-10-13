@@ -10,12 +10,14 @@ import { Notice } from '@/components/ui/notice'
 import { SettingsPanel } from '@/components/workspace/settings-panel'
 import { authClient } from '@/lib/auth-client'
 import { getAccountSecurity } from '@/lib/actions/account'
+import { useT } from '@/components/i18n/i18n-provider'
 
 type Security = Awaited<ReturnType<typeof getAccountSecurity>>
 type Mode = 'idle' | 'regenerate' | 'reenroll'
 
 /** Settings → Your account security: 2FA status, new backup codes, move 2FA to a new phone (TD-19). */
 export function AccountSecurity() {
+  const t = useT()
   const [info, setInfo] = useState<Security | null>(null)
   const [mode, setMode] = useState<Mode>('idle')
   const [password, setPassword] = useState('')
@@ -28,9 +30,9 @@ export function AccountSecurity() {
     try {
       setInfo(await getAccountSecurity())
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load account security')
+      setError(err instanceof Error ? err.message : t('ws.account.loadFailed'))
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     void load()
@@ -51,7 +53,7 @@ export function AccountSecurity() {
     if (mode === 'regenerate') {
       const { data, error } = await authClient.twoFactor.generateBackupCodes({ password })
       setBusy(false)
-      if (error || !data) return setError(error?.message ?? 'Could not create new backup codes.')
+      if (error || !data) return setError(error?.message ?? t('ws.account.backupFailed'))
       setCodes(data.backupCodes)
       setCopied(false)
       close()
@@ -61,11 +63,11 @@ export function AccountSecurity() {
     // Re-enroll: turn 2FA off (password-confirmed), then the setup flow runs again right away.
     const { error } = await authClient.twoFactor.disable({ password })
     setBusy(false)
-    if (error) return setError(error.message ?? 'Could not start setup.')
+    if (error) return setError(error.message ?? t('ws.account.setupFailed'))
     window.location.assign('/setup-2fa?next=%2Fdashboard')
   }
 
-  const codesText = codes ? `KMPlus Nexus backup codes for ${info?.email ?? ''}\nEach code works once. Keep them somewhere safe.\n\n${codes.join('\n')}\n` : ''
+  const codesText = codes ? `${t('ws.account.codesFileHeader', { email: info?.email ?? '' })}\n${t('ws.account.codesFileNote')}\n\n${codes.join('\n')}\n` : ''
   const copyCodes = async () => {
     try {
       await navigator.clipboard.writeText(codesText)
@@ -87,31 +89,32 @@ export function AccountSecurity() {
 
   return (
     <SettingsPanel
-      title="Your account security"
-      description="Two-factor authentication is required for every account. Lost your phone? Sign in with a backup code, then set up 2FA on your new device here."
+      title={t('ws.account.title')}
+      description={t('ws.account.description')}
     >
       {!info ? (
         error ? (
           <Notice tone="danger">{error}</Notice>
         ) : (
           <p className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" aria-hidden /> Loading…
+            <Loader2 className="size-4 animate-spin" aria-hidden /> {t('common.loading')}
           </p>
         )
       ) : (
         <div className="space-y-4">
           <dl className="grid gap-3 text-sm sm:grid-cols-2">
             <div className="rounded-md border border-border p-3">
-              <dt className="text-xs text-muted-foreground">Authenticator app</dt>
+              <dt className="text-xs text-muted-foreground">{t('ws.account.authenticator')}</dt>
               <dd className="mt-1 flex items-center gap-1.5 font-medium text-live-text">
-                <ShieldCheck className="size-4 text-live" aria-hidden /> On
+                <ShieldCheck className="size-4 text-live" aria-hidden /> {t('ws.account.on')}
               </dd>
             </div>
             <div className={cn('rounded-md border p-3', low ? 'border-warning/50 bg-warning-soft' : 'border-border')}>
-              <dt className="text-xs text-muted-foreground">Backup codes left</dt>
+              <dt className="text-xs text-muted-foreground">{t('ws.account.backupLeft')}</dt>
               <dd className="mt-1 flex items-center gap-1.5 font-medium">
                 {low && <ShieldAlert className="size-4 text-warning" aria-hidden />}
-                <span className="font-mono">{info.backupCodesLeft ?? '—'}</span> of 10{low ? ' · create new codes soon' : ''}
+                <span className="font-mono">{info.backupCodesLeft ?? '—'}</span> {t('ws.account.ofTen')}
+                {low ? ` · ${t('ws.account.lowHint')}` : ''}
               </dd>
             </div>
           </dl>
@@ -119,22 +122,22 @@ export function AccountSecurity() {
           {mode === 'idle' ? (
             <div className="flex flex-wrap gap-2">
               <Button variant="outline" onClick={() => setMode('regenerate')}>
-                <KeyRound aria-hidden /> New backup codes
+                <KeyRound aria-hidden /> {t('ws.account.newCodes')}
               </Button>
               <Button variant="outline" onClick={() => setMode('reenroll')}>
-                <Smartphone aria-hidden /> Set up on a new device
+                <Smartphone aria-hidden /> {t('ws.account.newDevice')}
               </Button>
             </div>
           ) : (
             <form onSubmit={submit} className="space-y-3 rounded-md border border-border p-4">
-              <h3 className="text-sm font-semibold">{mode === 'regenerate' ? 'Create new backup codes' : 'Move 2FA to a new device'}</h3>
+              <h3 className="text-sm font-semibold">{mode === 'regenerate' ? t('ws.account.regenerateTitle') : t('ws.account.reenrollTitle')}</h3>
               <Notice tone="warning" live={false}>
                 {mode === 'regenerate'
-                  ? 'Creates 10 new backup codes. Your old codes stop working.'
-                  : 'Replaces your authenticator app: you will scan a new QR code right away. Your old app and backup codes stop working.'}
+                  ? t('ws.account.regenerateWarning')
+                  : t('ws.account.reenrollWarning')}
               </Notice>
               <div className="space-y-1.5">
-                <Label htmlFor="account-security-password">Confirm your password</Label>
+                <Label htmlFor="account-security-password">{t('ws.account.password')}</Label>
                 <Input
                   id="account-security-password"
                   type="password"
@@ -150,10 +153,10 @@ export function AccountSecurity() {
               <div className="flex gap-2">
                 <Button type="submit" variant={mode === 'reenroll' ? 'danger' : 'default'} disabled={busy || !password}>
                   {busy && <Loader2 className="animate-spin" aria-hidden />}
-                  {mode === 'regenerate' ? 'Create new codes' : 'Continue to setup'}
+                  {mode === 'regenerate' ? t('ws.account.createCodes') : t('ws.account.continueSetup')}
                 </Button>
                 <Button type="button" variant="ghost" onClick={close}>
-                  Cancel
+                  {t('common.cancel')}
                 </Button>
               </div>
             </form>
@@ -161,7 +164,7 @@ export function AccountSecurity() {
 
           {codes && (
             <div className="space-y-3 rounded-md border border-info/40 bg-info-soft p-4" aria-live="polite">
-              <h3 className="text-sm font-semibold">Your new backup codes (shown only now)</h3>
+              <h3 className="text-sm font-semibold">{t('ws.account.codesTitle')}</h3>
               <ul className="grid grid-cols-2 gap-2 font-mono text-sm sm:grid-cols-5">
                 {codes.map((c) => (
                   <li key={c}>{c}</li>
@@ -170,13 +173,13 @@ export function AccountSecurity() {
               <div className="flex flex-wrap gap-2">
                 <Button size="sm" variant="outline" onClick={() => void copyCodes()}>
                   {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
-                  {copied ? 'Copied' : 'Copy'}
+                  {copied ? t('ws.common.copied') : t('ws.common.copy')}
                 </Button>
                 <Button size="sm" variant="outline" onClick={downloadCodes}>
-                  <Download aria-hidden /> Download
+                  <Download aria-hidden /> {t('ws.common.download')}
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => setCodes(null)}>
-                  Done
+                  {t('ws.common.done')}
                 </Button>
               </div>
             </div>

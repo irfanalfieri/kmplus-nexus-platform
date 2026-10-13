@@ -1,7 +1,8 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { useT } from '@/components/i18n/i18n-provider'
+import { usePrefs } from '@/components/i18n/i18n-provider'
+import type { MessageKey } from '@/lib/i18n/translate'
 import { CheckCheck, ClipboardCheck, Loader2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -12,7 +13,6 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { StateMark, type FlowState } from '@/components/ui/flow-line'
 import { approveRequest, cancelRequest, listApprovals, rejectRequest } from '@/lib/actions/approvals'
 import { describeDiff } from '@/lib/audit-diff'
-import { formatWhen } from '@/components/pipelines/run-history'
 
 type Request = Awaited<ReturnType<typeof listApprovals>>[number]
 
@@ -20,6 +20,13 @@ const STATUS_STATE: Record<string, FlowState> = {
   pending: 'held',
   approved: 'live',
   rejected: 'tripped',
+}
+const STATUS_TEXT: Record<string, MessageKey> = {
+  pending: 'editor.approvals.status.pending',
+  approved: 'editor.approvals.status.approved',
+  rejected: 'editor.approvals.status.rejected',
+  cancelled: 'editor.approvals.status.cancelled',
+  superseded: 'editor.approvals.status.superseded',
 }
 
 /**
@@ -39,7 +46,10 @@ export default function ApprovalsPanel({
   history?: boolean
   onHistoryChange?: (open: boolean) => void
 }) {
-  const t = useT()
+  const { t, formatDateTime } = usePrefs()
+  const when = (v: Date | string | null | undefined) =>
+    v ? `${formatDateTime(v, { dateStyle: undefined, timeStyle: undefined, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' })} WIB` : '—'
+  const statusText = (s: string) => (STATUS_TEXT[s] ? t(STATUS_TEXT[s]) : s)
   const [items, setItems] = useState<Request[]>([])
   const [ownHistory, setOwnHistory] = useState(false)
   const history = controlledHistory ?? ownHistory
@@ -58,11 +68,11 @@ export default function ApprovalsPanel({
     try {
       setItems(await listApprovals(history ? 'all' : 'pending'))
     } catch (err) {
-      setMessage({ kind: 'err', text: err instanceof Error ? err.message : 'Could not load approvals' })
+      setMessage({ kind: 'err', text: err instanceof Error ? err.message : t('editor.approvals.loadFailed') })
     } finally {
       setLoading(false)
     }
-  }, [history])
+  }, [history, t])
 
   useEffect(() => {
     void load()
@@ -76,7 +86,7 @@ export default function ApprovalsPanel({
       await load()
       onDecided()
     } catch (err) {
-      setMessage({ kind: 'err', text: err instanceof Error ? err.message : 'Failed' })
+      setMessage({ kind: 'err', text: err instanceof Error ? err.message : t('editor.approvals.failed') })
     } finally {
       setBusy(null)
     }
@@ -84,30 +94,30 @@ export default function ApprovalsPanel({
 
   const approve = async (r: Request) => {
     const ok = await confirm({
-      title: `Approve and publish ${r.pipelineName} v${r.version}?`,
-      description: `It replaces v${r.publishedVersion || '–'} as the running version right away.`,
-      confirmLabel: 'Approve & publish',
+      title: t('editor.approvals.approveTitle', { name: r.pipelineName, version: r.version }),
+      description: t('editor.approvals.approveBody', { version: r.publishedVersion || '–' }),
+      confirmLabel: t('editor.approvals.approvePublish'),
     })
-    if (ok) await act(r.id, async () => `Approved: ${r.pipelineName} v${(await approveRequest({ id: r.id, note: notes[r.id] ?? '' })).version} is published.`)
+    if (ok) await act(r.id, async () => t('editor.approvals.approved', { name: r.pipelineName, version: (await approveRequest({ id: r.id, note: notes[r.id] ?? '' })).version }))
   }
   const reject = async (r: Request) => {
     const ok = await confirm({
-      title: `Reject ${r.pipelineName} v${r.version}?`,
-      description: 'The requester sees your note. The running version stays as it is.',
-      confirmLabel: 'Reject',
+      title: t('editor.approvals.rejectTitle', { name: r.pipelineName, version: r.version }),
+      description: t('editor.approvals.rejectBody'),
+      confirmLabel: t('editor.approvals.reject'),
       tone: 'danger',
     })
-    if (ok) await act(r.id, async () => (await rejectRequest({ id: r.id, note: notes[r.id] ?? '' }), `Rejected ${r.pipelineName} v${r.version}.`))
+    if (ok) await act(r.id, async () => (await rejectRequest({ id: r.id, note: notes[r.id] ?? '' }), t('editor.approvals.rejected', { name: r.pipelineName, version: r.version })))
   }
   const cancel = async (r: Request) => {
     const ok = await confirm({
-      title: 'Cancel this approval request?',
-      description: `${r.pipelineName} v${r.version} stays a draft and is not published.`,
-      confirmLabel: 'Cancel request',
-      cancelLabel: 'Keep request',
+      title: t('editor.approvals.cancelTitle'),
+      description: t('editor.approvals.cancelBody', { name: r.pipelineName, version: r.version }),
+      confirmLabel: t('editor.approvals.cancelRequest'),
+      cancelLabel: t('editor.approvals.keepRequest'),
       tone: 'danger',
     })
-    if (ok) await act(r.id, async () => (await cancelRequest(r.id), 'Request cancelled.'))
+    if (ok) await act(r.id, async () => (await cancelRequest(r.id), t('editor.approvals.cancelled')))
   }
 
   const pending = items.filter((r) => r.status === 'pending')
@@ -156,15 +166,16 @@ export default function ApprovalsPanel({
                     {r.pipelineName} <span className="font-mono">v{r.version}</span>
                   </span>
                   <StateMark state={STATUS_STATE[r.status] ?? 'idle'} className="text-xs">
-                    {r.status}
+                    {statusText(r.status)}
                   </StateMark>
                   {r.kind === 'promote' && (
                     <Badge variant="outline" className="rounded-sm">
-                      promotion{r.fromWorkspace ? ` from ${r.fromWorkspace}` : ''}
+                      {r.fromWorkspace ? t('editor.approvals.promotionFrom', { workspace: r.fromWorkspace }) : t('editor.approvals.promotion')}
                     </Badge>
                   )}
                   <span className="text-xs text-muted-foreground">
-                    requested by {r.mine ? 'you' : r.requestedBy} · <span className="font-mono">{formatWhen(r.createdAt)}</span> · runs <span className="font-mono">v{r.publishedVersion || '–'}</span> today
+                    {t('editor.approvals.requestedBy', { who: r.mine ? t('editor.approvals.you') : r.requestedBy })} · <span className="font-mono">{when(r.createdAt)}</span> ·{' '}
+                    {t('editor.approvals.runsToday', { version: `v${r.publishedVersion || '–'}` })}
                   </span>
                 </div>
                 {r.reasons.length > 0 && (
@@ -174,11 +185,11 @@ export default function ApprovalsPanel({
                     ))}
                   </ul>
                 )}
-                {r.requestNote && <p className="text-xs">Note: {r.requestNote}</p>}
+                {r.requestNote && <p className="text-xs">{t('editor.approvals.note', { note: r.requestNote })}</p>}
                 {lines.length > 0 && (
                   <details className="text-xs">
                     <summary className="cursor-pointer rounded-sm text-info-text focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
-                      {lines.length} change{lines.length === 1 ? '' : 's'} from the running version
+                      {t('editor.approvals.changes', { count: lines.length })}
                     </summary>
                     <ul className="mt-1 space-y-0.5 font-mono text-muted-foreground">
                       {lines.map((l, i) => (
@@ -191,26 +202,26 @@ export default function ApprovalsPanel({
                 )}
                 {r.status !== 'pending' && r.decidedBy && (
                   <p className="text-xs text-muted-foreground">
-                    {r.status} by {r.decidedBy} <span className="font-mono">{formatWhen(r.decidedAt)}</span>
+                    {t('editor.approvals.decidedBy', { status: statusText(r.status), who: r.decidedBy })} <span className="font-mono">{when(r.decidedAt)}</span>
                     {r.decisionNote ? `: ${r.decisionNote}` : ''}
                   </p>
                 )}
                 {r.canDecide && (
                   <div className="flex flex-wrap items-center gap-2">
-                    <Input className="max-w-xs" placeholder="Note (required to reject)" value={notes[r.id] ?? ''} onChange={(e) => setNotes({ ...notes, [r.id]: e.target.value })} aria-label={`Note for ${r.pipelineName} v${r.version}`} />
+                    <Input className="max-w-xs" placeholder={t('editor.approvals.notePlaceholder')} value={notes[r.id] ?? ''} onChange={(e) => setNotes({ ...notes, [r.id]: e.target.value })} aria-label={t('editor.approvals.noteFor', { name: r.pipelineName, version: r.version })} />
                     <Button size="sm" disabled={busy !== null} onClick={() => void approve(r)}>
-                      {busy === r.id ? <Loader2 className="animate-spin" aria-hidden /> : <CheckCheck aria-hidden />} Approve &amp; publish
+                      {busy === r.id ? <Loader2 className="animate-spin" aria-hidden /> : <CheckCheck aria-hidden />} {t('editor.approvals.approvePublish')}
                     </Button>
                     <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => void reject(r)}>
-                      <X aria-hidden /> Reject
+                      <X aria-hidden /> {t('editor.approvals.reject')}
                     </Button>
                   </div>
                 )}
                 {r.status === 'pending' && r.mine && (
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    Waiting for an admin or data steward.
+                    {t('editor.approvals.waitingFor')}
                     <Button size="sm" variant="ghost" disabled={busy !== null} onClick={() => void cancel(r)}>
-                      Cancel request
+                      {t('editor.approvals.cancelRequest')}
                     </Button>
                   </div>
                 )}

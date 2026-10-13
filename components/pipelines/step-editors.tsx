@@ -32,6 +32,8 @@ import { BUILTIN_MAPPING_TEMPLATES, applyMappingTemplate, autoMapFields, columnT
 import { saveMappingTemplate } from '@/lib/actions/templates'
 import type { getBuilderOptions } from '@/lib/actions/pipelines'
 import { AiMappingButton } from '@/components/ai/ai-mapping'
+import { useT } from '@/components/i18n/i18n-provider'
+import type { steps as stepsMessages } from '@/lib/i18n/messages/en/steps'
 
 export type BuilderOptions = Awaited<ReturnType<typeof getBuilderOptions>>
 export type Column = { name: string; type: string }
@@ -74,13 +76,14 @@ export { columnTypeFromSql, newValidationRule }
 // ── Source ───────────────────────────────────────────────────────────────────
 
 export function SourceEditor({ step, options, onChange }: { step: SourceStep; options: BuilderOptions; onChange: (s: SourceStep) => void }) {
+  const t = useT()
   const source = options.dataSources.find((d) => d.id === step.dataSourceId)
-  const columns = source?.tables.find((t) => t.name === step.table)?.columns ?? []
+  const columns = source?.tables.find((tb) => tb.name === step.table)?.columns ?? []
   return (
     <div className="grid gap-3">
-      <Field label="Data source">
+      <Field label={t('steps.source.dataSource')}>
         <NativeSelect value={step.dataSourceId} onChange={(v) => onChange({ ...step, dataSourceId: v, table: '' })}>
-          <option value="">Choose a data source…</option>
+          <option value="">{t('steps.source.chooseSource')}</option>
           {options.dataSources.map((d) => (
             <option key={d.id} value={d.id}>
               {d.name} ({d.sourceType})
@@ -89,39 +92,39 @@ export function SourceEditor({ step, options, onChange }: { step: SourceStep; op
         </NativeSelect>
       </Field>
       <div>
-        <Field label="Table / object">
+        <Field label={t('steps.source.table')}>
           {source && source.tables.length > 0 ? (
             <NativeSelect value={step.table} onChange={(v) => onChange({ ...step, table: v })}>
-              <option value="">Choose a table…</option>
-              {source.tables.map((t) => (
-                <option key={t.name} value={t.name}>
-                  {t.name} · {t.columns.length} cols
+              <option value="">{t('steps.source.chooseTable')}</option>
+              {source.tables.map((tb) => (
+                <option key={tb.name} value={tb.name}>
+                  {t('steps.source.tableCols', { name: tb.name, count: tb.columns.length })}
                 </option>
               ))}
             </NativeSelect>
           ) : (
-            <Input value={step.table} onChange={(e) => onChange({ ...step, table: e.target.value })} placeholder="Table, entity set or endpoint name" className="font-mono" />
+            <Input value={step.table} onChange={(e) => onChange({ ...step, table: e.target.value })} placeholder={t('steps.source.tablePlaceholder')} className="font-mono" />
           )}
         </Field>
         {source && source.tables.length === 0 && (
-          <p className="mt-1 text-xs text-muted-foreground">No schema scan for this source yet. Re-test it in Data Sources to load its tables, or type the name.</p>
+          <p className="mt-1 text-xs text-muted-foreground">{t('steps.source.noScan')}</p>
         )}
       </div>
-      <Field label="Max rows per run">
+      <Field label={t('steps.source.maxRows')}>
         <Input type="number" min={1} max={1000000} value={step.maxRows} onChange={(e) => onChange({ ...step, maxRows: Math.max(1, Math.min(1000000, Number(e.target.value) || 1)) })} className="font-mono" />
       </Field>
-      <Field label="Sync mode">
+      <Field label={t('steps.source.syncMode')}>
         <NativeSelect value={step.mode} onChange={(v) => onChange({ ...step, mode: v as 'full' | 'incremental' })}>
-          <option value="full">Full: read every row each run</option>
-          <option value="incremental">Incremental: only new or changed rows</option>
+          <option value="full">{t('steps.source.modeFull')}</option>
+          <option value="incremental">{t('steps.source.modeIncremental')}</option>
         </NativeSelect>
       </Field>
       {step.mode === 'incremental' && (
         <div>
-          <Field label="Watermark column (always increases, e.g. updated_at or id)">
+          <Field label={t('steps.source.watermark')}>
             {columns.length ? (
               <NativeSelect value={step.watermarkColumn} onChange={(v) => onChange({ ...step, watermarkColumn: v })}>
-                <option value="">Choose a column…</option>
+                <option value="">{t('steps.source.chooseColumn')}</option>
                 {columns.map((c) => (
                   <option key={c.name} value={c.name}>
                     {c.name} ({c.type})
@@ -133,8 +136,8 @@ export function SourceEditor({ step, options, onChange }: { step: SourceStep; op
             )}
           </Field>
           <p className="mt-1 text-xs text-muted-foreground">
-            Each run reads rows where this column is greater than the last value synced, oldest first.
-            {source && !['postgres', 'mysql', 'supabase'].includes(source.sourceType) && ' This connector filters after reading, so keep max rows above the number of new rows per run.'}
+            {t('steps.source.watermarkHelp')}
+            {source && !['postgres', 'mysql', 'supabase'].includes(source.sourceType) && t('steps.source.watermarkPostFilter')}
           </p>
         </div>
       )}
@@ -151,7 +154,7 @@ export function ConditionsEditor({
   conditions,
   columns,
   onChange,
-  label = 'Rows matching',
+  label,
 }: {
   match: 'all' | 'any'
   conditions: Condition[]
@@ -159,57 +162,60 @@ export function ConditionsEditor({
   onChange: (match: 'all' | 'any', conditions: Condition[]) => void
   label?: string
 }) {
+  const t = useT()
   const update = (i: number, patch: Partial<Condition>) => onChange(match, conditions.map((c, j) => (j === i ? { ...c, ...patch } : c)))
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2 text-sm">
-        {label}
-        <NativeSelect className="w-20" value={match} onChange={(v) => onChange(v as 'all' | 'any', conditions)} aria-label="Match all or any">
-          <option value="all">all</option>
-          <option value="any">any</option>
+        {label ?? t('steps.conditions.rowsMatching')}
+        <NativeSelect className="w-28" value={match} onChange={(v) => onChange(v as 'all' | 'any', conditions)} aria-label={t('steps.conditions.matchAllAny')}>
+          <option value="all">{t('steps.conditions.all')}</option>
+          <option value="any">{t('steps.conditions.any')}</option>
         </NativeSelect>
-        of:
+        {t('steps.conditions.of')}
       </div>
       {conditions.map((c, i) => (
         <div key={i} className="grid grid-cols-[1fr_1fr_auto] gap-1.5 rounded-md border border-border p-1.5">
-          <ColumnPicker columns={columns} value={c.field} onChange={(v) => update(i, { field: v })} label="Field" />
-          <NativeSelect value={c.operator} onChange={(v) => update(i, { operator: v as Condition['operator'] })} aria-label="Operator">
+          <ColumnPicker columns={columns} value={c.field} onChange={(v) => update(i, { field: v })} label={t('steps.conditions.field')} />
+          <NativeSelect value={c.operator} onChange={(v) => update(i, { operator: v as Condition['operator'] })} aria-label={t('steps.conditions.operator')}>
             {FILTER_OPERATORS.map((op) => (
               <option key={op} value={op}>
-                {human(op)}
+                {t(`steps.operators.${op}`)}
               </option>
             ))}
           </NativeSelect>
-          <Button size="icon-sm" variant="ghost" onClick={() => onChange(match, conditions.filter((_, j) => j !== i))} aria-label={`Remove condition ${i + 1}`}>
+          <Button size="icon-sm" variant="ghost" onClick={() => onChange(match, conditions.filter((_, j) => j !== i))} aria-label={t('steps.conditions.removeCondition', { n: i + 1 })}>
             <X aria-hidden />
           </Button>
           {!NO_VALUE_OPS.has(c.operator) && (
             <div className="col-span-3 grid grid-cols-[auto_1fr] items-center gap-1.5">
-              <NativeSelect className="w-28" value={c.valueField ? 'field' : 'value'} onChange={(v) => update(i, { valueField: v === 'field' ? columns[0]?.name ?? '' : '' })} aria-label="Compare with">
-                <option value="value">value</option>
-                <option value="field">field</option>
+              <NativeSelect className="w-28" value={c.valueField ? 'field' : 'value'} onChange={(v) => update(i, { valueField: v === 'field' ? columns[0]?.name ?? '' : '' })} aria-label={t('steps.conditions.compareWith')}>
+                <option value="value">{t('steps.conditions.compareValue')}</option>
+                <option value="field">{t('steps.conditions.compareField')}</option>
               </NativeSelect>
               {c.valueField ? (
-                <ColumnPicker columns={columns} value={c.valueField} onChange={(v) => update(i, { valueField: v })} label="Other field" />
+                <ColumnPicker columns={columns} value={c.valueField} onChange={(v) => update(i, { valueField: v })} label={t('steps.conditions.otherField')} />
               ) : (
-                <Input value={c.value} placeholder={c.operator === 'in_list' ? 'a, b, c' : 'value'} onChange={(e) => update(i, { value: e.target.value })} aria-label="Value" />
+                <Input value={c.value} placeholder={c.operator === 'in_list' ? 'a, b, c' : t('steps.conditions.valuePlaceholder')} onChange={(e) => update(i, { value: e.target.value })} aria-label={t('steps.conditions.value')} />
               )}
             </div>
           )}
         </div>
       ))}
       <Button size="sm" variant="outline" onClick={() => onChange(match, [...conditions, newCondition(columns[0]?.name ?? '')])}>
-        <Plus aria-hidden /> Condition
+        <Plus aria-hidden /> {t('steps.conditions.addCondition')}
       </Button>
     </div>
   )
 }
 
 /** `label`: the accessible name; pass null when a visible <Field> already names it. */
-function RulePicker({ rules, value, onChange, label = 'Business rule' }: { rules: BuilderOptions['rules']; value: string; onChange: (v: string) => void; label?: string | null }) {
+function RulePicker({ rules, value, onChange, label }: { rules: BuilderOptions['rules']; value: string; onChange: (v: string) => void; label?: string | null }) {
+  const t = useT()
+  const name = label === undefined ? t('steps.rulePicker.label') : label
   return (
-    <NativeSelect value={value} onChange={onChange} aria-label={label ?? undefined}>
-      <option value="">{rules.length ? 'Choose a rule…' : 'No business rules yet'}</option>
+    <NativeSelect value={value} onChange={onChange} aria-label={name ?? undefined}>
+      <option value="">{rules.length ? t('steps.rulePicker.choose') : t('steps.rulePicker.none')}</option>
       {rules.map((r) => (
         <option key={r.id} value={r.id}>
           {r.name}
@@ -222,13 +228,14 @@ function RulePicker({ rules, value, onChange, label = 'Business rule' }: { rules
 // ── Filter ───────────────────────────────────────────────────────────────────
 
 export function FilterEditor({ step, columns, options, onChange }: { step: FilterStep; columns: Column[]; options: BuilderOptions; onChange: (s: FilterStep) => void }) {
+  const t = useT()
   return (
     <div className="space-y-3">
-      <Field label="Keep rows matching a business rule (optional)">
+      <Field label={t('steps.filter.rule')}>
         <RulePicker rules={options.rules} value={step.ruleId} onChange={(v) => onChange({ ...step, ruleId: v })} label={null} />
       </Field>
       <ConditionsEditor
-        label={step.ruleId ? 'and' : 'Keep rows matching'}
+        label={step.ruleId ? t('steps.filter.and') : t('steps.filter.keepMatching')}
         match={step.match}
         conditions={step.conditions}
         columns={columns}
@@ -239,13 +246,15 @@ export function FilterEditor({ step, columns, options, onChange }: { step: Filte
 }
 
 /** `label`: the accessible name; pass null when a visible <Field> already names it. */
-export function ColumnPicker({ columns, value, onChange, label = 'Column' }: { columns: Column[]; value: string; onChange: (v: string) => void; label?: string | null }) {
-  if (!columns.length) return <Input value={value} onChange={(e) => onChange(e.target.value)} placeholder="column" aria-label={label ?? undefined} className="font-mono" />
+export function ColumnPicker({ columns, value, onChange, label }: { columns: Column[]; value: string; onChange: (v: string) => void; label?: string | null }) {
+  const t = useT()
+  const name = label === undefined ? t('steps.columnPicker.label') : label
+  if (!columns.length) return <Input value={value} onChange={(e) => onChange(e.target.value)} placeholder={t('steps.columnPicker.placeholder')} aria-label={name ?? undefined} className="font-mono" />
   const known = columns.some((c) => c.name === value)
   return (
-    <NativeSelect value={value} onChange={onChange} aria-label={label ?? undefined}>
-      <option value="">Column…</option>
-      {!known && value && <option value={value}>{value} (not in schema)</option>}
+    <NativeSelect value={value} onChange={onChange} aria-label={name ?? undefined}>
+      <option value="">{t('steps.columnPicker.choose')}</option>
+      {!known && value && <option value={value}>{t('steps.columnPicker.notInSchema', { name: value })}</option>}
       {columns.map((c) => (
         <option key={c.name} value={c.name}>
           {c.name}
@@ -257,26 +266,32 @@ export function ColumnPicker({ columns, value, onChange, label = 'Column' }: { c
 
 // ── Map ──────────────────────────────────────────────────────────────────────
 
-const TRANSFORM_ARGS: Partial<Record<TransformName, string[]>> = {
-  replace: ['find', 'replace with'],
-  regex_replace: ['pattern', 'replace with'],
-  regex_extract: ['pattern', 'group (1)'],
+type ArgKey = keyof (typeof stepsMessages)['map']['args']
+/** The concat template is an example value, not text, so it is shown as is. */
+const CONCAT_EXAMPLE = '{first_name} {last_name}'
+
+const TRANSFORM_ARGS: Partial<Record<TransformName, (ArgKey | typeof CONCAT_EXAMPLE)[]>> = {
+  replace: ['find', 'replaceWith'],
+  regex_replace: ['pattern', 'replaceWith'],
+  regex_extract: ['pattern', 'group'],
   default_if_empty: ['default'],
   coalesce: ['column', 'column'],
   prefix: ['prefix'],
   suffix: ['suffix'],
   substring: ['start', 'length'],
-  concat: ['{first_name} {last_name}'],
-  split: ['separator', 'part (0, -1 = last)'],
-  format_date: ['output e.g. yyyy-MM-dd', 'input e.g. yyyyMMdd', 'timezone e.g. Asia/Jakarta'],
+  concat: [CONCAT_EXAMPLE],
+  split: ['separator', 'part'],
+  format_date: ['outputFormat', 'inputFormat', 'timezone'],
   round: ['decimals'],
-  number_format: ['decimals', 'locale (id-ID)'],
-  hash: ['salt (optional)'],
-  conditional: ['operator (equals)', 'value', 'then', 'else ({value} keeps it)'],
-  lookup: ['dataset', 'key column', 'value column', 'if not found (empty = null, {value} keeps it)'],
+  number_format: ['decimals', 'locale'],
+  hash: ['salt'],
+  conditional: ['operator', 'value', 'then', 'else'],
+  lookup: ['dataset', 'keyColumn', 'valueColumn', 'notFound'],
 }
 
 export function MapEditor({ step, columns, options, source, onChange }: { step: MapStep; columns: Column[]; options?: BuilderOptions; source?: { dataSourceId: string; table: string }; onChange: (s: MapStep) => void }) {
+  const t = useT()
+  const argText = (a: ArgKey | typeof CONCAT_EXAMPLE) => (a === CONCAT_EXAMPLE ? a : t(`steps.map.args.${a}`))
   const update = (i: number, patch: Partial<MapStep['fields'][number]>) => onChange({ ...step, fields: step.fields.map((f, j) => (j === i ? { ...f, ...patch } : f)) })
   const [templateMsg, setTemplateMsg] = useState<{ tone: NoticeTone; text: string } | null>(null)
   const [templateName, setTemplateName] = useState<string | null>(null)
@@ -292,9 +307,14 @@ export function MapEditor({ step, columns, options, source, onChange }: { step: 
     const tpl = templates.find((x) => x.id === id)
     if (!tpl) return
     const { fields, missing } = applyMappingTemplate(tpl, columns.length ? columns : tpl.fields.map((f) => ({ name: f.from, type: 'text' })))
-    if (!fields.length) return setTemplateMsg({ tone: 'warning', text: `None of the template's columns (${tpl.fields.map((f) => f.from).slice(0, 5).join(', ')}…) are in this step's input.` })
+    if (!fields.length) return setTemplateMsg({ tone: 'warning', text: t('steps.map.templateNoMatch', { columns: tpl.fields.map((f) => f.from).slice(0, 5).join(', ') }) })
     onChange({ ...step, fields, keepUnmapped: tpl.keepUnmapped })
-    setTemplateMsg({ tone: 'success', text: `Applied "${tpl.name}": ${fields.length} fields${missing.length ? `; not in the input: ${missing.join(', ')}` : ''}.` })
+    setTemplateMsg({
+      tone: 'success',
+      text: missing.length
+        ? t('steps.map.templateAppliedMissing', { name: tpl.name, count: fields.length, missing: missing.join(', ') })
+        : t('steps.map.templateApplied', { name: tpl.name, count: fields.length }),
+    })
   }
   const saveTemplate = async () => {
     const name = templateName?.trim()
@@ -302,10 +322,10 @@ export function MapEditor({ step, columns, options, source, onChange }: { step: 
     setSavingTemplate(true)
     try {
       const res = await saveMappingTemplate({ name, fields: step.fields.filter((f) => f.from && f.to), keepUnmapped: step.keepUnmapped })
-      setTemplateMsg({ tone: 'success', text: `${res.replaced ? 'Updated' : 'Saved'} template "${name}". It appears in the templates list of every pipeline (after reopening the editor).` })
+      setTemplateMsg({ tone: 'success', text: res.replaced ? t('steps.map.templateUpdated', { name }) : t('steps.map.templateSaved', { name }) })
       setTemplateName(null)
     } catch (err) {
-      setTemplateMsg({ tone: 'danger', text: err instanceof Error ? err.message : 'Save failed' })
+      setTemplateMsg({ tone: 'danger', text: err instanceof Error ? err.message : t('steps.map.saveFailed') })
     } finally {
       setSavingTemplate(false)
     }
@@ -314,14 +334,14 @@ export function MapEditor({ step, columns, options, source, onChange }: { step: 
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
         <Button size="sm" variant="outline" onClick={autoMap} disabled={!columns.length}>
-          <Wand2 aria-hidden /> Auto-map all columns
+          <Wand2 aria-hidden /> {t('steps.map.autoMap')}
         </Button>
-        <NativeSelect value="" onChange={applyTemplate} className="w-auto text-xs" aria-label="Apply a mapping template">
-          <option value="">Apply template…</option>
+        <NativeSelect value="" onChange={applyTemplate} className="w-auto text-xs" aria-label={t('steps.map.applyTemplateLabel')}>
+          <option value="">{t('steps.map.applyTemplate')}</option>
           {templates.map((tpl) => (
             <option key={tpl.id} value={tpl.id}>
               {tpl.name}
-              {tpl.builtIn ? '' : ' (saved)'}
+              {tpl.builtIn ? '' : t('steps.map.saved')}
             </option>
           ))}
         </NativeSelect>
@@ -332,11 +352,11 @@ export function MapEditor({ step, columns, options, source, onChange }: { step: 
           onAccept={(added) => onChange({ ...step, fields: [...step.fields.filter((f) => f.from), ...added.filter((a) => !step.fields.some((f) => f.to === a.to))] })}
         />
         <Button size="sm" variant="ghost" onClick={() => setTemplateName((v) => (v === null ? '' : null))} disabled={!step.fields.some((f) => f.from && f.to)} aria-expanded={templateName !== null}>
-          Save as template
+          {t('steps.map.saveAsTemplate')}
         </Button>
         <label className="flex items-center gap-2 text-sm text-muted-foreground">
           <input type="checkbox" className="size-4 accent-primary" checked={step.keepUnmapped} onChange={(e) => onChange({ ...step, keepUnmapped: e.target.checked })} />
-          Pass through unmapped columns
+          {t('steps.map.passThrough')}
         </label>
       </div>
       {templateName !== null && (
@@ -347,18 +367,18 @@ export function MapEditor({ step, columns, options, source, onChange }: { step: 
             void saveTemplate()
           }}
         >
-          <Field label="Template name" className="min-w-0 flex-1">
-            <Input autoFocus value={templateName} placeholder="e.g. HRIS export → Employee" onChange={(e) => setTemplateName(e.target.value)} />
+          <Field label={t('steps.map.templateName')} className="min-w-0 flex-1">
+            <Input autoFocus value={templateName} placeholder={t('steps.map.templateNamePlaceholder')} onChange={(e) => setTemplateName(e.target.value)} />
           </Field>
           <Button type="submit" size="sm" disabled={!templateName.trim() || savingTemplate}>
-            Save template
+            {t('steps.map.saveTemplate')}
           </Button>
           <Button type="button" size="sm" variant="ghost" onClick={() => setTemplateName(null)}>
-            Cancel
+            {t('common.cancel')}
           </Button>
         </form>
       )}
-      <p className="text-xs text-muted-foreground">Auto-map recognizes common HR column names (e.g. PERNR → employee_code, TGL_LAHIR → birth_date). Templates map SAP, Talenta and Active Directory fields; the lookup transform translates codes using a dataset.</p>
+      <p className="text-xs text-muted-foreground">{t('steps.map.help')}</p>
       {templateMsg && (
         <Notice tone={templateMsg.tone} className="text-xs">
           {templateMsg.text}
@@ -367,31 +387,31 @@ export function MapEditor({ step, columns, options, source, onChange }: { step: 
       {step.fields.map((f, i) => (
         <div key={i} className="rounded-md border border-border p-2">
           <div className="grid grid-cols-[1fr_1fr_auto] gap-1.5">
-            <ColumnPicker columns={columns} value={f.from} onChange={(v) => update(i, { from: v, to: f.to || autoMapName(v) })} label={`Source column ${i + 1}`} />
-            <Input value={f.to} placeholder="target_name" onChange={(e) => update(i, { to: e.target.value })} aria-label={`Target column ${i + 1}`} className="font-mono" />
-            <Button size="icon-sm" variant="ghost" disabled={step.fields.length === 1} onClick={() => onChange({ ...step, fields: step.fields.filter((_, j) => j !== i) })} aria-label={`Remove field ${f.to || i + 1}`}>
+            <ColumnPicker columns={columns} value={f.from} onChange={(v) => update(i, { from: v, to: f.to || autoMapName(v) })} label={t('steps.map.sourceColumn', { n: i + 1 })} />
+            <Input value={f.to} placeholder={t('steps.map.targetPlaceholder')} onChange={(e) => update(i, { to: e.target.value })} aria-label={t('steps.map.targetColumn', { n: i + 1 })} className="font-mono" />
+            <Button size="icon-sm" variant="ghost" disabled={step.fields.length === 1} onClick={() => onChange({ ...step, fields: step.fields.filter((_, j) => j !== i) })} aria-label={t('steps.map.removeField', { name: f.to || i + 1 })}>
               <Trash2 aria-hidden />
             </Button>
           </div>
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-            <NativeSelect className="h-7 w-28 text-xs" value={f.type} onChange={(v) => update(i, { type: v as ColumnType })} aria-label={`Type of ${f.to || `field ${i + 1}`}`}>
-              {COLUMN_TYPES.map((t) => (
-                <option key={t} value={t}>
-                  {t}
+            <NativeSelect className="h-7 w-28 text-xs" value={f.type} onChange={(v) => update(i, { type: v as ColumnType })} aria-label={t('steps.map.typeOf', { name: f.to || t('steps.map.fieldN', { n: i + 1 }) })}>
+              {COLUMN_TYPES.map((ty) => (
+                <option key={ty} value={ty}>
+                  {ty}
                 </option>
               ))}
             </NativeSelect>
-            {f.transforms.map((t, ti) => (
+            {f.transforms.map((tr, ti) => (
               <div key={ti} className="flex flex-wrap items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs">
-                <span className="font-medium">{human(t.fn)}</span>
-                {(TRANSFORM_ARGS[t.fn] ?? []).map((placeholder, ai) => (
+                <span className="font-medium">{t(`steps.transforms.${tr.fn}`)}</span>
+                {(TRANSFORM_ARGS[tr.fn] ?? []).map((arg, ai) => (
                   <input
                     key={ai}
-                    value={t.args[ai] ?? ''}
-                    placeholder={placeholder}
-                    aria-label={`${human(t.fn)} ${placeholder}`}
+                    value={tr.args[ai] ?? ''}
+                    placeholder={argText(arg)}
+                    aria-label={t('steps.map.argLabel', { transform: t(`steps.transforms.${tr.fn}`), arg: argText(arg) })}
                     onChange={(e) => {
-                      const args = [...t.args]
+                      const args = [...tr.args]
                       args[ai] = e.target.value
                       update(i, { transforms: f.transforms.map((x, xi) => (xi === ti ? { ...x, args } : x)) })
                     }}
@@ -402,7 +422,7 @@ export function MapEditor({ step, columns, options, source, onChange }: { step: 
                   type="button"
                   className="rounded-sm p-0.5 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
                   onClick={() => update(i, { transforms: f.transforms.filter((_, xi) => xi !== ti) })}
-                  aria-label={`Remove transform ${human(t.fn)}`}
+                  aria-label={t('steps.map.removeTransform', { name: t(`steps.transforms.${tr.fn}`) })}
                 >
                   <X className="size-3" aria-hidden />
                 </button>
@@ -410,14 +430,14 @@ export function MapEditor({ step, columns, options, source, onChange }: { step: 
             ))}
             <NativeSelect
               value=""
-              aria-label={`Add transform to ${f.to || `field ${i + 1}`}`}
+              aria-label={t('steps.map.addTransformTo', { name: f.to || t('steps.map.fieldN', { n: i + 1 }) })}
               onChange={(v) => v && update(i, { transforms: [...f.transforms, { fn: v as TransformName, args: [] }] })}
               className="h-7 w-auto border-dashed px-1 text-xs text-muted-foreground"
             >
-              <option value="">+ transform</option>
-              {TRANSFORMS.map((t) => (
-                <option key={t} value={t}>
-                  {human(t)}
+              <option value="">{t('steps.map.addTransform')}</option>
+              {TRANSFORMS.map((tr) => (
+                <option key={tr} value={tr}>
+                  {t(`steps.transforms.${tr}`)}
                 </option>
               ))}
             </NativeSelect>
@@ -425,7 +445,7 @@ export function MapEditor({ step, columns, options, source, onChange }: { step: 
         </div>
       ))}
       <Button size="sm" variant="outline" onClick={() => onChange({ ...step, fields: [...step.fields, { from: '', to: '', type: 'text', transforms: [] }] })}>
-        <Plus aria-hidden /> Field
+        <Plus aria-hidden /> {t('steps.map.addField')}
       </Button>
     </div>
   )
@@ -433,43 +453,33 @@ export function MapEditor({ step, columns, options, source, onChange }: { step: 
 
 // ── Validate ─────────────────────────────────────────────────────────────────
 
-const RULE_LABEL: Record<ValidationRuleSpec['rule'], string> = {
-  required: 'required',
-  email: 'valid email',
-  phone: 'valid phone',
-  nik: 'valid NIK',
-  npwp: 'valid NPWP',
-  unique: 'unique',
-  regex: 'matches regex',
-  min_length: 'min length',
-  max_length: 'max length',
-  min: 'min value',
-  max: 'max value',
-  one_of: 'one of',
-  date: 'valid date',
-  not_future: 'not in the future',
-  compare: 'compared with field',
-  exists_in: 'exists in dataset',
-  condition: 'business rule holds',
-  manager: 'valid manager (no cycles)',
-}
 const VALUE_RULES = new Set(['regex', 'min_length', 'max_length', 'min', 'max', 'one_of'])
+const COMPARE_OPERATORS = ['greater_or_equal', 'greater_than', 'less_or_equal', 'less_than', 'equals', 'not_equals'] as const
 
 export function ValidateEditor({ step, columns, options, onChange }: { step: ValidateStep; columns: Column[]; options: BuilderOptions; onChange: (s: ValidateStep) => void }) {
+  const t = useT()
   const update = (i: number, patch: Partial<ValidationRuleSpec>) => onChange({ ...step, rules: step.rules.map((r, j) => (j === i ? { ...r, ...patch } : r)) })
   const lookups = options.datasets.flatMap((d) => d.columns.map((c) => `${d.name}.${c.name}`))
   const [packMsg, setPackMsg] = useState<{ tone: NoticeTone; title?: string; lines: string[] } | null>(null)
+  /** hrRulePack (lib/pipelines/templates.ts) writes its notes in English; show the known ones in the interface language. */
+  const packNote = (note: string) => {
+    const noDataset = /^No dataset with (\S+) yet;/.exec(note)
+    if (noDataset) return t('steps.validate.packNoDataset', { column: noDataset[1] })
+    if (note.startsWith('No employee code column recognized')) return t('steps.validate.packNoCode')
+    return note
+  }
   const addPack = () => {
     const { rules, notes } = hrRulePack(columns, options.datasets)
-    if (!rules.length) return setPackMsg({ tone: 'warning', lines: notes.length ? notes : ["No HR columns recognized in this step's input."] })
+    const lines = notes.map(packNote)
+    if (!rules.length) return setPackMsg({ tone: 'warning', lines: lines.length ? lines : [t('steps.validate.packNone')] })
     const existing = step.rules.filter((r) => r.field)
     onChange({ ...step, rules: [...existing, ...rules] })
-    setPackMsg({ tone: 'success', title: `HR rule pack added ${rules.length} rules.`, lines: notes })
+    setPackMsg({ tone: 'success', title: t('steps.validate.packAdded', { count: rules.length }), lines })
   }
   return (
     <div className="space-y-2">
       <Button size="sm" variant="outline" onClick={addPack} disabled={!columns.length}>
-        <Sparkles aria-hidden /> Add HR rule pack
+        <Sparkles aria-hidden /> {t('steps.validate.addPack')}
       </Button>
       {packMsg && (
         <Notice
@@ -477,7 +487,7 @@ export function ValidateEditor({ step, columns, options, onChange }: { step: Val
           title={packMsg.title}
           className="text-xs"
           action={
-            <Button size="icon-xs" variant="ghost" onClick={() => setPackMsg(null)} aria-label="Dismiss rule pack message">
+            <Button size="icon-xs" variant="ghost" onClick={() => setPackMsg(null)} aria-label={t('steps.validate.dismissPack')}>
               <X aria-hidden />
             </Button>
           }
@@ -494,24 +504,24 @@ export function ValidateEditor({ step, columns, options, onChange }: { step: Val
       {step.rules.map((r, i) => (
         <div key={i} className="space-y-1.5 rounded-md border border-border p-1.5">
           <div className="grid grid-cols-[1fr_1fr_auto] gap-1.5">
-            <ColumnPicker columns={columns} value={r.field} onChange={(v) => update(i, { field: v })} label={`Field of rule ${i + 1}`} />
-            <NativeSelect value={r.rule} onChange={(v) => update(i, { rule: v as ValidationRuleSpec['rule'], value: '' })} aria-label={`Rule ${i + 1}`}>
+            <ColumnPicker columns={columns} value={r.field} onChange={(v) => update(i, { field: v })} label={t('steps.validate.fieldOfRule', { n: i + 1 })} />
+            <NativeSelect value={r.rule} onChange={(v) => update(i, { rule: v as ValidationRuleSpec['rule'], value: '' })} aria-label={t('steps.validate.ruleN', { n: i + 1 })}>
               {VALIDATION_RULES.map((rule) => (
                 <option key={rule} value={rule}>
-                  {RULE_LABEL[rule]}
+                  {t(`steps.validate.rules.${rule}`)}
                 </option>
               ))}
             </NativeSelect>
-            <Button size="icon-sm" variant="ghost" disabled={step.rules.length === 1} onClick={() => onChange({ ...step, rules: step.rules.filter((_, j) => j !== i) })} aria-label={`Remove rule ${i + 1}`}>
+            <Button size="icon-sm" variant="ghost" disabled={step.rules.length === 1} onClick={() => onChange({ ...step, rules: step.rules.filter((_, j) => j !== i) })} aria-label={t('steps.validate.removeRule', { n: i + 1 })}>
               <X aria-hidden />
             </Button>
           </div>
           <div className="grid grid-cols-[1fr_110px] gap-1.5">
             {VALUE_RULES.has(r.rule) ? (
-              <Input value={r.value} placeholder={r.rule === 'one_of' ? 'a, b, c' : 'value'} onChange={(e) => update(i, { value: e.target.value })} aria-label="Rule value" />
+              <Input value={r.value} placeholder={r.rule === 'one_of' ? 'a, b, c' : t('steps.validate.valuePlaceholder')} onChange={(e) => update(i, { value: e.target.value })} aria-label={t('steps.validate.ruleValue')} />
             ) : r.rule === 'exists_in' ? (
-              <NativeSelect value={r.value} onChange={(v) => update(i, { value: v })} aria-label="Lookup dataset column">
-                <option value="">{lookups.length ? 'dataset.column…' : 'No datasets yet'}</option>
+              <NativeSelect value={r.value} onChange={(v) => update(i, { value: v })} aria-label={t('steps.validate.lookupColumn')}>
+                <option value="">{lookups.length ? t('steps.validate.lookupPlaceholder') : t('steps.validate.noDatasets')}</option>
                 {lookups.map((l) => (
                   <option key={l} value={l}>
                     {l}
@@ -520,28 +530,28 @@ export function ValidateEditor({ step, columns, options, onChange }: { step: Val
               </NativeSelect>
             ) : r.rule === 'compare' ? (
               <div className="grid grid-cols-2 gap-1.5">
-                <NativeSelect value={r.operator} onChange={(v) => update(i, { operator: v as ValidationRuleSpec['operator'] })} aria-label="Comparison">
-                  {(['greater_or_equal', 'greater_than', 'less_or_equal', 'less_than', 'equals', 'not_equals'] as const).map((op) => (
+                <NativeSelect value={r.operator} onChange={(v) => update(i, { operator: v as ValidationRuleSpec['operator'] })} aria-label={t('steps.validate.comparison')}>
+                  {COMPARE_OPERATORS.map((op) => (
                     <option key={op} value={op}>
-                      {human(op)}
+                      {t(`steps.operators.${op}`)}
                     </option>
                   ))}
                 </NativeSelect>
-                <ColumnPicker columns={columns} value={r.otherField} onChange={(v) => update(i, { otherField: v })} label="Other field" />
+                <ColumnPicker columns={columns} value={r.otherField} onChange={(v) => update(i, { otherField: v })} label={t('steps.validate.otherField')} />
               </div>
             ) : r.rule === 'condition' ? (
-              <RulePicker rules={options.rules} value={r.ruleId} onChange={(v) => update(i, { ruleId: v })} label={`Business rule for rule ${i + 1}`} />
+              <RulePicker rules={options.rules} value={r.ruleId} onChange={(v) => update(i, { ruleId: v })} label={t('steps.validate.ruleForRule', { n: i + 1 })} />
             ) : r.rule === 'manager' ? (
-              <ColumnPicker columns={columns} value={r.value} onChange={(v) => update(i, { value: v })} label="Employee key column" />
+              <ColumnPicker columns={columns} value={r.value} onChange={(v) => update(i, { value: v })} label={t('steps.validate.employeeKey')} />
             ) : r.rule === 'date' ? (
-              <Input value={r.value} placeholder="input format (optional), e.g. dd/MM/yyyy" onChange={(e) => update(i, { value: e.target.value })} aria-label="Date input format" />
+              <Input value={r.value} placeholder={t('steps.validate.datePlaceholder')} onChange={(e) => update(i, { value: e.target.value })} aria-label={t('steps.validate.dateFormat')} />
             ) : (
               <span />
             )}
-            <NativeSelect value={r.severity} onChange={(v) => update(i, { severity: v as ValidationRuleSpec['severity'] })} aria-label={`Severity of rule ${i + 1}`}>
+            <NativeSelect value={r.severity} onChange={(v) => update(i, { severity: v as ValidationRuleSpec['severity'] })} aria-label={t('steps.validate.severityOf', { n: i + 1 })}>
               {SEVERITIES.map((s) => (
                 <option key={s} value={s}>
-                  {s}
+                  {t(`steps.validate.severities.${s}`)}
                 </option>
               ))}
             </NativeSelect>
@@ -550,17 +560,17 @@ export function ValidateEditor({ step, columns, options, onChange }: { step: Val
       ))}
       <div className="flex flex-wrap items-center gap-2">
         <Button size="sm" variant="outline" onClick={() => onChange({ ...step, rules: [...step.rules, newValidationRule(columns[0]?.name ?? '')] })}>
-          <Plus aria-hidden /> Rule
+          <Plus aria-hidden /> {t('steps.validate.addRule')}
         </Button>
         <label className="flex items-center gap-2 text-sm text-muted-foreground">
-          On an error:
+          {t('steps.validate.onError')}
           <NativeSelect className="w-48" value={step.onFail} onChange={(v) => onChange({ ...step, onFail: v as 'reject' | 'abort' })}>
-            <option value="reject">Quarantine the row</option>
-            <option value="abort">Stop the whole run</option>
+            <option value="reject">{t('steps.validate.onFailReject')}</option>
+            <option value="abort">{t('steps.validate.onFailAbort')}</option>
           </NativeSelect>
         </label>
       </div>
-      <p className="text-xs text-muted-foreground">Error: the row goes to the quarantine, not the destination. Warning / info: the row is written and flagged in Data Quality.</p>
+      <p className="text-xs text-muted-foreground">{t('steps.validate.help')}</p>
     </div>
   )
 }
@@ -568,13 +578,14 @@ export function ValidateEditor({ step, columns, options, onChange }: { step: Val
 // ── Business rules node ──────────────────────────────────────────────────────
 
 export function RulesEditor({ step, options, onChange }: { step: RulesStep; options: BuilderOptions; onChange: (s: RulesStep) => void }) {
+  const t = useT()
   const toggle = (id: string) => onChange({ ...step, ruleIds: step.ruleIds.includes(id) ? step.ruleIds.filter((x) => x !== id) : [...step.ruleIds, id] })
   return (
     <div className="space-y-2">
-      <p className="text-xs text-muted-foreground">Applies these rules to every row, in order: keep or drop rows, set or calculate fields, route, notify, hold for approval or trigger pipelines. Manage rules in the Business Rules tab.</p>
+      <p className="text-xs text-muted-foreground">{t('steps.rules.help')}</p>
       {options.rules.length === 0 && (
-        <EmptyState compact icon={<Scale />} title="No business rules yet" className="rounded-md border border-border">
-          Create rules in the Business Rules tab, then pick them here.
+        <EmptyState compact icon={<Scale />} title={t('steps.rules.emptyTitle')} className="rounded-md border border-border">
+          {t('steps.rules.emptyBody')}
         </EmptyState>
       )}
       {options.rules.map((r) => (
@@ -593,7 +604,7 @@ export function RulesEditor({ step, options, onChange }: { step: RulesStep; opti
         </label>
       ))}
       {step.ruleIds.length > 1 && (
-        <p className="text-xs text-muted-foreground">Order: {step.ruleIds.map((id) => options.rules.find((r) => r.id === id)?.name ?? id).join(' → ')}</p>
+        <p className="text-xs text-muted-foreground">{t('steps.rules.order', { order: step.ruleIds.map((id) => options.rules.find((r) => r.id === id)?.name ?? id).join(' → ') })}</p>
       )}
     </div>
   )
@@ -602,24 +613,25 @@ export function RulesEditor({ step, options, onChange }: { step: RulesStep; opti
 // ── Router ───────────────────────────────────────────────────────────────────
 
 export function RouterEditor({ step, columns, options, onChange }: { step: RouterStep; columns: Column[]; options: BuilderOptions; onChange: (s: RouterStep) => void }) {
+  const t = useT()
   const update = (i: number, patch: Partial<RouterStep['branches'][number]>) => onChange({ ...step, branches: step.branches.map((b, j) => (j === i ? { ...b, ...patch } : b)) })
   return (
     <div className="space-y-2">
-      <p className="text-xs text-muted-foreground">Each row goes down the first branch that matches; rows a business rule routed by name go to that branch first. Connect each branch&apos;s handle on the canvas.</p>
+      <p className="text-xs text-muted-foreground">{t('steps.router.help')}</p>
       {step.branches.map((b, i) => (
         <div key={b.id} className="space-y-2 rounded-md border border-border p-2">
           <div className="grid grid-cols-[1fr_auto] gap-1.5">
-            <Input value={b.label} onChange={(e) => update(i, { label: e.target.value })} placeholder="Branch name" aria-label={`Branch ${i + 1} name`} />
-            <Button size="icon-sm" variant="ghost" disabled={step.branches.length === 1} onClick={() => onChange({ ...step, branches: step.branches.filter((_, j) => j !== i) })} aria-label={`Remove branch ${b.label || i + 1}`}>
+            <Input value={b.label} onChange={(e) => update(i, { label: e.target.value })} placeholder={t('steps.router.branchName')} aria-label={t('steps.router.branchNameN', { n: i + 1 })} />
+            <Button size="icon-sm" variant="ghost" disabled={step.branches.length === 1} onClick={() => onChange({ ...step, branches: step.branches.filter((_, j) => j !== i) })} aria-label={t('steps.router.removeBranch', { name: b.label || i + 1 })}>
               <Trash2 aria-hidden />
             </Button>
           </div>
-          <NativeSelect value={b.ruleId ? 'rule' : 'conditions'} onChange={(v) => update(i, v === 'rule' ? { ruleId: options.rules[0]?.id ?? '', condition: undefined } : { ruleId: '', condition: { match: 'all', conditions: [newCondition(columns[0]?.name ?? '')], groups: [] } })} aria-label={`Branch ${b.label || i + 1} matches by`}>
-            <option value="conditions">Matches conditions</option>
-            <option value="rule">Matches a business rule</option>
+          <NativeSelect value={b.ruleId ? 'rule' : 'conditions'} onChange={(v) => update(i, v === 'rule' ? { ruleId: options.rules[0]?.id ?? '', condition: undefined } : { ruleId: '', condition: { match: 'all', conditions: [newCondition(columns[0]?.name ?? '')], groups: [] } })} aria-label={t('steps.router.matchesBy', { name: b.label || i + 1 })}>
+            <option value="conditions">{t('steps.router.byConditions')}</option>
+            <option value="rule">{t('steps.router.byRule')}</option>
           </NativeSelect>
           {b.ruleId || (!b.condition && options.rules.length) ? (
-            <RulePicker rules={options.rules} value={b.ruleId} onChange={(v) => update(i, { ruleId: v })} label={`Business rule for branch ${b.label || i + 1}`} />
+            <RulePicker rules={options.rules} value={b.ruleId} onChange={(v) => update(i, { ruleId: v })} label={t('steps.router.ruleForBranch', { name: b.label || i + 1 })} />
           ) : (
             <ConditionsEditor
               match={b.condition?.match ?? 'all'}
@@ -630,10 +642,14 @@ export function RouterEditor({ step, columns, options, onChange }: { step: Route
           )}
         </div>
       ))}
-      <Button size="sm" variant="outline" onClick={() => onChange({ ...step, branches: [...step.branches, { id: newStepId(), label: `Branch ${step.branches.length + 1}`, ruleId: '', condition: { match: 'all', conditions: [newCondition(columns[0]?.name ?? '')], groups: [] } }] })}>
-        <Plus aria-hidden /> Branch
+      <Button size="sm" variant="outline" onClick={() => onChange({ ...step, branches: [...step.branches, { id: newStepId(), label: t('steps.router.defaultLabel', { n: step.branches.length + 1 }), ruleId: '', condition: { match: 'all', conditions: [newCondition(columns[0]?.name ?? '')], groups: [] } }] })}>
+        <Plus aria-hidden /> {t('steps.router.addBranch')}
       </Button>
-      <p className="text-xs text-muted-foreground">Rows matching no branch go to <span className="font-mono font-medium">{OTHERWISE}</span>; leave it unconnected to drop them.</p>
+      <p className="text-xs text-muted-foreground">
+        {t('steps.router.otherwiseBefore')}
+        <span className="font-mono font-medium">{OTHERWISE}</span>
+        {t('steps.router.otherwiseAfter')}
+      </p>
     </div>
   )
 }
@@ -643,26 +659,27 @@ export function RouterEditor({ step, columns, options, onChange }: { step: Route
 const WRITABLE = new Set(['postgres', 'mysql', 'supabase', 'kmplus'])
 
 export function DestinationEditor({ step, options, columns, onChange }: { step: DestinationStep; options: BuilderOptions; columns: Column[]; onChange: (s: DestinationStep) => void }) {
+  const t = useT()
   const writable = options.dataSources.filter((d) => WRITABLE.has(d.sourceType))
   const target = step.kind === 'datasource' ? options.dataSources.find((d) => d.id === step.dataSourceId) : undefined
-  const targetColumns = target?.tables.find((t) => t.name === (step.kind === 'datasource' ? step.table : ''))?.columns ?? []
+  const targetColumns = target?.tables.find((tb) => tb.name === (step.kind === 'datasource' ? step.table : ''))?.columns ?? []
   const toggleKey = (k: string) => onChange({ ...step, keys: step.keys.includes(k) ? step.keys.filter((x) => x !== k) : [...step.keys, k] } as DestinationStep)
   const base = { id: step.id, type: 'destination' as const, position: step.position, keys: [], softDeleteMissing: false }
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap gap-2" role="group" aria-label="Write to">
+      <div className="flex flex-wrap gap-2" role="group" aria-label={t('steps.destination.writeTo')}>
         <Button size="sm" aria-pressed={step.kind === 'dataset'} variant={step.kind === 'dataset' ? 'default' : 'outline'} onClick={() => onChange({ ...base, kind: 'dataset', datasetName: '', mode: 'replace' })}>
-          Nexus dataset
+          {t('steps.destination.dataset')}
         </Button>
         <Button size="sm" aria-pressed={step.kind === 'datasource'} variant={step.kind === 'datasource' ? 'default' : 'outline'} onClick={() => onChange({ ...base, kind: 'datasource', dataSourceId: '', table: '', mode: 'append', softDeleteColumn: '' })}>
-          Write back to a database
+          {t('steps.destination.database')}
         </Button>
       </div>
 
       {step.kind === 'dataset' ? (
         <div className="grid gap-3">
-          <Field label="Dataset name">
+          <Field label={t('steps.destination.datasetName')}>
             <Input list="nexus-datasets" value={step.datasetName} placeholder="employee_master" onChange={(e) => onChange({ ...step, datasetName: e.target.value.toLowerCase() })} className="font-mono" />
           </Field>
           <datalist id="nexus-datasets">
@@ -670,33 +687,33 @@ export function DestinationEditor({ step, options, columns, onChange }: { step: 
               <option key={d.name} value={d.name} />
             ))}
           </datalist>
-          <Field label="Write mode">
+          <Field label={t('steps.destination.writeMode')}>
             <NativeSelect value={step.mode} onChange={(v) => onChange({ ...step, mode: v as 'append' | 'upsert' | 'replace', softDeleteMissing: v === 'upsert' ? step.softDeleteMissing : false })}>
-              <option value="replace">Replace (load a fresh copy)</option>
-              <option value="upsert">Upsert (update by key)</option>
-              <option value="append">Append</option>
+              <option value="replace">{t('steps.destination.modeReplace')}</option>
+              <option value="upsert">{t('steps.destination.modeUpsert')}</option>
+              <option value="append">{t('steps.destination.modeAppend')}</option>
             </NativeSelect>
           </Field>
         </div>
       ) : (
         <div className="grid gap-3">
-          <Field label="Destination database">
+          <Field label={t('steps.destination.destinationDb')}>
             <NativeSelect value={step.dataSourceId} onChange={(v) => onChange({ ...step, dataSourceId: v, table: '' })}>
-              <option value="">Choose…</option>
+              <option value="">{t('steps.destination.choose')}</option>
               {writable.map((d) => (
                 <option key={d.id} value={d.id}>
-                  {d.name} ({d.sourceType}){d.role !== 'destination' ? ' · not a destination' : ''}
+                  {d.name} ({d.sourceType}){d.role !== 'destination' ? t('steps.destination.notDestination') : ''}
                 </option>
               ))}
             </NativeSelect>
           </Field>
-          <Field label="Table (must already exist)">
+          <Field label={t('steps.destination.tableExisting')}>
             {target && target.tables.length ? (
               <NativeSelect value={step.table} onChange={(v) => onChange({ ...step, table: v })}>
-                <option value="">Choose a table…</option>
-                {target.tables.map((t) => (
-                  <option key={t.name} value={t.name}>
-                    {t.name}
+                <option value="">{t('steps.destination.chooseTable')}</option>
+                {target.tables.map((tb) => (
+                  <option key={tb.name} value={tb.name}>
+                    {tb.name}
                   </option>
                 ))}
               </NativeSelect>
@@ -704,16 +721,16 @@ export function DestinationEditor({ step, options, columns, onChange }: { step: 
               <Input value={step.table} placeholder="table_name" onChange={(e) => onChange({ ...step, table: e.target.value })} className="font-mono" />
             )}
           </Field>
-          <Field label="Write mode">
+          <Field label={t('steps.destination.writeMode')}>
             <NativeSelect value={step.mode} onChange={(v) => onChange({ ...step, mode: v as 'append' | 'upsert', softDeleteMissing: v === 'upsert' ? step.softDeleteMissing : false })}>
-              <option value="append">Insert (append)</option>
-              <option value="upsert">Upsert (needs a unique key)</option>
+              <option value="append">{t('steps.destination.dbAppend')}</option>
+              <option value="upsert">{t('steps.destination.dbUpsert')}</option>
             </NativeSelect>
           </Field>
-          {!writable.length && <p className="text-xs text-muted-foreground">Add a PostgreSQL, MySQL or Supabase (with Database URL) data source to write back.</p>}
+          {!writable.length && <p className="text-xs text-muted-foreground">{t('steps.destination.noWritable')}</p>}
           {target && target.role !== 'destination' && (
             <Notice tone="warning" className="text-xs">
-              &ldquo;{target.name}&rdquo; was added as a source, so runs will refuse to write to it. Add the database with Data Sources → Add Destination.
+              {t('steps.destination.addedAsSource', { name: target.name })}
             </Notice>
           )}
         </div>
@@ -721,9 +738,9 @@ export function DestinationEditor({ step, options, columns, onChange }: { step: 
 
       {(step.mode === 'upsert' || step.mode === 'replace') && (
         <fieldset>
-          <legend className="mb-1 text-xs font-medium text-muted-foreground">{step.mode === 'replace' ? 'Key column(s), optional' : 'Key column(s)'}</legend>
+          <legend className="mb-1 text-xs font-medium text-muted-foreground">{step.mode === 'replace' ? t('steps.destination.keysOptional') : t('steps.destination.keys')}</legend>
           {step.mode === 'replace' && (
-            <p className="mb-2 text-xs text-muted-foreground">Used when fixed rows are replayed from Data Quality: a replayed row replaces the row with the same key instead of adding a copy.</p>
+            <p className="mb-2 text-xs text-muted-foreground">{t('steps.destination.keysReplaceHelp')}</p>
           )}
           <div className="flex flex-wrap gap-2">
             {columns.length ? (
@@ -740,20 +757,20 @@ export function DestinationEditor({ step, options, columns, onChange }: { step: 
                 </label>
               ))
             ) : (
-              <span className="text-xs text-muted-foreground">Configure the steps before this one first.</span>
+              <span className="text-xs text-muted-foreground">{t('steps.destination.configureFirst')}</span>
             )}
           </div>
           {step.mode === 'upsert' && (
           <label className="mt-3 flex items-start gap-2 text-sm">
             <input type="checkbox" className="mt-0.5 size-4 accent-primary" checked={step.softDeleteMissing} onChange={(e) => onChange({ ...step, softDeleteMissing: e.target.checked } as DestinationStep)} />
             <span>
-              Mark rows missing from the source as deleted
-              <span className="block text-xs text-muted-foreground">After each full run, rows this run didn&apos;t write are flagged deleted (not removed). Needs a full read, not incremental.</span>
+              {t('steps.destination.softDelete')}
+              <span className="block text-xs text-muted-foreground">{t('steps.destination.softDeleteHelp')}</span>
             </span>
           </label>
           )}
           {step.mode === 'upsert' && step.kind === 'datasource' && step.softDeleteMissing && (
-            <Field label="Column marking deleted rows (boolean or timestamp)" className="mt-2">
+            <Field label={t('steps.destination.softDeleteColumn')} className="mt-2">
               <ColumnPicker columns={targetColumns} value={step.softDeleteColumn} onChange={(v) => onChange({ ...step, softDeleteColumn: v })} label={null} />
             </Field>
           )}

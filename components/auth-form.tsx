@@ -11,18 +11,20 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Notice } from '@/components/ui/notice'
 import { KmLogo } from '@/components/brand/km-logo'
+import { useT } from '@/components/i18n/i18n-provider'
 
 /**
  * The frame of every sign-in screen: the board, the KM+ wordmark with "Nexus"
  * above, and one flat panel holding the form.
  */
 export function AuthShell({ children, className }: { children: React.ReactNode; className?: string }) {
+  const t = useT()
   return (
     <main className="flex min-h-svh flex-col items-center justify-center bg-background px-4 py-10 text-foreground">
       <Link
         href="/"
         className="mb-6 flex items-center gap-2.5 rounded-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
-        aria-label="KMPlus Nexus home"
+        aria-label={t('auth.shell.home')}
       >
         <KmLogo className="h-9" priority />
         <span className="text-base font-semibold tracking-tight" aria-hidden>
@@ -36,10 +38,11 @@ export function AuthShell({ children, className }: { children: React.ReactNode; 
 
 export function AuthForm({ mode, next = '/dashboard', ssoError }: { mode: 'sign-in' | 'sign-up'; next?: string; ssoError?: string }) {
   const router = useRouter()
+  const t = useT()
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [error, setError] = useState<string | null>(ssoError ? `Single sign-on failed: ${ssoError}` : null)
+  const [error, setError] = useState<string | null>(ssoError ? t('auth.form.ssoFailed', { error: ssoError }) : null)
   const [useSso, setUseSso] = useState(Boolean(ssoError))
   const [loading, setLoading] = useState(false)
   const [sentTo, setSentTo] = useState<string | null>(null)
@@ -53,8 +56,8 @@ export function AuthForm({ mode, next = '/dashboard', ssoError }: { mode: 'sign-
     if (error)
       return setError(
         error.status === 404 || /not found|no provider/i.test(error.message ?? '')
-          ? "Your organization hasn't set up single sign-on for this email domain. Sign in with your password."
-          : (error.message ?? 'Single sign-on failed'),
+          ? t('auth.form.ssoNotSetUp')
+          : (error.message ?? t('auth.form.ssoFailedShort')),
       )
     if (data?.url) window.location.href = data.url
   }
@@ -70,7 +73,7 @@ export function AuthForm({ mode, next = '/dashboard', ssoError }: { mode: 'sign-
       // The verification link signs the user in and continues to 2FA setup.
       const { data, error } = await authClient.signUp.email({ email, password, name, callbackURL: setupPath })
       setLoading(false)
-      if (error) return setError(error.message ?? 'Something went wrong')
+      if (error) return setError(error.message ?? t('common.somethingWrong'))
       if (data?.token) {
         // Email verification is off (production without SMTP): straight to 2FA setup.
         router.push(setupPath)
@@ -87,7 +90,7 @@ export function AuthForm({ mode, next = '/dashboard', ssoError }: { mode: 'sign-
         setSentTo(email)
         return
       }
-      return setError(error.message ?? 'Something went wrong')
+      return setError(error.message ?? t('common.somethingWrong'))
     }
     if (data && 'twoFactorRedirect' in data && data.twoFactorRedirect) {
       router.push(`/verify-2fa?next=${encodeURIComponent(next)}`)
@@ -101,11 +104,12 @@ export function AuthForm({ mode, next = '/dashboard', ssoError }: { mode: 'sign-
   if (sentTo) {
     return (
       <AuthShell className="space-y-3">
-        <h1 className="text-xl font-semibold tracking-tight">Check your email</h1>
+        <h1 className="text-xl font-semibold tracking-tight">{t('auth.form.checkEmailTitle')}</h1>
         <p className="text-sm text-muted-foreground">
-          We sent a verification link to <span className="font-medium text-foreground">{sentTo}</span>. Open it to confirm your address, then set up two-factor authentication with an authenticator app.
+          {t('auth.form.checkEmailBefore')} <span className="font-medium text-foreground">{sentTo}</span>
+          {t('auth.form.checkEmailAfter')}
         </p>
-        <p className="text-xs text-muted-foreground">The link works for 24 hours. Nothing arrived? Check spam, or sign in again to get a new link.</p>
+        <p className="text-xs text-muted-foreground">{t('auth.form.checkEmailHint')}</p>
         <Button
           variant="outline"
           className="w-full"
@@ -114,7 +118,7 @@ export function AuthForm({ mode, next = '/dashboard', ssoError }: { mode: 'sign-
             setPassword('')
           }}
         >
-          Back to sign in
+          {t('auth.form.backToSignIn')}
         </Button>
       </AuthShell>
     )
@@ -123,24 +127,24 @@ export function AuthForm({ mode, next = '/dashboard', ssoError }: { mode: 'sign-
   return (
     <AuthShell>
       <div className="mb-6">
-        <h1 className="text-xl font-semibold tracking-tight">{isSignUp ? 'Create an account' : 'Welcome back'}</h1>
-        <p className="mt-1 text-sm text-muted-foreground">{isSignUp ? 'Sign up to get started' : 'Sign in to your account to continue'}</p>
+        <h1 className="text-xl font-semibold tracking-tight">{isSignUp ? t('auth.form.signUpTitle') : t('auth.form.signInTitle')}</h1>
+        <p className="mt-1 text-sm text-muted-foreground">{isSignUp ? t('auth.form.signUpSubtitle') : t('auth.form.signInSubtitle')}</p>
       </div>
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
         {isSignUp && (
           <div className="flex flex-col gap-2">
-            <Label htmlFor="name">Name</Label>
+            <Label htmlFor="name">{t('auth.form.name')}</Label>
             <Input id="name" value={name} onChange={(e) => setName(e.target.value)} required autoComplete="name" />
           </div>
         )}
         <div className="flex flex-col gap-2">
-          <Label htmlFor="email">Email</Label>
+          <Label htmlFor="email">{t('auth.form.email')}</Label>
           <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" />
         </div>
         {!useSso && (
           <div className="flex flex-col gap-2">
-            <Label htmlFor="password">Password</Label>
+            <Label htmlFor="password">{t('auth.form.password')}</Label>
             <Input
               id="password"
               type="password"
@@ -157,7 +161,7 @@ export function AuthForm({ mode, next = '/dashboard', ssoError }: { mode: 'sign-
 
         <Button type="submit" size="lg" disabled={loading} className="w-full">
           {loading && <Loader2 className="animate-spin" aria-hidden />}
-          {loading ? 'Please wait...' : isSignUp ? 'Create account' : useSso ? 'Continue with SSO' : 'Sign in'}
+          {loading ? t('auth.form.pleaseWait') : isSignUp ? t('auth.form.createAccount') : useSso ? t('auth.form.continueSso') : t('auth.form.signIn')}
         </Button>
         {!isSignUp && (
           <Button
@@ -170,18 +174,18 @@ export function AuthForm({ mode, next = '/dashboard', ssoError }: { mode: 'sign-
               setError(null)
             }}
           >
-            {useSso ? 'Sign in with a password instead' : 'Sign in with SSO (Microsoft, Google, Okta)'}
+            {useSso ? t('auth.form.usePassword') : t('auth.form.useSso')}
           </Button>
         )}
       </form>
 
       <p className="mt-6 text-center text-sm text-muted-foreground">
-        {isSignUp ? 'Already have an account? ' : "Don't have an account? "}
+        {isSignUp ? t('auth.form.haveAccount') : t('auth.form.noAccount')}{' '}
         <Link
           href={`${isSignUp ? '/sign-in' : '/sign-up'}${next !== '/dashboard' ? `?next=${encodeURIComponent(next)}` : ''}`}
           className="font-medium text-info-text underline-offset-4 hover:underline"
         >
-          {isSignUp ? 'Sign in' : 'Sign up'}
+          {isSignUp ? t('auth.form.signIn') : t('auth.form.signUp')}
         </Link>
       </p>
     </AuthShell>

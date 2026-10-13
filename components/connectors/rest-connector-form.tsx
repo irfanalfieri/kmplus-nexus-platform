@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import KeyValueEditor from '@/components/connectors/key-value-editor'
+import { usePrefs } from '@/components/i18n/i18n-provider'
 import {
   REST_DEFAULTS,
   type RestAuthMethod,
@@ -75,6 +76,7 @@ export default function RestConnectorForm({
   const [pasteBox, setPasteBox] = useState('')
   const [pasteHint, setPasteHint] = useState('')
   const uid = useId()
+  const { t, formatNumber } = usePrefs()
   const fid = (key: string) => `${uid}-${key}`
 
   const applyPatch = useCallback(
@@ -90,7 +92,7 @@ export default function RestConnectorForm({
     (raw: string) => {
       const parsed = parseConnectionPaste(raw)
       if (!parsed) {
-        setPasteHint('Could not parse — use: url: https://… then auth: eyJ…')
+        setPasteHint(t('connect.rest.parseError'))
         return false
       }
       applyPatch({
@@ -106,10 +108,10 @@ export default function RestConnectorForm({
             }
           : {}),
       })
-      setPasteHint('Imported — URL and Bearer token applied.')
+      setPasteHint(t('connect.rest.imported'))
       return true
     },
-    [applyPatch, values]
+    [applyPatch, values, t]
   )
 
   const handlePaste = (raw: string) => {
@@ -124,7 +126,7 @@ export default function RestConnectorForm({
       const fixed = sanitizeRestCredentials(values)
       if (fixed.baseUrl !== baseUrl) {
         applyPatch(fixed)
-        setPasteHint('Fixed URL — auth token moved to Authorization tab.')
+        setPasteHint(t('connect.rest.fixedUrl'))
       }
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -133,7 +135,7 @@ export default function RestConnectorForm({
     <div className="space-y-4">
       <div className="space-y-2 rounded-lg border border-dashed border-border bg-muted/40 p-3">
         <Label htmlFor={fid('quickImport')} className="text-xs text-muted-foreground">
-          Quick import — paste <code className="font-mono text-[11px]">url:</code> + <code className="font-mono text-[11px]">auth:</code>
+          {t('connect.rest.quickImport')} <code className="font-mono text-[11px]">url:</code> + <code className="font-mono text-[11px]">auth:</code>
         </Label>
         <textarea
           id={fid('quickImport')}
@@ -148,7 +150,7 @@ export default function RestConnectorForm({
         />
         <div className="flex items-center gap-2">
           <Button type="button" size="sm" variant="secondary" onClick={() => importConnection(pasteBox)}>
-            Import connection
+            {t('connect.rest.importConnection')}
           </Button>
           <span role="status" className="text-[11px] text-muted-foreground">
             {pasteHint}
@@ -163,7 +165,7 @@ export default function RestConnectorForm({
             value={val(values, 'httpMethod')}
             onValueChange={(v) => v && onChange('httpMethod', v)}
           >
-            <SelectTrigger aria-label="HTTP method" className="h-10 w-[110px] shrink-0 rounded-none border-0 border-r font-mono font-semibold focus-visible:outline-offset-[-2px]">
+            <SelectTrigger aria-label={t('connect.rest.httpMethod')} className="h-10 w-[110px] shrink-0 rounded-none border-0 border-r font-mono font-semibold focus-visible:outline-offset-[-2px]">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -176,8 +178,8 @@ export default function RestConnectorForm({
           </Select>
           <Input
             className="h-10 flex-1 rounded-none border-0 font-mono text-sm focus-visible:outline-offset-[-2px]"
-            aria-label="Base URL"
-            placeholder="https://api.example.com (host only)"
+            aria-label={t('connect.rest.baseUrl')}
+            placeholder={t('connect.rest.baseUrlPlaceholder')}
             value={val(values, 'baseUrl')}
             onChange={(e) => onChange('baseUrl', e.target.value)}
             onPaste={(e) => {
@@ -192,57 +194,57 @@ export default function RestConnectorForm({
         <div className="flex items-center gap-2 px-3 py-2">
           <Input
             className="h-8 flex-1 font-mono text-xs"
-            aria-label="Resource path"
+            aria-label={t('connect.rest.resourcePath')}
             placeholder="/resource/path"
             value={val(values, 'resourcePath')}
             onChange={(e) => onChange('resourcePath', e.target.value)}
           />
           {onSend && (
             <Button type="button" onClick={onSend} disabled={sending} className="shrink-0 px-4">
-              {sending ? 'Sending…' : 'Send'}
+              {sending ? t('connect.rest.sending') : t('connect.rest.send')}
             </Button>
           )}
         </div>
         <div className="border-t border-border bg-muted/40 px-3 py-1.5 font-mono text-[11px] break-all text-muted-foreground">
-          {fullUrlPreview || 'Enter base URL and path'}
+          {fullUrlPreview || t('connect.rest.enterUrl')}
         </div>
       </div>
 
       <Tabs defaultValue="params" className="w-full">
         <TabsList className="h-9 w-full justify-start overflow-x-auto">
-          <TabsTrigger value="params">Params</TabsTrigger>
-          <TabsTrigger value="auth">Authorization</TabsTrigger>
-          <TabsTrigger value="headers">Headers</TabsTrigger>
-          <TabsTrigger value="body">Body</TabsTrigger>
-          <TabsTrigger value="variables">Variables</TabsTrigger>
-          <TabsTrigger value="settings">Settings</TabsTrigger>
+          <TabsTrigger value="params">{t('connect.rest.tabs.params')}</TabsTrigger>
+          <TabsTrigger value="auth">{t('connect.rest.tabs.auth')}</TabsTrigger>
+          <TabsTrigger value="headers">{t('connect.rest.tabs.headers')}</TabsTrigger>
+          <TabsTrigger value="body">{t('connect.rest.tabs.body')}</TabsTrigger>
+          <TabsTrigger value="variables">{t('connect.rest.tabs.variables')}</TabsTrigger>
+          <TabsTrigger value="settings">{t('connect.rest.tabs.settings')}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="params" className="mt-3 rounded-lg border border-border p-3">
           <KeyValueEditor
             value={val(values, 'paramsKv')}
             onChange={(v) => onChange('paramsKv', v)}
-            keyPlaceholder="Query param"
-            valuePlaceholder="Value"
-            keyLabel="Query param name"
-            valueLabel="Query param value"
+            keyPlaceholder={t('connect.rest.queryParam')}
+            valuePlaceholder={t('connect.rest.value')}
+            keyLabel={t('connect.rest.queryParamName')}
+            valueLabel={t('connect.rest.queryParamValue')}
           />
         </TabsContent>
 
         <TabsContent value="auth" className="mt-3 space-y-3 rounded-lg border border-border p-3">
-          <Field id={fid('authMethod')} label="Type">
+          <Field id={fid('authMethod')} label={t('connect.rest.type')}>
             <Select value={authMethod} onValueChange={(v) => v && onChange('authMethod', v)}>
               <SelectTrigger id={fid('authMethod')}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="none">No Auth</SelectItem>
-                <SelectItem value="api_key">API Key</SelectItem>
-                <SelectItem value="bearer">Bearer Token</SelectItem>
-                <SelectItem value="basic">Basic Auth</SelectItem>
-                <SelectItem value="custom_header">Custom Header</SelectItem>
-                <SelectItem value="oauth2_client_credentials">OAuth 2.0 — Client Credentials</SelectItem>
-                <SelectItem value="oauth2_password">OAuth 2.0 — Password Grant</SelectItem>
+                <SelectItem value="none">{t('connect.rest.authMethods.none')}</SelectItem>
+                <SelectItem value="api_key">{t('connect.rest.authMethods.apiKey')}</SelectItem>
+                <SelectItem value="bearer">{t('connect.rest.authMethods.bearer')}</SelectItem>
+                <SelectItem value="basic">{t('connect.rest.authMethods.basic')}</SelectItem>
+                <SelectItem value="custom_header">{t('connect.rest.authMethods.customHeader')}</SelectItem>
+                <SelectItem value="oauth2_client_credentials">{t('connect.rest.authMethods.oauthClient')}</SelectItem>
+                <SelectItem value="oauth2_password">{t('connect.rest.authMethods.oauthPassword')}</SelectItem>
               </SelectContent>
             </Select>
           </Field>
@@ -250,7 +252,7 @@ export default function RestConnectorForm({
           {authMethod === 'api_key' && (
             <>
               <div className="grid grid-cols-2 gap-3">
-                <Field id={fid('apiKeyLocation')} label="Add to">
+                <Field id={fid('apiKeyLocation')} label={t('connect.rest.addTo')}>
                   <Select
                     value={val(values, 'apiKeyLocation')}
                     onValueChange={(v) => v && onChange('apiKeyLocation', v)}
@@ -259,19 +261,19 @@ export default function RestConnectorForm({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="header">Header</SelectItem>
-                      <SelectItem value="query">Query Params</SelectItem>
+                      <SelectItem value="header">{t('connect.rest.header')}</SelectItem>
+                      <SelectItem value="query">{t('connect.rest.queryParams')}</SelectItem>
                     </SelectContent>
                   </Select>
                 </Field>
-                <Field id={fid('apiKeyHeader')} label="Header / param name">
+                <Field id={fid('apiKeyHeader')} label={t('connect.rest.headerOrParamName')}>
                   <Input id={fid('apiKeyHeader')} value={val(values, 'apiKeyHeader')} onChange={(e) => onChange('apiKeyHeader', e.target.value)} />
                 </Field>
               </div>
-              <Field id={fid('apiKeyPrefix')} label="Prefix (optional)" hint='e.g. "Bearer" — prepended before the key value'>
+              <Field id={fid('apiKeyPrefix')} label={t('connect.rest.prefixOptional')} hint={t('connect.rest.prefixHint')}>
                 <Input id={fid('apiKeyPrefix')} aria-describedby={`${fid('apiKeyPrefix')}-hint`} value={val(values, 'apiKeyPrefix')} onChange={(e) => onChange('apiKeyPrefix', e.target.value)} />
               </Field>
-              <Field id={fid('apiKeyValue')} label="Value">
+              <Field id={fid('apiKeyValue')} label={t('connect.rest.value')}>
                 <Input id={fid('apiKeyValue')} type="password" value={val(values, 'apiKeyValue')} onChange={(e) => onChange('apiKeyValue', e.target.value)} />
               </Field>
             </>
@@ -279,10 +281,10 @@ export default function RestConnectorForm({
 
           {authMethod === 'bearer' && (
             <>
-              <Field id={fid('bearerPrefix')} label="Token prefix">
+              <Field id={fid('bearerPrefix')} label={t('connect.rest.tokenPrefix')}>
                 <Input id={fid('bearerPrefix')} value={val(values, 'bearerPrefix')} onChange={(e) => onChange('bearerPrefix', e.target.value)} />
               </Field>
-              <Field id={fid('bearerToken')} label="Token">
+              <Field id={fid('bearerToken')} label={t('connect.rest.token')}>
                 <Input id={fid('bearerToken')} type="password" value={val(values, 'bearerToken')} onChange={(e) => onChange('bearerToken', e.target.value)} />
               </Field>
             </>
@@ -290,10 +292,10 @@ export default function RestConnectorForm({
 
           {authMethod === 'basic' && (
             <div className="grid grid-cols-2 gap-3">
-              <Field id={fid('basicUsername')} label="Username">
+              <Field id={fid('basicUsername')} label={t('connect.rest.username')}>
                 <Input id={fid('basicUsername')} value={val(values, 'basicUsername')} onChange={(e) => onChange('basicUsername', e.target.value)} />
               </Field>
-              <Field id={fid('basicPassword')} label="Password">
+              <Field id={fid('basicPassword')} label={t('connect.rest.password')}>
                 <Input id={fid('basicPassword')} type="password" value={val(values, 'basicPassword')} onChange={(e) => onChange('basicPassword', e.target.value)} />
               </Field>
             </div>
@@ -301,10 +303,10 @@ export default function RestConnectorForm({
 
           {authMethod === 'custom_header' && (
             <div className="grid grid-cols-2 gap-3">
-              <Field id={fid('customHeaderName')} label="Header name">
+              <Field id={fid('customHeaderName')} label={t('connect.rest.headerName')}>
                 <Input id={fid('customHeaderName')} value={val(values, 'customHeaderName')} onChange={(e) => onChange('customHeaderName', e.target.value)} />
               </Field>
-              <Field id={fid('customHeaderValue')} label="Header value">
+              <Field id={fid('customHeaderValue')} label={t('connect.rest.headerValue')}>
                 <Input id={fid('customHeaderValue')} type="password" value={val(values, 'customHeaderValue')} onChange={(e) => onChange('customHeaderValue', e.target.value)} />
               </Field>
             </div>
@@ -312,28 +314,28 @@ export default function RestConnectorForm({
 
           {(authMethod === 'oauth2_client_credentials' || authMethod === 'oauth2_password') && (
             <>
-              <Field id={fid('oauthTokenUrl')} label="Access Token URL">
+              <Field id={fid('oauthTokenUrl')} label={t('connect.rest.tokenUrl')}>
                 <Input id={fid('oauthTokenUrl')} value={val(values, 'oauthTokenUrl')} onChange={(e) => onChange('oauthTokenUrl', e.target.value)} placeholder="https://auth.example.com/oauth/token" />
               </Field>
               <div className="grid grid-cols-2 gap-3">
-                <Field id={fid('oauthClientId')} label="Client ID">
+                <Field id={fid('oauthClientId')} label={t('connect.rest.clientId')}>
                   <Input id={fid('oauthClientId')} value={val(values, 'oauthClientId')} onChange={(e) => onChange('oauthClientId', e.target.value)} />
                 </Field>
-                <Field id={fid('oauthClientSecret')} label="Client Secret">
+                <Field id={fid('oauthClientSecret')} label={t('connect.rest.clientSecret')}>
                   <Input id={fid('oauthClientSecret')} type="password" value={val(values, 'oauthClientSecret')} onChange={(e) => onChange('oauthClientSecret', e.target.value)} />
                 </Field>
               </div>
               {authMethod === 'oauth2_password' && (
                 <div className="grid grid-cols-2 gap-3">
-                  <Field id={fid('oauthUsername')} label="Username">
+                  <Field id={fid('oauthUsername')} label={t('connect.rest.username')}>
                     <Input id={fid('oauthUsername')} value={val(values, 'oauthUsername')} onChange={(e) => onChange('oauthUsername', e.target.value)} />
                   </Field>
-                  <Field id={fid('oauthPassword')} label="Password">
+                  <Field id={fid('oauthPassword')} label={t('connect.rest.password')}>
                     <Input id={fid('oauthPassword')} type="password" value={val(values, 'oauthPassword')} onChange={(e) => onChange('oauthPassword', e.target.value)} />
                   </Field>
                 </div>
               )}
-              <Field id={fid('oauthScope')} label="Scope (optional)">
+              <Field id={fid('oauthScope')} label={t('connect.rest.scopeOptional')}>
                 <Input id={fid('oauthScope')} value={val(values, 'oauthScope')} onChange={(e) => onChange('oauthScope', e.target.value)} />
               </Field>
             </>
@@ -344,15 +346,15 @@ export default function RestConnectorForm({
           <KeyValueEditor
             value={val(values, 'headersKv')}
             onChange={(v) => onChange('headersKv', v)}
-            keyPlaceholder="Header"
-            valuePlaceholder="Value"
-            keyLabel="Header name"
-            valueLabel="Header value"
+            keyPlaceholder={t('connect.rest.header')}
+            valuePlaceholder={t('connect.rest.value')}
+            keyLabel={t('connect.rest.headerName')}
+            valueLabel={t('connect.rest.headerValue')}
           />
         </TabsContent>
 
         <TabsContent value="body" className="mt-3 space-y-3 rounded-lg border border-border p-3">
-          <Field id={fid('integrationScheme')} label="Integration scheme">
+          <Field id={fid('integrationScheme')} label={t('connect.rest.integrationScheme')}>
             <Select value={scheme} onValueChange={(v) => v && onChange('integrationScheme', v)}>
               <SelectTrigger id={fid('integrationScheme')}>
                 <SelectValue />
@@ -366,13 +368,13 @@ export default function RestConnectorForm({
           </Field>
 
           {scheme !== 'graphql' && (
-            <Field id={fid('bodyType')} label="Body type">
+            <Field id={fid('bodyType')} label={t('connect.rest.bodyType')}>
               <Select value={bodyType} onValueChange={(v) => v && onChange('bodyType', v)}>
                 <SelectTrigger id={fid('bodyType')}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none">none</SelectItem>
+                  <SelectItem value="none">{t('connect.rest.bodyNone')}</SelectItem>
                   <SelectItem value="json">JSON</SelectItem>
                   <SelectItem value="raw">raw</SelectItem>
                   <SelectItem value="urlencoded">x-www-form-urlencoded</SelectItem>
@@ -382,7 +384,7 @@ export default function RestConnectorForm({
           )}
 
           {resolvedBodyType === 'graphql' && (
-            <Field id={fid('graphqlQuery')} label="GraphQL query">
+            <Field id={fid('graphqlQuery')} label={t('connect.rest.graphqlQuery')}>
               <textarea id={fid('graphqlQuery')}
                 className={`min-h-[140px] ${textareaClass}`}
                 placeholder={`query Users {\n  users(limit: 5) { id name email }\n}`}
@@ -393,7 +395,7 @@ export default function RestConnectorForm({
           )}
 
           {resolvedBodyType === 'json' && (
-            <Field id={fid('requestBody')} label="JSON body">
+            <Field id={fid('requestBody')} label={t('connect.rest.jsonBody')}>
               <textarea id={fid('requestBody')}
                 className={`min-h-[120px] ${textareaClass}`}
                 placeholder='{"filter":"active"}'
@@ -405,10 +407,10 @@ export default function RestConnectorForm({
 
           {resolvedBodyType === 'raw' && (
             <>
-              <Field id={fid('rawContentType')} label="Content-Type">
+              <Field id={fid('rawContentType')} label={t('connect.rest.contentType')}>
                 <Input id={fid('rawContentType')} value={val(values, 'rawContentType')} onChange={(e) => onChange('rawContentType', e.target.value)} />
               </Field>
-              <Field id={fid('requestBody')} label="Raw body">
+              <Field id={fid('requestBody')} label={t('connect.rest.rawBody')}>
                 <textarea id={fid('requestBody')}
                   className={`min-h-[120px] ${textareaClass}`}
                   value={val(values, 'requestBody')}
@@ -422,18 +424,18 @@ export default function RestConnectorForm({
             <KeyValueEditor
               value={val(values, 'bodyKv')}
               onChange={(v) => onChange('bodyKv', v)}
-              keyPlaceholder="Field"
-              valuePlaceholder="Value"
-              keyLabel="Form field name"
-              valueLabel="Form field value"
+              keyPlaceholder={t('connect.rest.formField')}
+              valuePlaceholder={t('connect.rest.value')}
+              keyLabel={t('connect.rest.formFieldName')}
+              valueLabel={t('connect.rest.formFieldValue')}
             />
           )}
         </TabsContent>
 
         <TabsContent value="variables" className="mt-3 space-y-3 rounded-lg border border-border p-3">
           <Field id={fid('variablesJson')}
-            label="Environment variables (JSON)"
-            hint='Use {{name}} in URL, headers, params, or body. Example: {"base":"https://api.example.com"}'
+            label={t('connect.rest.envVars')}
+            hint={t('connect.rest.envVarsHint')}
           >
             <textarea id={fid('variablesJson')} aria-describedby={`${fid('variablesJson')}-hint`}
               className={`min-h-[100px] ${textareaClass}`}
@@ -442,82 +444,82 @@ export default function RestConnectorForm({
               onChange={(e) => onChange('variablesJson', e.target.value)}
             />
           </Field>
-          <Field id={fid('dataPath')} label="Response data path" hint="Dot path to array in JSON response, e.g. data.items">
+          <Field id={fid('dataPath')} label={t('connect.rest.dataPath')} hint={t('connect.rest.dataPathHint')}>
             <Input id={fid('dataPath')} aria-describedby={`${fid('dataPath')}-hint`} value={val(values, 'dataPath')} onChange={(e) => onChange('dataPath', e.target.value)} placeholder="data.items" />
           </Field>
         </TabsContent>
 
         <TabsContent value="settings" className="mt-3 space-y-3 rounded-lg border border-border p-3">
           <div className="grid grid-cols-2 gap-3">
-            <Field id={fid('timeoutMs')} label="Timeout (ms)">
+            <Field id={fid('timeoutMs')} label={t('connect.rest.timeout')}>
               <Input id={fid('timeoutMs')} type="number" value={val(values, 'timeoutMs')} onChange={(e) => onChange('timeoutMs', e.target.value)} />
             </Field>
-            <Field id={fid('retries')} label="Retries">
+            <Field id={fid('retries')} label={t('connect.rest.retries')}>
               <Input id={fid('retries')} type="number" value={val(values, 'retries')} onChange={(e) => onChange('retries', e.target.value)} />
             </Field>
-            <Field id={fid('retryBackoffMs')} label="Retry backoff (ms)">
+            <Field id={fid('retryBackoffMs')} label={t('connect.rest.retryBackoff')}>
               <Input id={fid('retryBackoffMs')} type="number" value={val(values, 'retryBackoffMs')} onChange={(e) => onChange('retryBackoffMs', e.target.value)} />
             </Field>
-            <Field id={fid('validateStatus')} label="Validate status">
+            <Field id={fid('validateStatus')} label={t('connect.rest.validateStatus')}>
               <Input id={fid('validateStatus')} value={val(values, 'validateStatus')} onChange={(e) => onChange('validateStatus', e.target.value)} placeholder="2xx" />
             </Field>
           </div>
-          <Field id={fid('followRedirects')} label="Follow redirects">
+          <Field id={fid('followRedirects')} label={t('connect.rest.followRedirects')}>
             <Select value={val(values, 'followRedirects')} onValueChange={(v) => v && onChange('followRedirects', v)}>
               <SelectTrigger id={fid('followRedirects')}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="true">Yes</SelectItem>
-                <SelectItem value="false">No</SelectItem>
+                <SelectItem value="true">{t('common.yes')}</SelectItem>
+                <SelectItem value="false">{t('common.no')}</SelectItem>
               </SelectContent>
             </Select>
           </Field>
 
           <div className="border-t border-border pt-3">
             <h3 className="mb-2 font-mono text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
-              Pagination (production fetch)
+              {t('connect.rest.pagination')}
             </h3>
-            <Field id={fid('paginationStyle')} label="Style">
+            <Field id={fid('paginationStyle')} label={t('connect.rest.style')}>
               <Select value={val(values, 'paginationStyle')} onValueChange={(v) => v && onChange('paginationStyle', v)}>
                 <SelectTrigger id={fid('paginationStyle')}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none">None — single request</SelectItem>
-                  <SelectItem value="offset">Offset / limit</SelectItem>
-                  <SelectItem value="page">Page number</SelectItem>
-                  <SelectItem value="cursor">Cursor</SelectItem>
+                  <SelectItem value="none">{t('connect.rest.paginationStyles.none')}</SelectItem>
+                  <SelectItem value="offset">{t('connect.rest.paginationStyles.offset')}</SelectItem>
+                  <SelectItem value="page">{t('connect.rest.paginationStyles.page')}</SelectItem>
+                  <SelectItem value="cursor">{t('connect.rest.paginationStyles.cursor')}</SelectItem>
                 </SelectContent>
               </Select>
             </Field>
             {val(values, 'paginationStyle') !== 'none' && (
               <div className="mt-3 grid grid-cols-2 gap-3">
-                <Field id={fid('paginationPageSize')} label="Page size">
+                <Field id={fid('paginationPageSize')} label={t('connect.rest.pageSize')}>
                   <Input id={fid('paginationPageSize')} value={val(values, 'paginationPageSize')} onChange={(e) => onChange('paginationPageSize', e.target.value)} />
                 </Field>
-                <Field id={fid('paginationMaxPages')} label="Max pages">
+                <Field id={fid('paginationMaxPages')} label={t('connect.rest.maxPages')}>
                   <Input id={fid('paginationMaxPages')} value={val(values, 'paginationMaxPages')} onChange={(e) => onChange('paginationMaxPages', e.target.value)} />
                 </Field>
-                <Field id={fid('paginationLimitParam')} label="Limit param">
+                <Field id={fid('paginationLimitParam')} label={t('connect.rest.limitParam')}>
                   <Input id={fid('paginationLimitParam')} value={val(values, 'paginationLimitParam')} onChange={(e) => onChange('paginationLimitParam', e.target.value)} />
                 </Field>
                 {val(values, 'paginationStyle') === 'offset' && (
-                  <Field id={fid('paginationOffsetParam')} label="Offset param">
+                  <Field id={fid('paginationOffsetParam')} label={t('connect.rest.offsetParam')}>
                     <Input id={fid('paginationOffsetParam')} value={val(values, 'paginationOffsetParam')} onChange={(e) => onChange('paginationOffsetParam', e.target.value)} />
                   </Field>
                 )}
                 {val(values, 'paginationStyle') === 'page' && (
-                  <Field id={fid('paginationPageParam')} label="Page param">
+                  <Field id={fid('paginationPageParam')} label={t('connect.rest.pageParam')}>
                     <Input id={fid('paginationPageParam')} value={val(values, 'paginationPageParam')} onChange={(e) => onChange('paginationPageParam', e.target.value)} />
                   </Field>
                 )}
                 {val(values, 'paginationStyle') === 'cursor' && (
                   <>
-                    <Field id={fid('paginationCursorParam')} label="Cursor param">
+                    <Field id={fid('paginationCursorParam')} label={t('connect.rest.cursorParam')}>
                       <Input id={fid('paginationCursorParam')} value={val(values, 'paginationCursorParam')} onChange={(e) => onChange('paginationCursorParam', e.target.value)} />
                     </Field>
-                    <Field id={fid('paginationCursorPath')} label="Next cursor path">
+                    <Field id={fid('paginationCursorPath')} label={t('connect.rest.nextCursorPath')}>
                       <Input id={fid('paginationCursorPath')} value={val(values, 'paginationCursorPath')} onChange={(e) => onChange('paginationCursorPath', e.target.value)} />
                     </Field>
                   </>
@@ -535,7 +537,7 @@ export default function RestConnectorForm({
               {preview.response.status || 'ERR'} {preview.response.statusText}
             </StateMark>
             <span className="font-mono text-xs text-muted-foreground">{preview.response.durationMs} ms</span>
-            <span className="font-mono text-xs text-muted-foreground">{preview.response.sizeBytes} bytes</span>
+            <span className="font-mono text-xs text-muted-foreground">{t('connect.rest.bytes', { count: formatNumber(preview.response.sizeBytes) })}</span>
             {preview.response.contentType && (
               <span className="truncate font-mono text-xs text-muted-foreground">{preview.response.contentType}</span>
             )}

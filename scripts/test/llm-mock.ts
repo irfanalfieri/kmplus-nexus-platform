@@ -44,6 +44,32 @@ export async function startLlmMock(port = 0) {
       } else if (system.startsWith('You answer questions')) {
         const ds = (JSON.parse(user) as { datasets: { name: string }[] }).datasets[0]?.name
         answer = { widget: { dataset: ds, type: 'kpi', title: 'People', measure: { agg: 'count', column: '' }, dimension: {}, filters: [], sort: 'value_desc', limit: 10 }, explanation: 'Counts the rows of the dataset.' }
+      } else if (system.startsWith('You plan a KMPlus Nexus data pipeline')) {
+        // The first listed source table with columns; keep rows where its first column is filled.
+        const m = /- id "([^"]+)": [^\n]*?tables: ([^ ;[]+) \[([^\]]*)\]/.exec(system)
+        const columns = (m?.[3] ?? '').split(', ').filter(Boolean)
+        answer = {
+          name: 'People copy',
+          description: 'Copies the people table every morning.',
+          template: 'csv-dataset',
+          dataSourceId: m?.[1] ?? 'missing',
+          table: m?.[2] ?? 'missing',
+          datasetName: 'people_copy',
+          kmplusDestinationId: '',
+          filter: columns[0] ? { match: 'all', conditions: [{ field: columns[0], operator: 'is_not_empty', value: '' }] } : null,
+          schedule: { type: 'daily', time: '02:00' },
+          explanation: 'Reads the table and writes a dataset daily at 02:00 WIB.',
+        }
+      } else if (system.startsWith('You diagnose')) {
+        const input = JSON.parse(user) as { steps: { id: string; type: string; detail: string }[] }
+        const map = input.steps.find((s) => s.type === 'map')
+        const target = map ? /→([A-Za-z_][A-Za-z0-9_]*):/.exec(map.detail)?.[1] : undefined
+        answer = {
+          summary: 'Some rows failed the email check.',
+          cause: 'The source has addresses with surrounding spaces.',
+          steps: ['Trim the field in the Map step.', 'Replay the held rows.'],
+          fix: map && target ? { kind: 'add_transform', stepId: map.id, field: target, transform: { fn: 'trim', args: [] } } : { kind: 'none' },
+        }
       } else {
         answer = { ok: true }
       }

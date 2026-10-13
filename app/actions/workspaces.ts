@@ -11,6 +11,7 @@ import { ACTIVE_WORKSPACE_COOKIE, getMembership, newId, requireUserId, requireWo
 import { ROLE_INFO, ROLES, type Role } from '@/lib/auth/permissions'
 import { recordAudit, type AuditAction } from '@/lib/audit'
 import { appUrl, sendEmail, smtpConfigured } from '@/lib/email'
+import { inviteEmail, requestLocale, twoFactorResetEmail } from '@/lib/email-templates'
 import { guard } from '@/lib/server-action'
 
 const roleSchema = z.enum(ROLES)
@@ -149,16 +150,7 @@ async function resetMemberTwoFactorImpl(rawUserId: string) {
   })
   await audit(ctx, 'RESET_2FA', userId, { email: target?.email })
   if (target?.email && smtpConfigured()) {
-    await sendEmail({
-      to: target.email,
-      subject: 'Your KMPlus Nexus two-factor authentication was reset',
-      lines: [
-        `${ctx.name || ctx.email}, an admin of "${ctx.workspaceName}", reset two-factor authentication on your account and signed you out.`,
-        'Sign in with your password and set up an authenticator app again.',
-        "If you didn't ask for this, contact your admin right away.",
-      ],
-      action: { label: 'Sign in', url: `${appUrl()}/sign-in` },
-    }).catch((err) => console.error('[2fa-reset] email failed:', err instanceof Error ? err.message : err))
+    await sendEmail({ to: target.email, ...twoFactorResetEmail({ admin: ctx.name || ctx.email, workspace: ctx.workspaceName, locale: await requestLocale() }) }).catch((err) => console.error('[2fa-reset] email failed:', err instanceof Error ? err.message : err))
   }
   revalidatePath('/dashboard', 'layout')
 }
@@ -215,12 +207,7 @@ async function createInviteImpl(rawEmail: string, rawRole: string) {
     try {
       await sendEmail({
         to: email,
-        subject: `${ctx.name || ctx.email} invited you to ${ctx.workspaceName} on KMPlus Nexus`,
-        lines: [
-          `${ctx.name || ctx.email} invited you to join the workspace "${ctx.workspaceName}" on KMPlus Nexus as ${ROLE_INFO[role].label}.`,
-          `Sign in or create an account with this email address (${email}) to accept. The link works once and expires in 7 days.`,
-        ],
-        action: { label: 'Accept invite', url: `${appUrl()}${path}` },
+        ...inviteEmail({ inviter: ctx.name || ctx.email, workspace: ctx.workspaceName, role: ROLE_INFO[role].label, email, url: `${appUrl()}${path}`, locale: await requestLocale() }),
       })
       emailed = true
     } catch (err) {

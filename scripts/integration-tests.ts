@@ -29,7 +29,7 @@ import { readFileSync } from 'node:fs'
 import { addAgentDataSource, createAgent, listAgents, revokeAgent } from '@/lib/actions/agents'
 import { getDataSourceTableSample } from '@/lib/actions/connector-source'
 import { parseConfig, runAgent } from '../agent/nexus-agent'
-import { askData, draftRule, getAiSettings, setAiProvider, suggestMapping } from '@/lib/actions/ai'
+import { applyDiagnosisFix, askData, diagnoseRun, draftPipeline, draftRule, getAiSettings, setAiProvider, suggestMapping } from '@/lib/actions/ai'
 import { startLlmMock } from './test/llm-mock'
 import { POST as agentHello } from '@/app/api/agent/v1/hello/route'
 import { GET as agentTasks } from '@/app/api/agent/v1/tasks/route'
@@ -1140,6 +1140,31 @@ async function main() {
         const { rows: audits } = await listAuditLogs({ action: 'AI_ASSIST' })
         assert.equal(audits.length, 3)
         assert.ok(!JSON.stringify(audits).includes('kmplus.test address'), 'the audit records the feature and model, not the prompt')
+
+        // AI-2: a description becomes a checked draft built from the real source table (nothing saved).
+        const pipelinesBefore = (await db.select({ id: pipelines.id }).from(pipelines).where(eq(pipelines.workspaceId, adminWs))).length
+        const draft = await draftPipeline({ text: 'Copy the people table into a dataset every day at 2am' })
+        assert.equal(draft.schedule.type, 'daily')
+        assert.equal(draft.schedule.time, '02:00')
+        assert.ok(draft.definition.nodes.some((n) => n.type === 'filter'), 'the filter sits after the source')
+        assert.ok(draft.definition.nodes.some((n) => n.type === 'destination' && n.kind === 'dataset' && n.datasetName === 'people_copy'))
+        assert.equal((await db.select({ id: pipelines.id }).from(pipelines).where(eq(pipelines.workspaceId, adminWs))).length, pipelinesBefore, 'a draft is not saved')
+        assert.ok(!JSON.stringify(llm.requests.at(-1)!.messages).includes('@kmplus.test'), 'pipeline drafts send the schema, not rows')
+
+        // AI-3: a run that held rows back is explained; personal values are hidden from the model; the fix is saved as a draft.
+        const [partialRun] = await db.select({ id: executionLogs.id }).from(executionLogs).where(and(eq(executionLogs.workspaceId, adminWs), eq(executionLogs.status, 'partial'))).limit(1)
+        assert.ok(partialRun, 'a run that held rows back')
+        const diagnosis = await diagnoseRun({ runId: partialRun.id })
+        assert.match(diagnosis.summary, /email check/)
+        assert.ok(!JSON.stringify(llm.requests.at(-1)!.messages).includes('@kmplus.test'), 'held-row values are hidden from the model')
+        if (diagnosis.fix.kind !== 'none') {
+          const [before] = await db.select({ version: pipelines.version }).from(pipelines).where(eq(pipelines.id, diagnosis.pipelineId))
+          const saved = await applyDiagnosisFix({ pipelineId: diagnosis.pipelineId, fix: diagnosis.fix })
+          const [after] = await db.select({ version: pipelines.version, draftVersion: pipelines.draftVersion }).from(pipelines).where(eq(pipelines.id, diagnosis.pipelineId))
+          assert.equal(after.version, before.version, 'the fix does not publish')
+          assert.equal(after.draftVersion, saved.version, 'the fix is a new draft version')
+        }
+        await rejectsWith(() => diagnoseRun({ runId: 'run_not_here' }), /Run not found/)
 
         setTestUser(viewer)
         await switchWorkspace(adminWs)

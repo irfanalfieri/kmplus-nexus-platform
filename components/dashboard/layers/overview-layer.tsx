@@ -1,150 +1,263 @@
 'use client'
 
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { useEffect, useState } from 'react'
-import { AlertTriangle, ArrowRight, CheckCircle2, Loader2, XCircle } from 'lucide-react'
+import { ArrowRight, Loader2, Workflow } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { buttonVariants } from '@/components/ui/button'
 import { Notice } from '@/components/ui/notice'
-import { Breaker } from '@/components/ui/flow-line'
+import { EmptyState } from '@/components/ui/empty-state'
+import { Breaker, FlowLine, StateMark, type FlowState } from '@/components/ui/flow-line'
 import { PageHeader } from '@/components/dashboard/page-header'
 import { usePrefs } from '@/components/i18n/i18n-provider'
-import { getOverview } from '@/lib/actions/monitoring'
 import { useWorkspace } from '@/components/workspace/workspace-context'
-import { ROLE_INFO } from '@/lib/auth/permissions'
-import { formatWhen } from '@/components/pipelines/run-history'
+import { getOverview } from '@/lib/actions/monitoring'
+import { listPipelines } from '@/lib/actions/pipelines'
+import { definitionSchema } from '@/lib/pipelines/definition'
+import { ends, lineState, type PipelineRow } from '@/components/pipelines/line-state'
+import type { MessageKey } from '@/lib/i18n/translate'
 
 type Overview = Awaited<ReturnType<typeof getOverview>>
 
-const href = (tab: string) => `/dashboard/${tab}`
+const STATE_RANK: Record<FlowState, number> = { tripped: 0, held: 1, running: 2, paused: 3, idle: 4, live: 5 }
+const LINES_SHOWN = 8
 
+/**
+ * The workspace as a mimic panel: every pipeline as a line (tripped first),
+ * what needs a person, what runs next, and a one-line readout of the last 24 h.
+ */
 export default function OverviewLayer() {
-  const { t } = usePrefs()
-  const { workspace, role, user } = useWorkspace()
+  const { t, formatDateTime, formatNumber } = usePrefs()
+  const { user } = useWorkspace()
   const [data, setData] = useState<Overview | null>(null)
+  const [pipes, setPipes] = useState<PipelineRow[]>([])
   const [error, setError] = useState('')
 
-  useEffect(() => {
-    getOverview().then(setData).catch((err) => setError(err instanceof Error ? err.message : 'Failed to load overview'))
-  }, [])
+  const load = useCallback(async () => {
+    try {
+      const [ov, rows] = await Promise.all([getOverview(), listPipelines()])
+      setData(ov)
+      setPipes(rows)
+      setError('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('overview.loadFailed'))
+    }
+  }, [t])
 
-  const header = (
-    <PageHeader
-      title={t('pages.overview.title')}
-      description={t('pages.overview.description')}
-      meta={`Welcome${user.name ? `, ${user.name.split(' ')[0]}` : ''} · ${workspace.name} · you are ${ROLE_INFO[role].label.toLowerCase()}`}
-    />
+  useEffect(() => {
+    void load()
+    const timer = setInterval(() => void load(), 60_000)
+    return () => clearInterval(timer)
+  }, [load])
+
+  const sourceName = useCallback((id: string) => data?.sourceList.find((s) => s.id === id)?.name ?? '—', [data])
+  const lines = useMemo(
+    () =>
+      pipes
+        .map((p) => {
+          const def = definitionSchema.safeParse(p.config)
+          return { p, ...ends(def.success ? def.data : null, sourceName, t), line: lineState(p, false, t) }
+        })
+        .sort((a, b) => STATE_RANK[a.line.state] - STATE_RANK[b.line.state] || a.p.name.localeCompare(b.p.name)),
+    [pipes, sourceName, t],
+  )
+  const upcoming = useMemo(
+    () =>
+      pipes
+        .filter((p) => p.enabled && p.nextRunAt)
+        .sort((a, b) => new Date(a.nextRunAt!).getTime() - new Date(b.nextRunAt!).getTime())
+        .slice(0, 5),
+    [pipes],
   )
 
-  if (error) {
-    return (
-      <div>
-        {header}
-        <Notice tone="danger">{error}</Notice>
-      </div>
-    )
-  }
+  const firstName = (user.name || user.email).split(/[\s@]/)[0]
+  const hour = Number(new Intl.DateTimeFormat('en-GB', { hour: 'numeric', hourCycle: 'h23', timeZone: 'Asia/Jakarta' }).format(new Date()))
+  const greeting = t(hour < 11 ? 'overview.greeting.morning' : hour < 18 ? 'overview.greeting.afternoon' : 'overview.greeting.evening', { name: firstName })
+  const when = (v: Date | string) => `${formatDateTime(v, { weekday: 'short', hour: '2-digit', minute: '2-digit', dateStyle: undefined, timeStyle: undefined })} WIB`
+
   if (!data) {
     return (
       <div>
-        {header}
-        <div className="flex items-center justify-center rounded-lg border border-border bg-card p-10 text-sm text-muted-foreground" role="status">
-          <Loader2 className="mr-2 size-4 animate-spin" aria-hidden /> Loading overview…
-        </div>
+        <PageHeader title={greeting} description={t('pages.overview.description')} />
+        {error ? (
+          <Notice tone="danger">{error}</Notice>
+        ) : (
+          <p className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" aria-hidden /> {t('common.loading')}
+          </p>
+        )}
       </div>
     )
   }
 
-  const doneSteps = data.checklist.filter((s) => s.done).length
-  const tiles = [
-    { label: 'Pipelines', value: data.pipelines.total.toLocaleString(), sub: `${data.pipelines.scheduled} scheduled`, tab: 'pipelines' },
-    { label: 'Data sources', value: data.sources.total.toLocaleString(), sub: `${data.sources.connected} connected`, tab: 'sources' },
-    { label: 'Runs · 24h', value: data.last24h.runs.toLocaleString(), sub: data.last24h.failed ? `${data.last24h.failed} failed` : 'none failed', tab: 'monitoring', alert: data.last24h.failed > 0 },
-    { label: 'Rows written · 24h', value: data.last24h.written.toLocaleString(), sub: `${data.datasets.count} dataset${data.datasets.count === 1 ? '' : 's'} · ${data.datasets.rows.toLocaleString()} rows`, tab: 'monitoring' },
+  // What needs a person, most urgent first. Each item names the thing and links to where it is fixed.
+  const needs: { state: FlowState; text: string; href: string; action: MessageKey }[] = []
+  if (data.held.invalid) needs.push({ state: 'tripped', text: t('overview.needs.held', { count: formatNumber(data.held.invalid) }), href: '/dashboard/quality', action: 'overview.needs.review' })
+  if (data.held.approval) needs.push({ state: 'held', text: t('overview.needs.approvalRows', { count: formatNumber(data.held.approval) }), href: '/dashboard/quality', action: 'overview.needs.review' })
+  if (data.approvalsPending) needs.push({ state: 'held', text: t('overview.needs.approvals', { count: data.approvalsPending }), href: '/dashboard/pipelines', action: 'overview.needs.review' })
+  for (const a of data.attention) {
+    needs.push({ state: 'tripped', text: t(a.lastRunStatus === 'failed' ? 'overview.needs.failed' : 'overview.needs.partial', { name: a.name }), href: '/dashboard/monitoring', action: 'overview.needs.open' })
+  }
+  for (const s of data.sourceList.filter((x) => x.status !== 'connected')) {
+    needs.push({ state: 'idle', text: t('overview.needs.source', { name: s.name }), href: '/dashboard/sources', action: 'overview.needs.check' })
+  }
+  if (data.held.flag) needs.push({ state: 'paused', text: t('overview.needs.flagged', { count: formatNumber(data.held.flag) }), href: '/dashboard/quality', action: 'overview.needs.review' })
+
+  const setupLeft = data.checklist.filter((c) => !c.done).length
+  const readout: { label: string; state?: FlowState }[] = [
+    { label: t('overview.readout.runs', { count: data.last24h.runs }) },
+    { label: t('overview.readout.failed', { count: data.last24h.failed }), state: data.last24h.failed ? 'tripped' : undefined },
+    { label: t('overview.readout.written', { count: formatNumber(data.last24h.written) }) },
+    { label: t('overview.readout.held', { count: formatNumber(data.held.total) }), state: data.held.total ? 'tripped' : undefined },
+    { label: t('overview.readout.datasets', { count: data.datasets.count }) },
   ]
 
   return (
-    <div className="space-y-6">
-      {header}
+    <div>
+      <PageHeader title={greeting} description={t('pages.overview.description')} />
 
-      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border lg:grid-cols-4">
-        {tiles.map((tile) => (
-          <Link
-            key={tile.label}
-            href={href(tile.tab)}
-            className="group bg-card px-4 py-3.5 transition-colors outline-none hover:bg-muted/50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
-          >
-            <div className="font-mono text-[11px] font-medium tracking-wide text-muted-foreground uppercase">{tile.label}</div>
-            <div className="mt-1 font-mono text-3xl leading-10 tabular-nums">{tile.value}</div>
-            <div className={cn('mt-0.5 flex items-center gap-1.5 text-xs', tile.alert ? 'font-medium text-danger-text' : 'text-muted-foreground')}>
-              {tile.alert && <XCircle className="size-3.5 text-danger" aria-hidden />}
-              {tile.sub}
-            </div>
-          </Link>
-        ))}
-      </div>
+      <div className="space-y-5">
+        {error && <Notice tone="danger">{error}</Notice>}
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <section className="rounded-lg border border-border bg-card p-5" aria-labelledby="overview-checklist">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <h2 id="overview-checklist" className="text-base font-semibold">
-              Getting started
-            </h2>
-            <span className="font-mono text-xs text-muted-foreground">
-              {doneSteps} of {data.checklist.length} done
-            </span>
-          </div>
-          <ol className="space-y-0.5">
-            {data.checklist.map((step, i) => (
-              <li key={step.key}>
-                <Link
-                  href={href(step.tab)}
-                  className="flex w-full items-center gap-3 rounded-md px-2 py-2 text-left text-sm outline-none hover:bg-muted/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-                >
-                  <Breaker state={step.done ? 'live' : 'idle'} />
-                  <span className="sr-only">{step.done ? 'Done:' : 'To do:'}</span>
-                  <span className={step.done ? 'text-muted-foreground line-through' : 'font-medium'}>
-                    <span className="font-mono text-xs text-muted-foreground">{i + 1}.</span> {step.label}
-                  </span>
-                  <span className={cn('ml-auto text-xs', step.done ? 'text-live-text' : 'text-muted-foreground')} aria-hidden>
-                    {step.done ? 'Done' : 'To do'}
-                  </span>
-                  {!step.done && <ArrowRight className="size-4 text-muted-foreground" aria-hidden />}
-                </Link>
+        <section aria-label={t('overview.readout.label')} className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border border-border bg-card px-4 py-3">
+          <h2 className="font-mono text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">{t('overview.readout.label')}</h2>
+          <ul className="flex flex-wrap items-center gap-x-5 gap-y-1.5 font-mono text-[13px]">
+            {readout.map((r) => (
+              <li key={r.label} className={cn('flex items-center gap-2', r.state === 'tripped' && 'text-danger-text')}>
+                {r.state && <Breaker state={r.state} />}
+                {r.label}
               </li>
             ))}
-          </ol>
+          </ul>
         </section>
 
-        <section className="rounded-lg border border-border bg-card p-5" aria-labelledby="overview-attention">
-          <h2 id="overview-attention" className="mb-3 text-base font-semibold">
-            Needs attention
-          </h2>
-          {data.attention.length === 0 ? (
-            <p className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-              <CheckCircle2 className="size-5 text-live" aria-hidden /> No failing or rejecting pipelines.
-            </p>
-          ) : (
-            <ul className="divide-y divide-border">
-              {data.attention.map((p) => {
-                const failed = p.lastRunStatus === 'failed'
-                return (
-                  <li key={p.id} className="flex items-center gap-3 py-2 text-sm">
-                    <span className={cn('flex w-32 shrink-0 items-center gap-1.5 text-xs font-medium', failed ? 'text-danger-text' : 'text-warning-text')}>
-                      {failed ? <XCircle className="size-4 text-danger" aria-hidden /> : <AlertTriangle className="size-4 text-warning" aria-hidden />}
-                      {failed ? 'Failed' : 'Rejected rows'}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate font-medium">{p.name}</span>
-                    <span className="font-mono text-xs whitespace-nowrap text-muted-foreground">{formatWhen(p.lastRunAt)}</span>
+        <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]">
+          <section aria-labelledby="lines-title" className="rounded-lg border border-border bg-card">
+            <div className="flex flex-wrap items-end gap-x-4 gap-y-1 border-b border-border px-4 py-3">
+              <div className="min-w-0 flex-1">
+                <h2 id="lines-title" className="text-base font-semibold">
+                  {t('overview.lines.title')}
+                </h2>
+                <p className="text-sm text-muted-foreground">{t('overview.lines.body')}</p>
+              </div>
+              <Link href="/dashboard/pipelines" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
+                {t('overview.lines.openPipelines')} <ArrowRight />
+              </Link>
+            </div>
+            {lines.length === 0 ? (
+              <EmptyState
+                icon={<Workflow />}
+                title={t('overview.lines.empty')}
+                action={
+                  <Link href="/dashboard/pipelines" className={buttonVariants()}>
+                    {t('pipelines.new')}
+                  </Link>
+                }
+              >
+                {t('overview.lines.emptyBody')}
+              </EmptyState>
+            ) : (
+              <ul className="divide-y divide-border">
+                {lines.slice(0, LINES_SHOWN).map(({ p, from, table, to, line }) => (
+                  <li key={p.id}>
+                    <Link
+                      href="/dashboard/pipelines"
+                      className="grid gap-x-4 gap-y-1.5 px-4 py-3 outline-none hover:bg-muted/50 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring sm:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)_auto] sm:items-center"
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate font-medium">{p.name}</span>
+                        <span className="block font-mono text-xs text-muted-foreground">{p.lastRunAt ? when(p.lastRunAt) : t('state.neverRun')}</span>
+                      </span>
+                      <FlowLine from={from} to={to} state={line.state} srLabel={t('pipelines.flowLabel', { from: table ? `${from} · ${table}` : from, to })} />
+                      <StateMark state={line.state} className="sm:justify-self-end">
+                        {line.label}
+                      </StateMark>
+                    </Link>
                   </li>
-                )
-              })}
-            </ul>
-          )}
-          <Link href={href('monitoring')} className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'mt-3')}>
-            Open monitoring <ArrowRight aria-hidden />
-          </Link>
-        </section>
+                ))}
+              </ul>
+            )}
+            {lines.length > LINES_SHOWN && (
+              <p className="border-t border-border px-4 py-2.5 text-sm">
+                <Link href="/dashboard/pipelines" className="text-info-text hover:underline">
+                  {t('overview.lines.more', { count: lines.length - LINES_SHOWN })}
+                </Link>
+              </p>
+            )}
+          </section>
+
+          <div className="space-y-5">
+            {setupLeft > 0 && (
+              <section aria-labelledby="setup-title" className="rounded-lg border border-border bg-card">
+                <div className="flex items-baseline justify-between gap-3 border-b border-border px-4 py-3">
+                  <h2 id="setup-title" className="text-base font-semibold">
+                    {t('overview.setup.title')}
+                  </h2>
+                  <span className="font-mono text-xs text-muted-foreground">{t('overview.setup.progress', { done: data.checklist.length - setupLeft, total: data.checklist.length })}</span>
+                </div>
+                <ol className="divide-y divide-border">
+                  {data.checklist.map((c) => (
+                    <li key={c.key}>
+                      <Link href={`/dashboard/${c.tab}`} className="flex items-center gap-3 px-4 py-2.5 text-sm outline-none hover:bg-muted/50 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring">
+                        <Breaker state={c.done ? 'live' : 'idle'} />
+                        <span className={cn('flex-1', c.done && 'text-muted-foreground line-through decoration-1')}>{t(`overview.setup.${c.key as 'connector' | 'source' | 'pipeline' | 'run' | 'schedule'}`)}</span>
+                        <span className="sr-only">{c.done ? t('overview.setup.done') : t('overview.setup.todo')}</span>
+                        {!c.done && <ArrowRight className="size-4 text-muted-foreground" aria-hidden />}
+                      </Link>
+                    </li>
+                  ))}
+                </ol>
+              </section>
+            )}
+
+            <section aria-labelledby="needs-title" className="rounded-lg border border-border bg-card">
+              <h2 id="needs-title" className="border-b border-border px-4 py-3 text-base font-semibold">
+                {t('overview.needs.title')}
+              </h2>
+              {needs.length === 0 ? (
+                <div className="flex items-start gap-3 px-4 py-4">
+                  <Breaker state="live" className="mt-1" />
+                  <div>
+                    <p className="text-sm font-medium text-live-text">{t('overview.needs.clear')}</p>
+                    <p className="text-sm text-muted-foreground">{t('overview.needs.clearBody')}</p>
+                  </div>
+                </div>
+              ) : (
+                <ul className="divide-y divide-border">
+                  {needs.map((n, i) => (
+                    <li key={i} className="flex items-start gap-3 px-4 py-3">
+                      <Breaker state={n.state} className="mt-1" />
+                      <span className="min-w-0 flex-1 text-sm text-pretty">{n.text}</span>
+                      <Link href={n.href} className="shrink-0 text-sm font-medium text-info-text hover:underline">
+                        {t(n.action)}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+
+            <section aria-labelledby="next-title" className="rounded-lg border border-border bg-card">
+              <h2 id="next-title" className="border-b border-border px-4 py-3 text-base font-semibold">
+                {t('overview.next.title')}
+              </h2>
+              {upcoming.length === 0 ? (
+                <p className="px-4 py-4 text-sm text-muted-foreground">{t('overview.next.empty')}</p>
+              ) : (
+                <ol className="divide-y divide-border">
+                  {upcoming.map((p) => (
+                    <li key={p.id} className="flex items-baseline gap-3 px-4 py-2.5 text-sm">
+                      <time dateTime={new Date(p.nextRunAt!).toISOString()} className="w-32 shrink-0 font-mono text-xs text-muted-foreground">
+                        {when(p.nextRunAt!)}
+                      </time>
+                      <span className="min-w-0 truncate">{p.name}</span>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </section>
+          </div>
+        </div>
       </div>
     </div>
   )

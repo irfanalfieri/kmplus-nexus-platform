@@ -1,5 +1,6 @@
 import { CronExpressionParser } from 'cron-parser'
 import type { PipelineSchedule } from './definition'
+import type { Translate } from '@/lib/i18n/translate'
 
 /** Converts a schedule into a 5-field cron expression, or null for manual and "after another pipeline". */
 export function scheduleToCron(schedule: PipelineSchedule): string | null {
@@ -70,6 +71,32 @@ export function describeSchedule(schedule: PipelineSchedule): string {
       return `Cron "${schedule.cron}" (${tz})`
     case 'after':
       return `After another pipeline ${schedule.afterOn === 'any' ? 'finishes' : schedule.afterOn === 'success_or_partial' ? 'succeeds (also partially)' : 'succeeds'}`
+  }
+}
+
+const DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const
+
+/** `describeSchedule` in the reader's language (the English one stays for the engine and server). */
+export function describeScheduleT(schedule: PipelineSchedule, t: Translate): string {
+  const tz = schedule.timezone === 'Asia/Jakarta' ? 'WIB' : schedule.timezone
+  switch (schedule.type) {
+    case 'manual':
+      return t('editor.schedule.describe.manual')
+    case 'hourly':
+      return t('editor.schedule.describe.hourly', { minute: String(schedule.minute).padStart(2, '0') })
+    case 'daily':
+      return t('editor.schedule.describe.daily', { time: schedule.time, tz })
+    case 'weekly': {
+      const days = [...schedule.weekdays].sort()
+      const label = days.join(',') === '1,2,3,4,5' ? t('editor.schedule.describe.weekdays') : days.map((d) => t(`editor.schedule.days.${DAY_KEYS[d] ?? 'sun'}`)).join(', ')
+      return t('editor.schedule.describe.weekly', { days: label, time: schedule.time, tz })
+    }
+    case 'monthly':
+      return t('editor.schedule.describe.monthly', { day: schedule.dayOfMonth, time: schedule.time, tz })
+    case 'cron':
+      return t('editor.schedule.describe.cron', { cron: schedule.cron, tz })
+    case 'after':
+      return t(schedule.afterOn === 'any' ? 'editor.schedule.describe.afterAny' : schedule.afterOn === 'success_or_partial' ? 'editor.schedule.describe.afterPartial' : 'editor.schedule.describe.afterSuccess')
   }
 }
 

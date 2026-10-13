@@ -2,7 +2,8 @@ import { and, eq, inArray } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { notifications, user, workspaceMembers } from '@/lib/db/schema'
 import { newId } from '@/lib/auth/session'
-import { appUrl, sendEmail as deliver, smtpConfigured } from '@/lib/email'
+import { sendEmail as deliver, smtpConfigured } from '@/lib/email'
+import { alertEmail, requestLocale } from '@/lib/email-templates'
 
 /**
  * In-app notifications (bell icon) + optional email over SMTP (lib/email.ts).
@@ -11,10 +12,10 @@ import { appUrl, sendEmail as deliver, smtpConfigured } from '@/lib/email'
 
 export type NotificationLevel = 'error' | 'warning' | 'info'
 
-async function sendEmail(to: string[], subject: string, lines: string[]): Promise<'sent' | 'skipped' | 'failed'> {
+async function sendEmail(to: string[], alert: { title: string; lines: string[]; level: NotificationLevel; pipelineId?: string }): Promise<'sent' | 'skipped' | 'failed'> {
   if (!smtpConfigured() || !to.length) return 'skipped'
   try {
-    await deliver({ to, subject, lines, action: { label: 'Open KMPlus Nexus', url: `${appUrl()}/dashboard` } })
+    await deliver({ to, ...alertEmail({ ...alert, locale: await requestLocale() }) })
     return 'sent'
   } catch (err) {
     console.error('[notifications] email failed:', err instanceof Error ? err.message : err)
@@ -41,7 +42,7 @@ export async function notify(opts: {
       const [owner] = await db.select({ email: user.email }).from(user).where(eq(user.id, opts.userId)).limit(1)
       to = owner?.email ? [owner.email] : []
     }
-    emailStatus = await sendEmail(to, `[Nexus] ${opts.title}`, opts.lines)
+    emailStatus = await sendEmail(to, { title: opts.title, lines: opts.lines, level: opts.level, pipelineId: opts.pipelineId })
   }
   await db.insert(notifications).values({
     id: newId('ntf'),

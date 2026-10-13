@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useId, useState } from 'react'
+import { Fragment, useCallback, useEffect, useId, useState } from 'react'
 import { Check, Copy, Loader2, Plus, Send, Webhook } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -12,19 +12,32 @@ import { useConfirm } from '@/components/ui/dialog'
 import { StateMark } from '@/components/ui/flow-line'
 import { SettingsPanel } from '@/components/workspace/settings-panel'
 import { createWebhook, deleteWebhook, listWebhooks, testWebhook, updateWebhook } from '@/lib/actions/webhooks'
-import { formatWhen } from '@/components/pipelines/run-history'
+import { usePrefs } from '@/components/i18n/i18n-provider'
 
 type Hook = Awaited<ReturnType<typeof listWebhooks>>[number]
 const EVENTS = [
-  ['run.succeeded', 'Run succeeded (incl. partial)'],
-  ['run.failed', 'Run failed'],
-  ['dataset.updated', 'Dataset updated'],
+  ['run.succeeded', 'runSucceeded'],
+  ['run.failed', 'runFailed'],
+  ['dataset.updated', 'datasetUpdated'],
 ] as const
+
+const DELIVERY_STATUSES = ['pending', 'delivered', 'failed'] as const
+type DeliveryStatus = (typeof DELIVERY_STATUSES)[number]
+const isDeliveryStatus = (s: string): s is DeliveryStatus => (DELIVERY_STATUSES as readonly string[]).includes(s)
+
+/** Short date and time in WIB, in the interface language. */
+const WHEN: Intl.DateTimeFormatOptions = { dateStyle: undefined, timeStyle: undefined, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' }
+
+/** Fills {slots} in a translated sentence with elements. */
+function rich(text: string, slots: Record<string, React.ReactNode>) {
+  return text.split(/\{(\w+)\}/).map((part, i) => (i % 2 ? <Fragment key={i}>{slots[part] ?? `{${part}}`}</Fragment> : part))
+}
 
 const tagClass = 'rounded-sm border border-border bg-muted px-1.5 py-px font-mono text-[11px] text-muted-foreground'
 
 /** Outbound webhooks (API-5): signed POSTs to other systems when runs finish and datasets change. */
 export function Webhooks() {
+  const { t, formatDateTime } = usePrefs()
   const id = useId()
   const [hooks, setHooks] = useState<Hook[] | null>(null)
   const [error, setError] = useState('')
@@ -41,9 +54,9 @@ export function Webhooks() {
     try {
       setHooks(await listWebhooks())
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load webhooks')
+      setError(err instanceof Error ? err.message : t('ws.webhooks.loadFailed'))
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     void load()
@@ -58,7 +71,7 @@ export function Webhooks() {
       if (msg) setNotice(msg)
       await load()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed')
+      setError(err instanceof Error ? err.message : t('ws.common.failed'))
     } finally {
       setBusy(null)
     }
@@ -66,36 +79,34 @@ export function Webhooks() {
 
   return (
     <SettingsPanel
-      title="Webhooks"
-      description={
-        <>
-          Nexus POSTs a signed JSON event to your HTTPS endpoint when a run finishes or a dataset changes. Verify the <span className="font-mono text-xs">Nexus-Signature</span> header with the secret (HMAC-SHA256 of{' '}
-          <span className="font-mono text-xs">timestamp.body</span>). Failed deliveries are retried for about 2.5 hours.
-        </>
-      }
+      title={t('ws.webhooks.title')}
+      description={rich(t('ws.webhooks.description'), {
+        header: <span className="font-mono text-xs">Nexus-Signature</span>,
+        payload: <span className="font-mono text-xs">timestamp.body</span>,
+      })}
     >
       <div className="space-y-3">
         {!adding && (
           <Button onClick={() => setAdding(true)}>
-            <Plus aria-hidden /> Add endpoint
+            <Plus aria-hidden /> {t('ws.webhooks.add')}
           </Button>
         )}
 
         {secret && (
           <div className="space-y-2 rounded-md border border-warning/50 bg-warning-soft p-3 text-sm" role="status">
-            <h3 className="font-semibold">Signing secret: copy it now. It won&apos;t be shown again.</h3>
+            <h3 className="font-semibold">{t('ws.webhooks.secretOnce')}</h3>
             <div className="flex gap-2">
-              <Input readOnly value={secret} className="bg-card font-mono text-xs" onFocus={(e) => e.target.select()} aria-label="Webhook signing secret" />
+              <Input readOnly value={secret} className="bg-card font-mono text-xs" onFocus={(e) => e.target.select()} aria-label={t('ws.webhooks.secretLabel')} />
               <Button
                 size="icon"
                 variant="outline"
-                aria-label={copied ? 'Signing secret copied' : 'Copy signing secret'}
+                aria-label={copied ? t('ws.webhooks.secretCopied') : t('ws.webhooks.copySecret')}
                 onClick={() => void navigator.clipboard.writeText(secret).then(() => setCopied(true))}
               >
                 {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
               </Button>
               <Button variant="ghost" onClick={() => setSecret(null)}>
-                Done
+                {t('ws.common.done')}
               </Button>
             </div>
           </div>
@@ -116,13 +127,13 @@ export function Webhooks() {
               })
             }}
           >
-            <h3 className="text-sm font-semibold">New endpoint</h3>
+            <h3 className="text-sm font-semibold">{t('ws.webhooks.newEndpoint')}</h3>
             <div className="space-y-1.5">
-              <Label htmlFor={`${id}-url`}>Endpoint URL (https)</Label>
+              <Label htmlFor={`${id}-url`}>{t('ws.webhooks.url')}</Label>
               <Input id={`${id}-url`} value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://kms.kmplus.co.id/hooks/nexus" className="font-mono" />
             </div>
             <fieldset className="flex flex-wrap gap-3 text-sm">
-              <legend className="mb-1.5 text-sm font-medium">Events</legend>
+              <legend className="mb-1.5 text-sm font-medium">{t('ws.webhooks.events')}</legend>
               {EVENTS.map(([e, label]) => (
                 <label key={e} className="flex items-center gap-1.5">
                   <input
@@ -131,16 +142,16 @@ export function Webhooks() {
                     checked={events.includes(e)}
                     onChange={(x) => setEvents(x.target.checked ? [...events, e] : events.filter((y) => y !== e))}
                   />
-                  {label}
+                  {t(`ws.webhooks.eventLabels.${label}`)}
                 </label>
               ))}
             </fieldset>
             <div className="flex justify-end gap-2">
               <Button type="button" size="sm" variant="ghost" onClick={() => setAdding(false)}>
-                Cancel
+                {t('common.cancel')}
               </Button>
               <Button type="submit" size="sm" disabled={busy === 'new' || !url || !events.length}>
-                {busy === 'new' && <Loader2 className="animate-spin" aria-hidden />} Add endpoint
+                {busy === 'new' && <Loader2 className="animate-spin" aria-hidden />} {t('ws.webhooks.add')}
               </Button>
             </div>
           </form>
@@ -151,12 +162,12 @@ export function Webhooks() {
 
         {!hooks ? (
           <p className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" aria-hidden /> Loading…
+            <Loader2 className="size-4 animate-spin" aria-hidden /> {t('common.loading')}
           </p>
         ) : hooks.length === 0 ? (
           !adding && (
-            <EmptyState compact icon={<Webhook />} title="No webhooks yet">
-              Add an endpoint to tell another system when runs finish or datasets change.
+            <EmptyState compact icon={<Webhook />} title={t('ws.webhooks.emptyTitle')}>
+              {t('ws.webhooks.emptyBody')}
             </EmptyState>
           )
         ) : (
@@ -173,7 +184,7 @@ export function Webhooks() {
                     </span>
                   ))}
                   <StateMark state={h.enabled ? 'live' : 'paused'} className="text-xs">
-                    {h.enabled ? 'Active' : 'Paused'}
+                    {h.enabled ? t('ws.common.active') : t('ws.common.paused')}
                   </StateMark>
                   <Button
                     size="sm"
@@ -182,49 +193,49 @@ export function Webhooks() {
                     onClick={() =>
                       void run(h.id, async () => {
                         const r = await testWebhook(h.id)
-                        return r.delivered ? `Test delivered (HTTP ${r.responseStatus}).` : `Test failed: ${r.error ?? 'no response'}. It will be retried.`
+                        return r.delivered ? t('ws.webhooks.testDelivered', { status: String(r.responseStatus) }) : t('ws.webhooks.testFailed', { error: r.error ?? t('ws.webhooks.noResponse') })
                       })
                     }
                   >
-                    <Send aria-hidden /> Send test
+                    <Send aria-hidden /> {t('ws.webhooks.sendTest')}
                   </Button>
                   <Button
                     size="sm"
                     variant="ghost"
                     disabled={busy === h.id}
-                    onClick={() => void run(h.id, async () => (await updateWebhook({ id: h.id, enabled: !h.enabled }), h.enabled ? 'Paused.' : 'Resumed.'))}
+                    onClick={() => void run(h.id, async () => (await updateWebhook({ id: h.id, enabled: !h.enabled }), h.enabled ? t('ws.webhooks.pausedDone') : t('ws.webhooks.resumedDone')))}
                   >
-                    {h.enabled ? 'Pause' : 'Resume'}
+                    {h.enabled ? t('ws.webhooks.pause') : t('ws.webhooks.resume')}
                   </Button>
                   <Button
                     size="sm"
                     variant="destructive"
                     disabled={busy === h.id}
-                    aria-label={`Delete webhook ${h.url}`}
+                    aria-label={t('ws.webhooks.deleteLabel', { url: h.url })}
                     onClick={async () => {
                       const ok = await confirm({
-                        title: 'Delete this webhook?',
-                        description: `Nexus stops sending events to ${h.url}. Its delivery history is removed. This cannot be undone.`,
-                        confirmLabel: 'Delete webhook',
+                        title: t('ws.webhooks.deleteTitle'),
+                        description: t('ws.webhooks.deleteBody', { url: h.url }),
+                        confirmLabel: t('ws.webhooks.deleteConfirm'),
                         tone: 'danger',
                       })
-                      if (ok) void run(h.id, async () => (await deleteWebhook(h.id), 'Webhook deleted.'))
+                      if (ok) void run(h.id, async () => (await deleteWebhook(h.id), t('ws.webhooks.deleted')))
                     }}
                   >
-                    Delete
+                    {t('common.delete')}
                   </Button>
                 </div>
                 {h.deliveries.length > 0 && (
-                  <ul className="mt-2 space-y-1 text-xs text-muted-foreground" aria-label="Recent deliveries">
+                  <ul className="mt-2 space-y-1 text-xs text-muted-foreground" aria-label={t('ws.webhooks.deliveries')}>
                     {h.deliveries.slice(0, 5).map((d) => (
                       <li key={d.id} className="flex flex-wrap items-center gap-x-1.5">
-                        <span className="font-mono">{formatWhen(d.createdAt)}</span> · <span className="font-mono">{d.event}</span> ·
+                        <span className="font-mono">{`${formatDateTime(d.createdAt, WHEN)} WIB`}</span> · <span className="font-mono">{d.event}</span> ·
                         <StateMark state={d.status === 'delivered' ? 'live' : d.status === 'failed' ? 'tripped' : 'paused'} className="text-xs">
-                          {d.status}
+                          {isDeliveryStatus(d.status) ? t(`ws.webhooks.status.${d.status}`) : d.status}
                           {d.responseStatus ? ` (HTTP ${d.responseStatus})` : ''}
                         </StateMark>
                         {d.status !== 'delivered' && d.error ? <span>· {d.error}</span> : null}
-                        {d.attempts > 1 ? <span>· {d.attempts} attempts</span> : null}
+                        {d.attempts > 1 ? <span>· {t('ws.webhooks.attempts', { count: d.attempts })}</span> : null}
                       </li>
                     ))}
                   </ul>

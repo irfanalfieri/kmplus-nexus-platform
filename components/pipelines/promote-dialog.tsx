@@ -10,15 +10,22 @@ import { Notice } from '@/components/ui/notice'
 import { previewPromotion, promotePipeline } from '@/lib/actions/environments'
 import { ENVIRONMENT_INFO } from '@/lib/pipelines/promote'
 import { EnvironmentBadge } from '@/components/workspace/environment-badge'
+import { useT } from '@/components/i18n/i18n-provider'
+import type { MessageKey } from '@/lib/i18n/translate'
 
 type Preview = Awaited<ReturnType<typeof previewPromotion>>
 
-const STATUS_TEXT: Record<string, string> = {
-  mapped: 'found',
-  missing: 'missing',
-  create: 'will be created',
-  update: 'will be updated',
-  same: 'same',
+const STATUS_TEXT: Record<string, MessageKey> = {
+  mapped: 'editor.promote.status.mapped',
+  missing: 'editor.promote.status.missing',
+  create: 'editor.promote.status.create',
+  update: 'editor.promote.status.update',
+  same: 'editor.promote.status.same',
+}
+const KIND_TEXT: Record<string, MessageKey> = {
+  'data source': 'editor.promote.kind.dataSource',
+  'business rule': 'editor.promote.kind.businessRule',
+  pipeline: 'editor.promote.kind.pipeline',
 }
 
 /** Promote a pipeline's published version to the next environment (GV-7). */
@@ -28,22 +35,24 @@ export default function PromoteDialog({ pipelineId, onClose, onDone }: { pipelin
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const noteId = useId()
+  const t = useT()
+  const envLabel = (env: keyof typeof ENVIRONMENT_INFO) => t(`editor.promote.env.${env}`)
 
   useEffect(() => {
     previewPromotion(pipelineId)
       .then(setPreview)
-      .catch((err) => setError(err instanceof Error ? err.message : 'Could not prepare the promotion'))
-  }, [pipelineId])
+      .catch((err) => setError(err instanceof Error ? err.message : t('editor.promote.prepareFailed')))
+  }, [pipelineId, t])
 
   const promote = async () => {
     setBusy(true)
     setError('')
     try {
       const res = await promotePipeline({ pipelineId, note })
-      const where = `${ENVIRONMENT_INFO[res.target.environment].label} (${res.target.name})`
-      onDone(res.published ? `Promoted to ${where} as v${res.version}; it runs there now.` : `Promoted to ${where} as v${res.version}; it waits for approval there.`)
+      const where = `${envLabel(res.target.environment)} (${res.target.name})`
+      onDone(res.published ? t('editor.promote.donePublished', { where, version: res.version }) : t('editor.promote.doneApproval', { where, version: res.version }))
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Promotion failed')
+      setError(err instanceof Error ? err.message : t('editor.promote.failed'))
       setBusy(false)
     }
   }
@@ -52,16 +61,16 @@ export default function PromoteDialog({ pipelineId, onClose, onDone }: { pipelin
     <Modal
       onClose={onClose}
       size="md"
-      title="Promote pipeline"
+      title={t('editor.promote.title')}
       footer={
         <>
           <Button variant="outline" onClick={onClose}>
-            Cancel
+            {t('common.cancel')}
           </Button>
           {preview && (
             <Button onClick={() => void promote()} disabled={busy || preview.blocking.length > 0}>
               {busy && <Loader2 className="animate-spin" aria-hidden />}
-              Promote to {ENVIRONMENT_INFO[preview.target.environment].label}
+              {t('editor.promote.promoteTo', { env: envLabel(preview.target.environment) })}
             </Button>
           )}
         </>
@@ -69,7 +78,7 @@ export default function PromoteDialog({ pipelineId, onClose, onDone }: { pipelin
     >
       {!preview && !error && (
         <div className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
-          <Loader2 className="size-4 animate-spin" aria-hidden /> Checking the next environment…
+          <Loader2 className="size-4 animate-spin" aria-hidden /> {t('editor.promote.checking')}
         </div>
       )}
       {preview && (
@@ -78,29 +87,29 @@ export default function PromoteDialog({ pipelineId, onClose, onDone }: { pipelin
             <span className="font-medium">{preview.pipeline.name}</span>
             <span className="font-mono text-muted-foreground">v{preview.pipeline.version}</span>
             <EnvironmentBadge environment={preview.from.environment} />
-            <ArrowRight className="size-4 text-muted-foreground" aria-label="to" />
+            <ArrowRight className="size-4 text-muted-foreground" aria-label={t('editor.promote.to')} />
             <EnvironmentBadge environment={preview.target.environment} />
             <span className="text-muted-foreground">{preview.target.name}</span>
           </div>
           <p className="text-xs text-muted-foreground">
-            {preview.existing ? `Updates the pipeline there (runs v${preview.existing.publishedVersion || '–'} now).` : 'Creates the pipeline there, with its schedule off until someone turns it on.'} Data sources are matched by name, so it
-            uses the credentials of {ENVIRONMENT_INFO[preview.target.environment].label}.
+            {preview.existing ? t('editor.promote.updates', { version: preview.existing.publishedVersion || '–' }) : t('editor.promote.creates')}{' '}
+            {t('editor.promote.matchedByName', { env: envLabel(preview.target.environment) })}
           </p>
           {preview.items.length > 0 && (
-            <ul className="space-y-1 rounded-md border border-border p-2 text-xs" aria-label="What the promotion maps">
+            <ul className="space-y-1 rounded-md border border-border p-2 text-xs" aria-label={t('editor.promote.maps')}>
               {preview.items.map((i) => (
                 <li key={`${i.kind}:${i.name}`} className="flex items-center gap-2">
                   {i.status === 'missing' ? <AlertTriangle className="size-3.5 shrink-0 text-danger" aria-hidden /> : <CheckCircle2 className="size-3.5 shrink-0 text-live" aria-hidden />}
-                  <span className="text-muted-foreground">{i.kind}</span>
+                  <span className="text-muted-foreground">{KIND_TEXT[i.kind] ? t(KIND_TEXT[i.kind]) : i.kind}</span>
                   <span className="font-mono font-medium">{i.name}</span>
-                  {i.detail && <span className="text-muted-foreground">({i.detail})</span>}
-                  <span className={i.status === 'missing' ? 'ml-auto font-medium text-danger-text' : 'ml-auto text-muted-foreground'}>{STATUS_TEXT[i.status]}</span>
+                  {i.detail && <span className="text-muted-foreground">({i.detail === 'runs after' ? t('editor.promote.runsAfter') : i.detail})</span>}
+                  <span className={i.status === 'missing' ? 'ml-auto font-medium text-danger-text' : 'ml-auto text-muted-foreground'}>{STATUS_TEXT[i.status] ? t(STATUS_TEXT[i.status]) : i.status}</span>
                 </li>
               ))}
             </ul>
           )}
           {preview.blocking.length > 0 && (
-            <Notice tone="danger" title="Fix these first:" className="text-xs">
+            <Notice tone="danger" title={t('editor.promote.fixFirst')} className="text-xs">
               <ul className="list-inside list-disc space-y-0.5">
                 {preview.blocking.map((b) => (
                   <li key={b}>{b}</li>
@@ -109,7 +118,7 @@ export default function PromoteDialog({ pipelineId, onClose, onDone }: { pipelin
             </Notice>
           )}
           {preview.approvalReasons.length > 0 && (
-            <Notice tone="held" title={`Needs approval in ${preview.target.name}:`} className="text-xs">
+            <Notice tone="held" title={t('editor.promote.needsApproval', { name: preview.target.name })} className="text-xs">
               <ul className="list-inside list-disc">
                 {preview.approvalReasons.map((r) => (
                   <li key={r}>{r}</li>
@@ -119,7 +128,7 @@ export default function PromoteDialog({ pipelineId, onClose, onDone }: { pipelin
           )}
           <div className="grid gap-1.5">
             <Label htmlFor={noteId} className="text-xs text-muted-foreground">
-              Note for the approver (optional)
+              {t('editor.promote.note')}
             </Label>
             <Input id={noteId} value={note} onChange={(e) => setNote(e.target.value)} />
           </div>

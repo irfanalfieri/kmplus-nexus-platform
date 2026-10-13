@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { startSalesforceWebAuth } from '@/lib/actions/salesforce-oauth'
+import { usePrefs } from '@/components/i18n/i18n-provider'
 
 export const SALESFORCE_DEFAULTS: Record<string, string> = {
   authMethod: 'web_oauth',
@@ -45,6 +46,7 @@ export default function SalesforceConnectorForm({ values, onChange, sourceId }: 
   const [connecting, setConnecting] = useState(false)
   const [error, setError] = useState('')
   const uid = useId()
+  const { t, formatDateTime } = usePrefs()
   const fid = (key: string) => `${uid}-${key}`
 
   const applyCredentials = useCallback(
@@ -63,7 +65,7 @@ export default function SalesforceConnectorForm({ values, onChange, sourceId }: 
 
       setConnecting(false)
       if (!event.data.ok) {
-        setError(event.data.message ?? 'Salesforce authorization failed.')
+        setError(event.data.message ?? t('connect.salesforce.authFailed'))
         return
       }
 
@@ -75,14 +77,14 @@ export default function SalesforceConnectorForm({ values, onChange, sourceId }: 
 
     window.addEventListener('message', handler)
     return () => window.removeEventListener('message', handler)
-  }, [applyCredentials])
+  }, [applyCredentials, t])
 
   const connectWithSalesforce = async () => {
     setError('')
     const clientId = val(values, 'clientId').trim()
     const clientSecret = val(values, 'clientSecret').trim()
     if (!clientId || !clientSecret) {
-      setError('Enter Consumer Key and Consumer Secret from your Salesforce Connected App first.')
+      setError(t('connect.salesforce.needKeys'))
       return
     }
 
@@ -114,7 +116,7 @@ export default function SalesforceConnectorForm({ values, onChange, sourceId }: 
       }, 500)
     } catch (err) {
       setConnecting(false)
-      setError(err instanceof Error ? err.message : 'Failed to start Salesforce login.')
+      setError(err instanceof Error ? err.message : t('connect.salesforce.startFailed'))
     }
   }
 
@@ -126,7 +128,7 @@ export default function SalesforceConnectorForm({ values, onChange, sourceId }: 
   return (
     <div className="space-y-4">
       <div className="space-y-1.5">
-        <Label htmlFor={fid('authMethod')} className="text-xs text-muted-foreground">Authentication</Label>
+        <Label htmlFor={fid('authMethod')} className="text-xs text-muted-foreground">{t('connect.salesforce.authentication')}</Label>
         <Select
           value={authMethod}
           onValueChange={(v) => v && onChange('authMethod', v)}
@@ -135,33 +137,33 @@ export default function SalesforceConnectorForm({ values, onChange, sourceId }: 
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="web_oauth">Web login (OAuth 2.0 — recommended)</SelectItem>
-            <SelectItem value="password">Username & password (legacy)</SelectItem>
+            <SelectItem value="web_oauth">{t('connect.salesforce.webOauth')}</SelectItem>
+            <SelectItem value="password">{t('connect.salesforce.passwordLegacy')}</SelectItem>
           </SelectContent>
         </Select>
       </div>
 
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1.5">
-          <Label htmlFor={fid('loginHost')} className="text-xs text-muted-foreground">Environment</Label>
+          <Label htmlFor={fid('loginHost')} className="text-xs text-muted-foreground">{t('connect.salesforce.environment')}</Label>
           <Select value={val(values, 'loginHost')} onValueChange={(v) => v && onChange('loginHost', v)}>
             <SelectTrigger id={fid('loginHost')} className="w-full">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="login">Production (login.salesforce.com)</SelectItem>
-              <SelectItem value="test">Sandbox (test.salesforce.com)</SelectItem>
+              <SelectItem value="login">{t('connect.salesforce.production')}</SelectItem>
+              <SelectItem value="test">{t('connect.salesforce.sandbox')}</SelectItem>
             </SelectContent>
           </Select>
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor={fid('callbackUrl')} className="text-xs text-muted-foreground">Callback URL (Connected App)</Label>
+          <Label htmlFor={fid('callbackUrl')} className="text-xs text-muted-foreground">{t('connect.salesforce.callbackUrl')}</Label>
           <Input id={fid('callbackUrl')} readOnly className="h-9 font-mono text-[11px]" value={redirectUri} />
         </div>
       </div>
 
       <div className="space-y-1.5">
-        <Label htmlFor={fid('clientId')} className="text-xs text-muted-foreground">Consumer Key (Client ID)</Label>
+        <Label htmlFor={fid('clientId')} className="text-xs text-muted-foreground">{t('connect.salesforce.consumerKey')}</Label>
         <Input id={fid('clientId')}
           placeholder="3MVG9…"
           value={val(values, 'clientId')}
@@ -170,7 +172,7 @@ export default function SalesforceConnectorForm({ values, onChange, sourceId }: 
       </div>
 
       <div className="space-y-1.5">
-        <Label htmlFor={fid('clientSecret')} className="text-xs text-muted-foreground">Consumer Secret (Client Secret)</Label>
+        <Label htmlFor={fid('clientSecret')} className="text-xs text-muted-foreground">{t('connect.salesforce.consumerSecret')}</Label>
         <Input id={fid('clientSecret')}
           type="password"
           value={val(values, 'clientSecret')}
@@ -184,20 +186,20 @@ export default function SalesforceConnectorForm({ values, onChange, sourceId }: 
             <div className="flex items-start gap-2 text-sm" role="status">
               <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-live" aria-hidden />
               <div>
-                <p className="font-medium text-live-text">Connected via Salesforce web login</p>
+                <p className="font-medium text-live-text">{t('connect.salesforce.connected')}</p>
                 <p className="mt-1 break-all font-mono text-xs text-muted-foreground">
                   {val(values, 'instanceUrl')}
                 </p>
                 {val(values, 'connectedAt') && (
                   <p className="mt-1 font-mono text-xs text-muted-foreground">
-                    Authorized {new Date(val(values, 'connectedAt')).toLocaleString()}
+                    {t('connect.salesforce.authorized', { time: formatDateTime(val(values, 'connectedAt')) })}
                   </p>
                 )}
               </div>
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">
-              Sign in with your Salesforce org in the browser. Tokens are stored securely with this data source.
+              {t('connect.salesforce.signInHint')}
             </p>
           )}
 
@@ -210,19 +212,19 @@ export default function SalesforceConnectorForm({ values, onChange, sourceId }: 
             {connecting ? (
               <>
                 <Loader2 className="animate-spin" aria-hidden />
-                Waiting for Salesforce…
+                {t('connect.salesforce.waiting')}
               </>
             ) : (
               <>
                 <ExternalLink aria-hidden />
-                {connected ? 'Reconnect with Salesforce' : 'Connect with Salesforce'}
+                {connected ? t('connect.salesforce.reconnect') : t('connect.salesforce.connect')}
               </>
             )}
           </Button>
 
           <p className="text-[11px] text-muted-foreground">
-            In Salesforce Setup → App Manager → your Connected App, enable OAuth and add the callback URL above.
-            Use scopes: <code className="rounded-sm bg-muted px-1 font-mono">api</code>,{' '}
+            {t('connect.salesforce.setupHint')}{' '}
+            {t('connect.salesforce.scopes')} <code className="rounded-sm bg-muted px-1 font-mono">api</code>,{' '}
             <code className="rounded-sm bg-muted px-1 font-mono">refresh_token</code>,{' '}
             <code className="rounded-sm bg-muted px-1 font-mono">offline_access</code>.
           </p>
@@ -230,7 +232,7 @@ export default function SalesforceConnectorForm({ values, onChange, sourceId }: 
       ) : (
         <>
           <div className="space-y-1.5">
-            <Label htmlFor={fid('instanceUrl')} className="text-xs text-muted-foreground">Instance URL (optional)</Label>
+            <Label htmlFor={fid('instanceUrl')} className="text-xs text-muted-foreground">{t('connect.salesforce.instanceUrl')}</Label>
             <Input id={fid('instanceUrl')}
               placeholder="https://yourorg.my.salesforce.com"
               value={val(values, 'instanceUrl')}
@@ -238,11 +240,11 @@ export default function SalesforceConnectorForm({ values, onChange, sourceId }: 
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor={fid('username')} className="text-xs text-muted-foreground">Username</Label>
+            <Label htmlFor={fid('username')} className="text-xs text-muted-foreground">{t('connect.salesforce.username')}</Label>
             <Input id={fid('username')} value={val(values, 'username')} onChange={(e) => onChange('username', e.target.value)} />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor={fid('password')} className="text-xs text-muted-foreground">Password + Security Token</Label>
+            <Label htmlFor={fid('password')} className="text-xs text-muted-foreground">{t('connect.salesforce.passwordToken')}</Label>
             <Input id={fid('password')}
               type="password"
               value={val(values, 'password')}

@@ -9,9 +9,11 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Notice } from '@/components/ui/notice'
 import { AuthShell } from '@/components/auth-form'
+import { useT } from '@/components/i18n/i18n-provider'
 
 /** Second sign-in step: a code from the authenticator app, or a backup code. */
 export default function VerifyTwoFactor({ next }: { next: string }) {
+  const t = useT()
   const [useBackup, setUseBackup] = useState(false)
   const [code, setCode] = useState('')
   const [trustDevice, setTrustDevice] = useState(false)
@@ -30,8 +32,8 @@ export default function VerifyTwoFactor({ next }: { next: string }) {
     if (error) {
       setError(
         error.code === 'INVALID_TWO_FACTOR_COOKIE'
-          ? 'This sign-in expired (10 minutes). Sign in again.'
-          : (error.message ?? 'That code is not valid.')
+          ? t('auth.verify2fa.expired')
+          : (error.message ?? t('auth.verify2fa.invalidCode'))
       )
       return
     }
@@ -41,14 +43,14 @@ export default function VerifyTwoFactor({ next }: { next: string }) {
   return (
     <AuthShell className="space-y-5">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight">Two-factor authentication</h1>
+        <h1 className="text-xl font-semibold tracking-tight">{t('auth.verify2fa.title')}</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          {useBackup ? 'Enter one of your backup codes. Each code works once.' : 'Enter the 6-digit code from your authenticator app.'}
+          {useBackup ? t('auth.verify2fa.backupIntro') : t('auth.verify2fa.totpIntro')}
         </p>
       </div>
       <form onSubmit={submit} className="space-y-4">
         <div className="space-y-2">
-          <Label htmlFor="code">{useBackup ? 'Backup code' : 'Code'}</Label>
+          <Label htmlFor="code">{useBackup ? t('auth.verify2fa.backupCode') : t('auth.verify2fa.code')}</Label>
           <Input
             id="code"
             key={useBackup ? 'backup' : 'totp'}
@@ -65,11 +67,11 @@ export default function VerifyTwoFactor({ next }: { next: string }) {
         </div>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={trustDevice} onChange={(e) => setTrustDevice(e.target.checked)} className="size-4 accent-primary" />
-          Trust this device for 30 days
+          {t('auth.verify2fa.trustDevice')}
         </label>
         {error && <Notice tone="danger">{error}</Notice>}
         <Button type="submit" size="lg" className="w-full" disabled={busy || !code.trim()}>
-          {busy && <Loader2 className="animate-spin" aria-hidden />}Verify
+          {busy && <Loader2 className="animate-spin" aria-hidden />}{t('auth.verify2fa.verify')}
         </Button>
       </form>
       <div className="flex items-center justify-between text-sm">
@@ -82,10 +84,10 @@ export default function VerifyTwoFactor({ next }: { next: string }) {
             setError('')
           }}
         >
-          {useBackup ? 'Use authenticator app' : 'Use a backup code'}
+          {useBackup ? t('auth.verify2fa.useApp') : t('auth.verify2fa.useBackup')}
         </button>
         <Link href={`/sign-in?next=${encodeURIComponent(next)}`} className="rounded-sm text-info-text underline-offset-4 outline-none hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
-          Start over
+          {t('auth.verify2fa.startOver')}
         </Link>
       </div>
     </AuthShell>

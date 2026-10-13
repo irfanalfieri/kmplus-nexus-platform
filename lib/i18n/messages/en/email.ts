@@ -1,0 +1,48 @@
+/** English email copy (rendered by lib/email.ts); id/email.ts mirrors it. */
+export const email = {
+  chrome: {
+    product: 'Nexus',
+    orPaste: 'Button not working? Copy this link into your browser:',
+    automated: 'This message was sent automatically by KMPlus Nexus. Replies to this address are not read.',
+    reason: 'You receive this email because of your account at {url}.',
+    openApp: 'Open KMPlus Nexus',
+  },
+  verify: {
+    subject: 'Confirm your email for KMPlus Nexus',
+    preheader: 'One click to finish creating your KMPlus Nexus account.',
+    heading: 'Confirm your email address',
+    greeting: 'Hi {name},',
+    body: 'Confirm that this is your email address to finish creating your KMPlus Nexus account.',
+    next: 'Next, you will set up two-factor sign-in with an authenticator app such as Google Authenticator, Microsoft Authenticator, 1Password or Authy.',
+    expires: 'The link works for 24 hours.',
+    ignore: 'If you did not create an account, you can ignore this email.',
+    action: 'Confirm email',
+  },
+  invite: {
+    subject: '{inviter} invited you to {workspace} on KMPlus Nexus',
+    preheader: 'Join {workspace} on KMPlus Nexus.',
+    heading: 'You are invited to {workspace}',
+    body: '{inviter} invited you to work with them in KMPlus Nexus, the platform that connects, checks and delivers your HR data.',
+    howTo: 'Sign in or create an account with {email} to accept. The link works once and expires in 7 days.',
+    workspace: 'Workspace',
+    role: 'Your role',
+    invitedBy: 'Invited by',
+    action: 'Accept invitation',
+  },
+  reset2fa: {
+    subject: 'Your KMPlus Nexus two-factor sign-in was reset',
+    preheader: 'Set up your authenticator app again at your next sign-in.',
+    heading: 'Two-factor sign-in was reset',
+    body: '{admin}, an admin of {workspace}, reset two-factor sign-in on your account and signed you out on every device.',
+    next: 'Sign in with your password and set up an authenticator app again.',
+    warn: 'If you did not ask for this, contact your admin right away.',
+    action: 'Sign in',
+  },
+  alert: {
+    error: 'Needs attention',
+    warning: 'Warning',
+    info: 'Update',
+    openQuality: 'Review held rows',
+    openPipelines: 'Open pipelines',
+  },
+} as const
