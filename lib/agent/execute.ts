@@ -3,6 +3,8 @@ import type { ConnectorCredentials, ConnectorSlug } from '@/lib/connectors/types
 import { NonRetryableError, listActiveKeys, liveQuery, markRowsDeleted, readSourceChunk, readSourceRows, writeToDataSource, type ReadCache, type StoredDataSource } from '@/lib/pipelines/io'
 import type { OutputColumn } from '@/lib/pipelines/columns'
 import { chatCompletion, type LlmConfig } from '@/lib/ai/llm'
+import { withPrivateNetworkAccess } from '@/lib/net/safe-url'
+import { mergeAgentRestRequest } from '@/lib/connectors/rest/agent-request'
 import { payloadSchemas, wireRow, type AgentOp, type AgentResult, type AgentTask } from './protocol'
 
 /**
@@ -34,9 +36,18 @@ function cacheFor(key: string): ReadCache {
   return hit.cache
 }
 
-function sourceFor(c: LocalConnection): StoredDataSource {
+/**
+ * The connection's credentials for one task. For an intranet API (REST) the
+ * request designed in Nexus is combined with the local base URL and sign-in;
+ * the local fields always win and requests stay under the base URL.
+ */
+function credentialsFor(c: LocalConnection, request: Record<string, string> | undefined) {
+  return c.type === 'rest' ? mergeAgentRestRequest(c.credentials, request) : c.credentials
+}
+
+function sourceFor(c: LocalConnection, request?: Record<string, string>): StoredDataSource {
   // Plain credentials (no envelope): decryptCredentials passes them through.
-  return { id: `agent:${c.name}`, name: c.name, sourceType: c.type, config: { role: c.writable ? 'destination' : 'source' }, credentials: c.credentials }
+  return { id: `agent:${c.name}`, name: c.name, sourceType: c.type, config: { role: c.writable ? 'destination' : 'source' }, credentials: credentialsFor(c, request) }
 }
 
 /** Large reads are returned in smaller pieces (the worker continues from where a piece ends). */
@@ -44,7 +55,8 @@ const MAX_RESULT_BYTES = 8_000_000
 
 export async function executeTask(task: AgentTask, env: AgentEnvironment): Promise<AgentResult> {
   try {
-    return { ok: true, result: await run(task.op, task.payload, env) }
+    // The agent runs inside the customer's network: its connections may use private and intranet addresses.
+    return { ok: true, result: await withPrivateNetworkAccess(() => run(task.op, task.payload, env)) }
   } catch (err) {
     const retryable = !(err instanceof NonRetryableError) && (err as { retryable?: boolean })?.retryable !== false
     return { ok: false, error: err instanceof Error ? err.message : String(err), retryable }
@@ -62,23 +74,23 @@ async function run(op: AgentOp, raw: unknown, env: AgentEnvironment): Promise<un
     case 'test': {
       const p = payloadSchemas.test.parse(raw)
       const c = connection(env, p.connection)
-      return testConnectorConnection(c.type as ConnectorSlug, c.credentials)
+      return testConnectorConnection(c.type as ConnectorSlug, credentialsFor(c, p.request))
     }
     case 'scan': {
       const p = payloadSchemas.scan.parse(raw)
       const c = connection(env, p.connection)
-      return scanConnectorSchema(c.type as ConnectorSlug, c.credentials)
+      return scanConnectorSchema(c.type as ConnectorSlug, credentialsFor(c, p.request))
     }
     case 'sample': {
       const p = payloadSchemas.sample.parse(raw)
       const c = connection(env, p.connection)
-      const res = await sampleConnectorTable(c.type as ConnectorSlug, c.credentials, p.table, p.limit)
+      const res = await sampleConnectorTable(c.type as ConnectorSlug, credentialsFor(c, p.request), p.table, p.limit)
       return { ...res, rows: (res.rows ?? []).map((r: Record<string, unknown>) => wireRow(r)) }
     }
     case 'readChunk': {
       const p = payloadSchemas.readChunk.parse(raw)
       const c = connection(env, p.connection)
-      const read = await readSourceChunk(sourceFor(c), p.table, { offset: p.offset, limit: p.limit, maxRows: p.maxRows, watermark: p.watermark, cache: cacheFor(p.cacheKey) })
+      const read = await readSourceChunk(sourceFor(c, p.request), p.table, { offset: p.offset, limit: p.limit, maxRows: p.maxRows, watermark: p.watermark, cache: cacheFor(p.cacheKey) })
       let rows = read.rows.map(wireRow)
       let exhausted = read.exhausted
       // Keep the answer well under request-size limits: send a prefix and let the worker ask for the rest.
@@ -91,7 +103,7 @@ async function run(op: AgentOp, raw: unknown, env: AgentEnvironment): Promise<un
     case 'readRows': {
       const p = payloadSchemas.readRows.parse(raw)
       const c = connection(env, p.connection)
-      return (await readSourceRows(sourceFor(c), p.table, p.maxRows, { watermark: p.watermark })).map(wireRow)
+      return (await readSourceRows(sourceFor(c, p.request), p.table, p.maxRows, { watermark: p.watermark })).map(wireRow)
     }
     case 'write': {
       const p = payloadSchemas.write.parse(raw)
@@ -103,7 +115,7 @@ async function run(op: AgentOp, raw: unknown, env: AgentEnvironment): Promise<un
     case 'liveQuery': {
       const p = payloadSchemas.liveQuery.parse(raw)
       const c = connection(env, p.connection)
-      const res = await liveQuery(sourceFor(c), p.table, { limit: p.limit, timeoutMs: p.timeoutMs, filters: p.filters })
+      const res = await liveQuery(sourceFor(c, p.request), p.table, { limit: p.limit, timeoutMs: p.timeoutMs, filters: p.filters })
       return { ...res, rows: res.rows.map(wireRow) }
     }
     case 'activeKeys': {

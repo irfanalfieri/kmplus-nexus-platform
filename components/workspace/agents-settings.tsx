@@ -189,9 +189,10 @@ export function AgentsSettings() {
                       <li key={c.name} className="flex flex-wrap items-center gap-2 p-2 text-xs">
                         <span className="font-mono font-medium">{c.name}</span>
                         <span className="text-muted-foreground">
-                          {c.type}
+                          {c.type === 'rest' ? t('ws.agents.intranetApi') : c.type}
                           {` · ${c.writable ? t('ws.agents.writable') : t('ws.agents.readOnly')}`}
                         </span>
+                        {c.endpoint && <span className="max-w-full truncate font-mono text-muted-foreground">{c.endpoint}</span>}
                         {c.dataSources.length > 0 && <span className="text-muted-foreground">{t('ws.agents.usedBy', { names: c.dataSources.map((d) => d.name).join(', ') })}</span>}
                         {!a.revokedAt && (
                           <span className="ml-auto flex gap-1">

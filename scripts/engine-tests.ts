@@ -36,7 +36,11 @@ import { alertEmail, inviteEmail } from '@/lib/email-templates'
 import { BUILTIN_MAPPING_TEMPLATES, PIPELINE_TEMPLATES, applyMappingTemplate, buildPipelineTemplate, mapToEntity } from '@/lib/pipelines/templates'
 import { buildLineage } from '@/lib/catalog/lineage'
 import { signPayload } from '@/lib/webhooks/deliver'
-import { isPrivateAddress } from '@/lib/net/safe-url'
+import { assertConnectorUrl, isInternalHostName, isPrivateAddress, withPrivateNetworkAccess } from '@/lib/net/safe-url'
+import { signRequest, verifyRequestSignature } from '@/lib/net/request-signing'
+import { agentRestRequest, isWithinBaseUrl, mergeAgentRestRequest, publicEndpoint, restRequestDesign } from '@/lib/connectors/rest/agent-request'
+import { buildRestRequest, parseRestConfig, previewRestRequest } from '@/lib/connectors/rest-client'
+import { compareVersions } from '@/lib/agent/protocol'
 import { issuerFor, PUBLIC_EMAIL_DOMAINS, DOMAIN_RE } from '@/lib/auth/sso-presets'
 import { rateLimitHeaders } from '@/lib/api/rate-limit'
 import { openApiSpec } from '@/lib/api/openapi'
@@ -943,6 +947,80 @@ async function main() {
     assert.equal(landingSection('admin'), 'overview')
     assert.equal(settingsHref('general'), '/dashboard/settings')
     assert.equal(settingsHref('audit'), '/dashboard/settings/audit')
+  })
+
+  await test('DS-12 intranet APIs: private addresses refused from the cloud, allowed in an agent; agent requests stay under the base URL; signed requests', async () => {
+    const saved = { dev: process.env.NEXUS_ALLOW_PRIVATE_URLS, self: process.env.NEXUS_PRIVATE_NETWORK_ACCESS }
+    delete process.env.NEXUS_ALLOW_PRIVATE_URLS
+    delete process.env.NEXUS_PRIVATE_NETWORK_ACCESS
+    try {
+      for (const url of ['http://10.1.2.3/api', 'http://192.168.0.5:8080/x', 'http://127.0.0.1/', 'http://169.254.169.254/latest', 'http://hr-api/', 'https://hr.corp.local/api', 'http://[::1]/']) {
+        await assert.rejects(() => assertConnectorUrl(url), /private network|Nexus Agent/, url)
+      }
+      assert.equal((await assertConnectorUrl('http://8.8.8.8/api')).hostname, '8.8.8.8', 'public addresses are fine (http allowed for connectors)')
+      await assert.rejects(() => assertConnectorUrl('ftp://8.8.8.8/x'), /http/)
+      await assert.rejects(() => assertConnectorUrl('http://8.8.8.8/x', { httpsOnly: true }), /https/)
+      // Inside the agent (or a self-hosted Nexus) the same addresses are reachable.
+      assert.equal((await withPrivateNetworkAccess(() => assertConnectorUrl('http://10.1.2.3/api', { httpsOnly: true }))).hostname, '10.1.2.3')
+      process.env.NEXUS_PRIVATE_NETWORK_ACCESS = 'true'
+      assert.equal((await assertConnectorUrl('http://hr-api/')).hostname, 'hr-api')
+      delete process.env.NEXUS_PRIVATE_NETWORK_ACCESS
+      // The REST client refuses before sending anything.
+      const preview = await previewRestRequest(parseRestConfig({ baseUrl: 'http://10.0.0.8', resourcePath: '/employees' }))
+      assert.equal(preview.ok, false)
+      assert.match(preview.message, /private network/)
+    } finally {
+      if (saved.dev === undefined) delete process.env.NEXUS_ALLOW_PRIVATE_URLS
+      else process.env.NEXUS_ALLOW_PRIVATE_URLS = saved.dev
+      if (saved.self === undefined) delete process.env.NEXUS_PRIVATE_NETWORK_ACCESS
+      else process.env.NEXUS_PRIVATE_NETWORK_ACCESS = saved.self
+    }
+    assert.ok(isInternalHostName('hr-api') && isInternalHostName('erp.corp') && isInternalHostName('x.internal') && !isInternalHostName('api.kmplus.co.id'))
+    assert.ok(isPrivateAddress('10.0.0.1') && isPrivateAddress('fd00::1') && !isPrivateAddress('203.0.113.9'))
+
+    // Agent: Nexus designs the request; the agent's base URL and sign-in always win.
+    const local = { baseUrl: 'http://hr-api.corp:8080/hr', authMethod: 'bearer', bearerToken: 'local-secret', resourcePath: '/employees' }
+    const design = restRequestDesign({ baseUrl: 'https://evil.example', bearerToken: 'x', resourcePath: '/org', dataPath: 'items', paramsKv: '[]', clientKey: 'k', signingSecret: 's', variablesJson: '{}' })
+    assert.deepEqual(design, { resourcePath: '/org', dataPath: 'items', paramsKv: '[]' }, 'never base URL, sign-in, certificates or variables')
+    assert.equal(agentRestRequest('postgres', { resourcePath: '/x' }), undefined)
+    assert.equal(agentRestRequest('rest', {}), undefined, 'nothing designed: the agent uses its own config')
+    const merged = mergeAgentRestRequest(local, { ...design, baseUrl: 'https://evil.example', authMethod: 'none' })
+    assert.equal(merged.baseUrl, 'http://hr-api.corp:8080/hr')
+    assert.equal(merged.bearerToken, 'local-secret')
+    assert.equal(merged.authMethod, 'bearer')
+    assert.equal(merged.resourcePath, '/org')
+    assert.equal(merged.followRedirects, 'false')
+    assert.equal(merged.restrictToBaseUrl, 'http://hr-api.corp:8080/hr')
+    assert.deepEqual(mergeAgentRestRequest(local, undefined), local, 'older setups keep working')
+    assert.ok(isWithinBaseUrl('http://hr-api.corp:8080/hr/employees?x=1', 'http://hr-api.corp:8080/hr'))
+    assert.ok(isWithinBaseUrl('http://hr-api.corp:8080/hr', 'http://hr-api.corp:8080/hr/'))
+    for (const bad of ['http://hr-api.corp:8080/hrx', 'http://hr-api.corp:8080/other', 'http://hr-api.corp:9090/hr/a', 'http://evil.example/hr/a', 'http://hr-api.corp:8080/hr/../admin', 'http://u:p@hr-api.corp:8080/hr/a']) {
+      assert.ok(!isWithinBaseUrl(new URL(bad).toString(), 'http://hr-api.corp:8080/hr'), bad)
+    }
+    await withPrivateNetworkAccess(async () => {
+      const escaped = await buildRestRequest(parseRestConfig(mergeAgentRestRequest(local, { resourcePath: '/employees/../../admin' }))).then(
+        () => 'sent',
+        (e: Error) => e.message
+      )
+      assert.match(escaped, /leaves the API's base URL/)
+      const built = await buildRestRequest(parseRestConfig(mergeAgentRestRequest(local, { resourcePath: '/employees' })))
+      assert.equal(built.url, 'http://hr-api.corp:8080/hr/employees')
+      assert.equal(built.headers.Authorization, 'Bearer local-secret')
+    })
+    assert.equal(publicEndpoint({ baseUrl: 'https://user:pw@hr.corp/api/v1/?token=abc' }), 'https://hr.corp/api/v1')
+    assert.equal(publicEndpoint({ connectionString: 'postgres://x' }), undefined)
+    assert.ok(compareVersions('1.1.0', '1.2.0') < 0 && compareVersions('1.10.0', '1.2.0') > 0 && compareVersions('1.2', '1.2.0') === 0)
+
+    // Manual publishing: signed requests a gateway can verify.
+    const now = Date.UTC(2026, 9, 13, 3, 0, 0)
+    const headers = signRequest('shared-secret', 'POST', 'https://gw.kmplus.test/hr/employees?page=2', '{"a":1}', now)
+    const ok = { secret: 'shared-secret', method: 'POST', url: 'https://gw.kmplus.test/hr/employees?page=2', body: '{"a":1}', timestamp: headers['X-Nexus-Timestamp'], signature: headers['X-Nexus-Signature'], now }
+    assert.equal(verifyRequestSignature(ok), true)
+    assert.equal(verifyRequestSignature({ ...ok, body: '{"a":2}' }), false, 'body changed')
+    assert.equal(verifyRequestSignature({ ...ok, url: 'https://gw.kmplus.test/hr/employees?page=3' }), false, 'query changed')
+    assert.equal(verifyRequestSignature({ ...ok, secret: 'other' }), false)
+    assert.equal(verifyRequestSignature({ ...ok, now: now + 6 * 60_000 }), false, 'older than 5 minutes')
+    assert.equal(verifyRequestSignature({ ...ok, signature: null }), false)
   })
 
   console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`)

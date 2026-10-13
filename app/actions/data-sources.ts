@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { and, desc, eq } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/lib/db'
-import { dataSources, pipelines } from '@/lib/db/schema'
+import { agents, dataSources, pipelines } from '@/lib/db/schema'
 import { assertConnectorInstalled } from '@/lib/connectors/install-check'
 import { getConnectorDefinition, isConnectorSlug } from '@/lib/connectors/catalog'
 import { decryptCredentials, encryptCredentials } from '@/lib/security/credentials'
@@ -13,10 +13,21 @@ import { recordAudit, type AuditAction } from '@/lib/audit'
 import { diffObjects } from '@/lib/audit-diff'
 import { hasCustomCredentialForm, maskCredentials, restoreSecrets } from '@/lib/connectors/secret-mask'
 import { guard } from '@/lib/server-action'
+import { restRequestDesign } from '@/lib/connectors/rest/agent-request'
 
 const idSchema = z.string().trim().min(1).max(100)
 const roleSchema = z.enum(['source', 'destination'])
 const credentialValues = z.record(z.string().max(100), z.union([z.string().max(20000), z.number(), z.boolean(), z.null()]))
+
+type AgentLink = { agentId: string; connection: string }
+const agentLink = (config: unknown) => (config as { agent?: AgentLink } | null)?.agent ?? null
+
+/** The agent and connection an agent-backed source uses, for the edit form (no credentials: Nexus has none). */
+async function agentSummary(ctx: WorkspaceContext, link: AgentLink) {
+  const [agent] = await db.select({ name: agents.name, connections: agents.connections }).from(agents).where(and(eq(agents.id, link.agentId), eq(agents.workspaceId, ctx.workspaceId))).limit(1)
+  const conn = ((agent?.connections as { name: string; endpoint?: string }[] | undefined) ?? []).find((c) => c.name === link.connection)
+  return { name: agent?.name ?? '?', connection: link.connection, endpoint: conn?.endpoint ?? null }
+}
 
 async function audit(ctx: WorkspaceContext, action: AuditAction, resourceId: string, changes?: Record<string, unknown>) {
   await recordAudit(ctx, { action, resource: 'data_source', resourceId, changes })
@@ -126,9 +137,15 @@ async function testConnectionImpl(rawId: string) {
 async function getEditableCredentialsImpl(rawId: string) {
   const ctx = await requireWorkspace('sources:manage')
   const source = await getOwned(ctx, idSchema.parse(rawId))
-  // Agent-backed: the credentials live in the agent's config, not in Nexus.
-  if ((source.config as { agent?: unknown } | null)?.agent) return { supported: false as const, sourceType: source.sourceType }
   const stored = asStrings(decryptCredentials(source.id, source.credentials))
+  // Agent-backed: the credentials live in the agent's config, not in Nexus. An intranet
+  // API (REST) still has its request (path, paging …) designed here.
+  const link = agentLink(source.config)
+  if (link) {
+    const agent = await agentSummary(ctx, link)
+    if (source.sourceType !== 'rest') return { supported: false as const, sourceType: source.sourceType, agent }
+    return { supported: true as const, custom: 'rest' as const, sourceType: source.sourceType, values: maskCredentials('rest', stored), agent }
+  }
   if (hasCustomCredentialForm(source.sourceType)) {
     // REST / Salesforce: the full form, with secrets masked (see secret-mask.ts).
     return { supported: true as const, custom: source.sourceType as 'rest' | 'salesforce', sourceType: source.sourceType, values: maskCredentials(source.sourceType, stored) }
@@ -158,10 +175,17 @@ async function updateDataSourceCredentialsImpl(rawId: string, rawValues: Record<
   const ctx = await requireWorkspace('sources:manage')
   const target = await getOwned(ctx, idSchema.parse(rawId))
   if (target.sourceType === 'file') throw new Error('File sources have no credentials. Upload files instead.')
-  if ((target.config as { agent?: unknown } | null)?.agent) throw new Error("This data source is reached through a Nexus Agent; change its credentials in the agent's config file.")
-  const source = await getOwned(ctx, idSchema.parse(rawId))
+  const viaAgent = Boolean(agentLink(target.config))
+  if (viaAgent && target.sourceType !== 'rest') throw new Error("This data source is reached through a Nexus Agent; change its credentials in the agent's config file.")
+  const source = target
   const values = asStrings(credentialValues.parse(rawValues))
   const stored = asStrings(decryptCredentials(source.id, source.credentials))
+  if (viaAgent) {
+    // Only the request is stored; the base URL and sign-in stay in the agent's config.
+    const merged = restRequestDesign(restoreSecrets('rest', values, stored))
+    const changed = [...new Set([...Object.keys(merged), ...Object.keys(stored)])].filter((k) => (merged[k] ?? '') !== (stored[k] ?? ''))
+    return testAndSave(ctx, source, merged, changed)
+  }
   if (hasCustomCredentialForm(source.sourceType)) {
     const merged = restoreSecrets(source.sourceType, values, stored)
     const changed = Object.keys(merged).filter((k) => merged[k] !== (stored[k] ?? ''))
@@ -187,7 +211,8 @@ async function updateDataSourceCredentialsImpl(rawId: string, rawValues: Record<
 /** Saves merged credentials only if they pass a connection test; re-scans the schema. */
 async function testAndSave(ctx: WorkspaceContext, source: typeof dataSources.$inferSelect, merged: Record<string, string>, changedFields: string[]) {
   if (!isConnectorSlug(source.sourceType)) throw new Error(`Unknown connector "${source.sourceType}".`)
-  const { testConnectorConnection, scanConnectorSchema } = await import('@/lib/connectors/runtime')
+  // Directly, or through the agent for agent-backed sources.
+  const { testSource, scanSource } = await import('@/lib/agent/sources')
   if (source.sourceType === 'salesforce') {
     // Refresh the access token first so the saved credentials stay usable.
     const { resolveSalesforceAuth } = await import('@/lib/connectors/salesforce/oauth')
@@ -198,9 +223,9 @@ async function testAndSave(ctx: WorkspaceContext, source: typeof dataSources.$in
       return { ok: false as const, message: err instanceof Error ? err.message : 'Salesforce sign-in failed.' }
     }
   }
-  const test = await testConnectorConnection(source.sourceType, merged)
+  const test = await testSource(source, merged)
   if (!test.ok) return { ok: false as const, message: test.message }
-  const scan = await scanConnectorSchema(source.sourceType, merged)
+  const scan = await scanSource(source, merged)
 
   await db
     .update(dataSources)

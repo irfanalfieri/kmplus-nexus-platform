@@ -52,7 +52,7 @@ export const ws: Messages['ws'] = {
   agents: {
     title: 'Nexus Agent',
     description:
-      'Jangkau database di balik firewall Anda. Agent berjalan di server dalam jaringan Anda (Node 20+), hanya terhubung keluar ke Nexus melalui HTTPS, dan menyimpan kata sandi database di konfigurasinya sendiri: Nexus tidak pernah menyimpannya. Agent juga dapat menjalankan model AI open-source di dekat data Anda.',
+      'Jangkau database dan API intranet di balik firewall Anda. Agent berjalan di server dalam jaringan Anda (Node 20+), hanya terhubung keluar ke Nexus melalui HTTPS, dan menyimpan kata sandi dan tokennya di konfigurasinya sendiri: Nexus tidak pernah menyimpannya. Agent juga dapat menjalankan model AI open-source di dekat data Anda.',
     loadFailed: 'Tidak dapat memuat agent',
     nameLabel: 'Nama agent',
     namePlaceholder: 'mis. Kantor Jakarta',
@@ -85,6 +85,7 @@ export const ws: Messages['ws'] = {
     addedSource: '“{name}” ditambahkan ke Sumber data. Uji di sana untuk memindai tabelnya.',
     addedDestination: '“{name}” ditambahkan sebagai tujuan.',
     connectionsLater: 'Koneksinya muncul di sini setelah agent berjalan.',
+    intranetApi: 'API intranet (REST)',
   },
   ai: {
     title: 'Asisten AI',

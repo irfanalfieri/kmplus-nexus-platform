@@ -50,7 +50,7 @@ export const ws = {
   agents: {
     title: 'Nexus Agents',
     description:
-      'Reach databases behind your firewall. The agent runs on a server in your network (Node 20+), only connects out to Nexus over HTTPS, and keeps the database passwords in its own config: Nexus never stores them. It can also run an open-source AI model next to your data.',
+      'Reach databases and intranet APIs behind your firewall. The agent runs on a server in your network (Node 20+), only connects out to Nexus over HTTPS, and keeps their passwords and tokens in its own config: Nexus never stores them. It can also run an open-source AI model next to your data.',
     loadFailed: 'Could not load agents',
     nameLabel: 'Agent name',
     namePlaceholder: 'e.g. Jakarta office',
@@ -83,6 +83,7 @@ export const ws = {
     addedSource: 'Added “{name}” to Data Sources. Test it there to scan its tables.',
     addedDestination: 'Added “{name}” as a destination.',
     connectionsLater: 'Its connections appear here once the agent has started.',
+    intranetApi: 'intranet API (REST)',
   },
   ai: {
     title: 'AI assistant',

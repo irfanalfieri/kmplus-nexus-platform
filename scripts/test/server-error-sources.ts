@@ -38,7 +38,7 @@ function toTemplate(raw: string, quote: string) {
 }
 
 const PATTERNS = [
-  /throw new (?:Error|NonRetryableError|AnswerError)\(\s*(['"`])((?:\\.|(?!\1)[\s\S])*?)\1\s*[,)]/g,
+  /throw new (?:Error|NonRetryableError|AnswerError|UnsafeUrlError)\(\s*(['"`])((?:\\.|(?!\1)[\s\S])*?)\1\s*[,)]/g,
   /\.(?:min|max|length|regex|email|url|uuid|refine|nonempty|int|positive)\([^'"`)]*?(['"`])((?:\\.|(?!\1)[\s\S])*?)\1\s*\)/g,
   /message:\s*(['"`])((?:\\.|(?!\1)[\s\S])*?)\1/g,
 ]

@@ -1,3 +1,4 @@
+import { connectorFetch } from '@/lib/net/safe-url'
 import { createHmac } from 'node:crypto'
 import type { ConnectionTestResult, ConnectorCredentials, SchemaScanResult, SchemaTable } from '../types'
 
@@ -47,7 +48,7 @@ function config(credentials: ConnectorCredentials) {
 async function talentaGet(cfg: ReturnType<typeof config>, path: string, query: Record<string, string | number>) {
   const qs = new URLSearchParams(Object.entries(query).map(([k, v]) => [k, String(v)])).toString()
   const pathWithQuery = qs ? `${path}?${qs}` : path
-  const response = await fetch(`${cfg.baseUrl}${pathWithQuery}`, {
+  const response = await connectorFetch(`${cfg.baseUrl}${pathWithQuery}`, {
     headers: {
       ...signMekariRequest({ clientId: cfg.clientId, clientSecret: cfg.clientSecret, method: 'GET', pathWithQuery }),
       Accept: 'application/json',

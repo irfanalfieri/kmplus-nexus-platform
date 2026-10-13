@@ -1,4 +1,4 @@
-import { safeFetch, UnsafeUrlError } from '@/lib/net/safe-url'
+import { connectorFetch, UnsafeUrlError } from '@/lib/net/safe-url'
 import type { ConnectionTestResult, ConnectorCredentials, SchemaScanResult } from '../types'
 
 /**
@@ -33,12 +33,18 @@ async function call<T>(credentials: ConnectorCredentials, path: string, init: { 
   const { baseUrl, token } = settings(credentials)
   let res: Response
   try {
-    res = await safeFetch(`${baseUrl}/nexus/v1${path}`, {
-      method: init.method ?? 'GET',
-      timeoutMs: TIMEOUT_MS,
-      headers: { authorization: `Bearer ${token}`, accept: 'application/json', ...(init.body ? { 'content-type': 'application/json' } : {}), 'user-agent': 'KMPlus-Nexus/1.0' },
-      body: init.body ? JSON.stringify(init.body) : undefined,
-    })
+    // https and a public address from the cloud; an on-premises product is reached through a Nexus Agent.
+    res = await connectorFetch(
+      `${baseUrl}/nexus/v1${path}`,
+      {
+        method: init.method ?? 'GET',
+        redirect: 'manual',
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+        headers: { authorization: `Bearer ${token}`, accept: 'application/json', ...(init.body ? { 'content-type': 'application/json' } : {}), 'user-agent': 'KMPlus-Nexus/1.0' },
+        body: init.body ? JSON.stringify(init.body) : undefined,
+      },
+      { httpsOnly: true }
+    )
   } catch (err) {
     if (err instanceof UnsafeUrlError) throw new Error(err.message)
     throw new Error(`${baseUrl} did not answer (${err instanceof Error ? err.message : 'network error'}).`)

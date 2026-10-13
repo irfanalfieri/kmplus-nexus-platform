@@ -1,3 +1,4 @@
+import { connectorFetch } from '@/lib/net/safe-url'
 import type { ConnectionTestResult, ConnectorCredentials, SchemaScanResult, SchemaTable } from '../types'
 
 function basicAuthHeader(username: string, password: string) {
@@ -15,7 +16,7 @@ export async function testSapConnection(credentials: ConnectorCredentials): Prom
   if (!host || !username) return { ok: false, message: 'SAP OData base URL and username are required.' }
 
   try {
-    const response = await fetch(`${normalizeBaseUrl(host)}/$metadata`, {
+    const response = await connectorFetch(`${normalizeBaseUrl(host)}/$metadata`, {
       headers: {
         Authorization: basicAuthHeader(username, password),
         Accept: 'application/xml',
@@ -41,7 +42,7 @@ export async function scanSapSchema(credentials: ConnectorCredentials): Promise<
   const password = credentials.password ?? ''
   if (!host || !username) throw new Error('SAP credentials incomplete.')
 
-  const response = await fetch(`${normalizeBaseUrl(host)}/$metadata`, {
+  const response = await connectorFetch(`${normalizeBaseUrl(host)}/$metadata`, {
     headers: {
       Authorization: basicAuthHeader(username, password),
       Accept: 'application/xml',
@@ -98,7 +99,7 @@ export async function sampleSapEntity(
   const password = credentials.password ?? ''
   const url = `${normalizeBaseUrl(host!)}/${encodeURIComponent(entitySet)}?$top=${limit}&$format=json`
 
-  const response = await fetch(url, {
+  const response = await connectorFetch(url, {
     headers: {
       Authorization: basicAuthHeader(username!, password),
       Accept: 'application/json',

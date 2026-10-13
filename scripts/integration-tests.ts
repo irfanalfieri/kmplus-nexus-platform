@@ -16,7 +16,7 @@ import { db, pool } from '@/lib/db'
 import { agentTasks as agentTaskTable, agents as agentTable, apiKeys, apiRateLimits, auditLogs, businessRuleVersions, businessRules, catalogEntries, connectorInstalls, dashboards, dataSources, datasetPolicies, datasetQualitySnapshots, domainMappings, mappingTemplates, notifications, pipelineApprovals, scimGroups, scimTokens, scimUsers, ssoProvider, webhookDeliveries, webhooks, workspaceSso, executionLogs, nexusDatasets, pipelineJobs, pipelineRunRejects, pipelines, pipelineVersions, session, user, verification, workspaceInvites, workspaceMembers, workspaces } from '@/lib/db/schema'
 import { acceptInvite, changeMemberRole, createInvite, getWorkspaceContext, listMembers, resetMemberTwoFactor, switchWorkspace } from '@/lib/actions/workspaces'
 import { installConnector } from '@/lib/actions/connectors'
-import { createDataSource, deleteDataSource, getDataSources, renameDataSource, setDataSourceRole, testConnection } from '@/lib/actions/data-sources'
+import { createDataSource, deleteDataSource, getDataSources, getEditableCredentials, renameDataSource, setDataSourceRole, testConnection, updateDataSourceCredentials } from '@/lib/actions/data-sources'
 import { writeDataset } from '@/lib/pipelines/io'
 import { startKmplusMock } from './test/kmplus-mock'
 import { cancelPipelineRun, createWebhookTrigger, discardDraft, getBuilderOptions, getDatasetPreview, getRunStatus, listPipelines, listRuns, publishPipeline, retryPipelineRun, runPipelineNow, savePipeline } from '@/lib/actions/pipelines'
@@ -27,11 +27,13 @@ import { createScimToken, revokeScimToken, setScimGroupRole } from '@/lib/action
 import { DELETE as scimDelete, GET as scimGet, PATCH as scimPatch, POST as scimPost } from '@/app/api/scim/v2/[[...path]]/route'
 import { readFileSync } from 'node:fs'
 import { addAgentDataSource, createAgent, listAgents, revokeAgent } from '@/lib/actions/agents'
-import { getDataSourceTableSample } from '@/lib/actions/connector-source'
+import { getDataSourceTableSample, previewRestConnection } from '@/lib/actions/connector-source'
 import { parseConfig, runAgent } from '../agent/nexus-agent'
 import { applyDiagnosisFix, askData, diagnoseRun, draftPipeline, draftRule, getAiSettings, setAiProvider, suggestConnector, suggestMapping } from '@/lib/actions/ai'
 import { cookies } from 'next/headers'
 import { startLlmMock } from './test/llm-mock'
+import { startIntranetApi } from './test/intranet-api-mock'
+import { decryptCredentials } from '@/lib/security/credentials'
 import { POST as agentHello } from '@/app/api/agent/v1/hello/route'
 import { GET as agentTasks } from '@/app/api/agent/v1/tasks/route'
 import { POST as agentResult } from '@/app/api/agent/v1/tasks/[id]/result/route'
@@ -1228,13 +1230,18 @@ async function main() {
       // A row the source no longer has: the run must mark it deleted through the agent.
       await pool.query(`INSERT INTO "${FIXTURE_SCHEMA}".agent_out (id, email) VALUES (99, 'gone@kmplus.test')`)
       const agentLlm = await startLlmMock()
+      const intranet = await startIntranetApi('intranet-token')
       const config = parseConfig({
         url: 'http://localhost:3000',
         token,
         pollWaitSeconds: 1,
-        connections: [{ name: 'HR', type: 'postgres', writable: true, credentials: { connectionString: '${AGENT_TEST_DB}', schema: FIXTURE_SCHEMA } }],
+        connections: [
+          { name: 'HR', type: 'postgres', writable: true, credentials: { connectionString: '${AGENT_TEST_DB}', schema: FIXTURE_SCHEMA } },
+          // An intranet API: the agent's config holds the address and the token; Nexus designs the request.
+          { name: 'HR API', type: 'rest', credentials: { baseUrl: `${intranet.baseUrl}/hr`, authMethod: 'bearer', bearerToken: '${INTRANET_TOKEN}' } },
+        ],
         ai: { baseUrl: agentLlm.baseUrl, model: 'llama3.1:8b' },
-      }, { AGENT_TEST_DB: process.env.DATABASE_URL })
+      }, { AGENT_TEST_DB: process.env.DATABASE_URL, INTRANET_TOKEN: 'intranet-token' })
       const stop = new AbortController()
       const logs: string[] = []
       const running = runAgent(config, { fetchImpl: agentFetch, signal: stop.signal, log: (l) => logs.push(l) })
@@ -1249,9 +1256,44 @@ async function main() {
         for (let i = 0; i < 50 && !(await listAgents()).agents.find((a) => a.name === 'Office agent')?.online; i++) await new Promise((r) => setTimeout(r, 100))
         const listed = (await listAgents()).agents.find((a) => a.name === 'Office agent')!
         assert.equal(listed.online, true)
-        assert.deepEqual(listed.connections.map((c) => [c.name, c.type, c.writable]), [['HR', 'postgres', true]])
+        assert.deepEqual(listed.connections.map((c) => [c.name, c.type, c.writable]), [['HR', 'postgres', true], ['HR API', 'rest', false]])
+        assert.equal(listed.connections[1].endpoint, `${intranet.baseUrl}/hr`, 'the agent shows where the API is, without credentials')
         const [stored] = await db.select().from(agentTable).where(eq(agentTable.id, listed.id))
         assert.ok(!JSON.stringify(stored.connections).includes('postgres://'), 'Nexus never receives the credentials')
+        assert.ok(!JSON.stringify(stored.connections).includes('intranet-token'))
+
+        // DS-12: an intranet API through the agent. The request is designed in Nexus; the
+        // base URL and token stay on the agent and win over anything Nexus sends.
+        await installConnector('rest')
+        const api = await addAgentDataSource({ agentId: listed.id, connection: 'HR API', role: 'source' })
+        const editable = await getEditableCredentials(api.id)
+        assert.ok(editable.supported && editable.custom === 'rest' && 'agent' in editable && editable.agent?.endpoint === `${intranet.baseUrl}/hr`)
+        const savedApi = await updateDataSourceCredentials(api.id, { resourcePath: '/employees', dataPath: 'items', baseUrl: 'https://evil.example', bearerToken: 'stolen', authMethod: 'none' })
+        assert.equal(savedApi.ok, true, savedApi.message)
+        const [apiRow] = await db.select().from(dataSources).where(eq(dataSources.id, api.id))
+        const apiStored = decryptCredentials(api.id, apiRow.credentials) as Record<string, string>
+        assert.equal(apiStored.resourcePath, '/employees')
+        assert.ok(!('baseUrl' in apiStored) && !('bearerToken' in apiStored), 'only the request is stored in Nexus')
+        const apiSample = await getDataSourceTableSample(api.id, 'employees', 5)
+        assert.deepEqual(apiSample.rows.map((r) => r.employee_code), ['E1', 'E2'])
+        const { readSourceRows } = await import('@/lib/pipelines/io')
+        assert.equal((await readSourceRows(apiRow, 'employees', 100)).length, 2, 'pipelines read the intranet API through the agent')
+        assert.ok(intranet.seen.length > 0 && intranet.seen.every((r) => r.authorization === 'Bearer intranet-token' && r.path.startsWith('/hr/')), 'the agent always signs in with its own token')
+        const escape = await previewRestConnection({ resourcePath: '/../admin' }, api.id)
+        assert.equal(escape.ok, false)
+        assert.match(escape.message, /leaves the API's base URL/)
+        assert.ok(!intranet.seen.some((r) => r.path === '/admin'), 'requests never leave the base URL')
+        // From the cloud the same API is refused, with a pointer to the agent.
+        const devFlag = process.env.NEXUS_ALLOW_PRIVATE_URLS
+        delete process.env.NEXUS_ALLOW_PRIVATE_URLS
+        try {
+          const direct = await createDataSource({ name: `${RUN} direct intranet`, type: 'rest', sourceType: 'rest', credentials: { baseUrl: `${intranet.baseUrl}/hr`, resourcePath: '/employees', authMethod: 'bearer', bearerToken: 'intranet-token' } })
+          await rejectsWith(() => testConnection(direct), /private network.*Nexus Agent/)
+          await deleteDataSource(direct)
+        } finally {
+          if (devFlag !== undefined) process.env.NEXUS_ALLOW_PRIVATE_URLS = devFlag
+        }
+        alive('the intranet API')
 
         const src = await addAgentDataSource({ agentId: listed.id, connection: 'HR', role: 'source' })
         await testConnection(src.id)
@@ -1315,6 +1357,7 @@ async function main() {
         stop.abort()
         await outcome
         await agentLlm.stop()
+        await intranet.stop()
       }
       // An agent that stopped polling is reported offline.
       const { token: t2 } = await createAgent('Sleepy agent')

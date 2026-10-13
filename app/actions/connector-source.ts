@@ -11,7 +11,9 @@ import {
   scanConnectorSchema,
   testConnectorConnection,
 } from '@/lib/connectors/runtime'
-import { parseRestConfig, previewRestRequest } from '@/lib/connectors/rest-client'
+import { parseRestConfig, previewRestRequest, type RestRequestPreview } from '@/lib/connectors/rest-client'
+import { restRequestDesign } from '@/lib/connectors/rest/agent-request'
+import { agentOf } from '@/lib/agent/server'
 import { resolveSalesforceAuth } from '@/lib/connectors/salesforce/oauth'
 import { decryptCredentials, encryptCredentials } from '@/lib/security/credentials'
 import { and, eq } from 'drizzle-orm'
@@ -21,7 +23,7 @@ import { restoreSecrets } from '@/lib/connectors/secret-mask'
 import type { Permission } from '@/lib/auth/permissions'
 import { revalidatePath } from 'next/cache'
 import { guard } from '@/lib/server-action'
-import { sampleSource, scanSource } from '@/lib/agent/sources'
+import { sampleSource, scanSource, testSource } from '@/lib/agent/sources'
 import { sourceKey } from '@/lib/catalog/definition'
 import { applyMasks, liveTableAccess } from '@/lib/governance/masking'
 
@@ -147,9 +149,36 @@ async function previewRestConnectionImpl(rawCredentials: ConnectorCredentials, r
   if (rawSourceId) {
     const source = await getOwnedSource(idSchema.parse(rawSourceId), workspaceId)
     credentials = restoreSecrets('rest', credentials, parseCredentials(source.id, source.credentials))
+    // Intranet API: the agent sends the request with its own base URL and sign-in.
+    if (source.sourceType === 'rest' && agentOf(source)) {
+      await assertConnectorInstalled('rest')
+      const test = (await testSource(source, restRequestDesign(credentials))) as { ok: boolean; message: string; preview?: RestRequestPreview }
+      return test.preview ?? failedPreview(test.message)
+    }
   }
   await assertConnectorInstalled('rest')
   return previewRestRequest(parseRestConfig(credentials))
+}
+
+function failedPreview(message: string): RestRequestPreview {
+  return {
+    ok: false,
+    message,
+    request: { method: 'GET', url: '', headers: {} },
+    response: { status: 0, statusText: 'Error', durationMs: 0, contentType: '', sizeBytes: 0, headers: {}, bodyPreview: message },
+  }
+}
+
+/**
+ * What a DevOps team needs to publish an intranet API for Nexus by hand
+ * (DS-12): the outbound IP addresses to allow, when this deployment has fixed
+ * ones (NEXUS_EGRESS_IPS, e.g. a static-IP egress), and whether this Nexus can
+ * reach private addresses itself (self-hosted, NEXUS_PRIVATE_NETWORK_ACCESS).
+ */
+async function getConnectorNetworkInfoImpl() {
+  await requireWorkspace()
+  const egressIps = (process.env.NEXUS_EGRESS_IPS ?? '').split(/[\s,]+/).filter(Boolean).slice(0, 50)
+  return { egressIps, selfHosted: process.env.NEXUS_PRIVATE_NETWORK_ACCESS === 'true' }
 }
 
 async function testAndScanDataSourceImpl(
@@ -204,4 +233,8 @@ export async function previewRestConnection(...args: Parameters<typeof previewRe
 
 export async function testAndScanDataSource(...args: Parameters<typeof testAndScanDataSourceImpl>) {
   return guard(() => testAndScanDataSourceImpl(...args))
+}
+
+export async function getConnectorNetworkInfo(...args: Parameters<typeof getConnectorNetworkInfoImpl>) {
+  return guard(() => getConnectorNetworkInfoImpl(...args))
 }

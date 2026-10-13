@@ -8,7 +8,7 @@
 export const KEEP = '••••••••'
 
 const SECRET_FIELDS: Record<string, string[]> = {
-  rest: ['apiKeyValue', 'bearerToken', 'basicPassword', 'customHeaderValue', 'oauthClientSecret', 'oauthPassword', 'apiKey', 'password'],
+  rest: ['apiKeyValue', 'bearerToken', 'basicPassword', 'customHeaderValue', 'oauthClientSecret', 'oauthPassword', 'apiKey', 'password', 'clientKey', 'signingSecret'],
   salesforce: ['clientSecret', 'accessToken', 'refreshToken', 'password', 'securityToken'],
 }
 

@@ -26,6 +26,8 @@ const TALENTA_ID = 'harness-client'
 const TALENTA_SECRET = 'harness-secret'
 let talentaBase = ''
 async function startTalentaMock() {
+  // A local mock: connector requests to private addresses are allowed for local tests only.
+  process.env.NEXUS_ALLOW_PRIVATE_URLS = 'true'
   const employees = Array.from({ length: 7 }, (_, i) => ({
     user_id: 1000 + i,
     personal: { first_name: `Employee${i}`, email: `e${i}@example.co.id` },

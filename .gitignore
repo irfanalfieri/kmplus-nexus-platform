@@ -25,3 +25,6 @@ tsconfig.tsbuildinfo
 /.impeccable/mocks/
 /.impeccable/questions/
 /.impeccable/live/
+
+# Manual test workbook (kept locally, not in the repo)
+/docs/testing/KMPlus-Nexus-Test-Cases.xlsx

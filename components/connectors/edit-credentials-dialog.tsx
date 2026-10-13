@@ -13,7 +13,7 @@ import RestConnectorForm from '@/components/connectors/rest-connector-form'
 import SalesforceConnectorForm from '@/components/connectors/salesforce-connector-form'
 import { credentialFieldLabel } from '@/components/connectors/connector-credential-form'
 import { useT } from '@/components/i18n/i18n-provider'
-import type { RestRequestPreview } from '@/lib/connectors/rest-client'
+import type { RestRequestPreview } from '@/lib/connectors/rest/config'
 
 type Editable = Awaited<ReturnType<typeof getEditableCredentials>>
 
@@ -113,11 +113,15 @@ export default function EditCredentialsDialog({ sourceId, sourceName, onClose, o
           </div>
         )
       ) : !form.supported ? (
-        <p className="text-sm text-muted-foreground">
-          {notSupported[0]}
-          <span className="font-mono">{form.sourceType}</span>
-          {notSupported[1]}
-        </p>
+        'agent' in form && form.agent ? (
+          <p className="text-sm text-muted-foreground">{t('connect.editCredentials.viaAgent', { agent: form.agent.name, connection: form.agent.connection })}</p>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            {notSupported[0]}
+            <span className="font-mono">{form.sourceType}</span>
+            {notSupported[1]}
+          </p>
+        )
       ) : (
         <form
           id={formId}
@@ -128,7 +132,7 @@ export default function EditCredentialsDialog({ sourceId, sourceName, onClose, o
           }}
         >
           {form.custom === 'rest' ? (
-            <RestConnectorForm values={values} onChange={setValue} preview={restPreview} sending={restSending} onSend={() => void sendRestPreview()} />
+            <RestConnectorForm values={values} onChange={setValue} preview={restPreview} sending={restSending} onSend={() => void sendRestPreview()} agent={'agent' in form ? form.agent : null} />
           ) : form.custom === 'salesforce' ? (
             <SalesforceConnectorForm values={values} onChange={setValue} sourceId={sourceId} />
           ) : (
@@ -154,7 +158,7 @@ export default function EditCredentialsDialog({ sourceId, sourceName, onClose, o
             })
           )}
           <p className="text-xs text-muted-foreground">
-            {custom ? t('connect.editCredentials.customHint') : t('connect.editCredentials.simpleHint')}{' '}
+            {'agent' in form && form.agent ? t('connect.editCredentials.agentHint') : custom ? t('connect.editCredentials.customHint') : t('connect.editCredentials.simpleHint')}{' '}
             {t('connect.editCredentials.testHint')}
           </p>
           {error && <Notice tone="danger">{error}</Notice>}

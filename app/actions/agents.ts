@@ -31,7 +31,7 @@ async function nexusUrl() {
   return `${h.get('x-forwarded-proto') ?? 'https'}://${h.get('host')}`
 }
 
-type Advertised = { name: string; type: string; writable: boolean }
+type Advertised = { name: string; type: string; writable: boolean; endpoint?: string }
 
 async function listAgentsImpl() {
   const ctx = await requireWorkspace('sources:manage')

@@ -31,7 +31,7 @@ interface ConnectorCredentialFormProps {
   fields: CredentialField[]
   values: Record<string, string>
   onChange: (key: string, value: string) => void
-  restPreview?: import('@/lib/connectors/rest-client').RestRequestPreview | null
+  restPreview?: import('@/lib/connectors/rest/config').RestRequestPreview | null
   restSending?: boolean
   onRestSend?: () => void
 }

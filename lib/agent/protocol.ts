@@ -14,6 +14,19 @@ import { z } from 'zod'
  */
 
 export const AGENT_PROTOCOL = 1
+/** Oldest agent that accepts REST requests designed in Nexus (intranet APIs). */
+export const MIN_AGENT_VERSION_FOR_REQUESTS = '1.2.0'
+
+/** Compares dotted versions: negative when a < b. */
+export function compareVersions(a: string, b: string) {
+  const pa = a.split('.').map((n) => Number.parseInt(n, 10) || 0)
+  const pb = b.split('.').map((n) => Number.parseInt(n, 10) || 0)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0)
+    if (d) return d
+  }
+  return 0
+}
 export const AGENT_TOKEN_PREFIX = 'nxa_'
 /** Longest a poll waits for work. */
 export const MAX_POLL_WAIT_SECONDS = 25
@@ -31,7 +44,13 @@ export type AgentOp = (typeof AGENT_OPS)[number]
 export const AGENT_CONNECTOR_TYPES = ['postgres', 'mysql', 'oracle', 'snowflake', 'sap', 'ldap', 'rest', 'talenta', 'supabase', 'kmplus'] as const
 
 const watermark = z.object({ column: z.string().min(1).max(200), after: z.string().nullable() }).optional()
-const conn = { connection: z.string().min(1).max(100) }
+/**
+ * A REST request designed in Nexus for an intranet API connection (agent 1.2.0+):
+ * path, method, parameters, paging … never the base URL or sign-in, which the
+ * agent's config holds (lib/connectors/rest/agent-request.ts).
+ */
+const request = z.record(z.string().max(100), z.string().max(20_000)).refine((v) => Object.keys(v).length <= 100).optional()
+const conn = { connection: z.string().min(1).max(100), request }
 
 export const payloadSchemas = {
   test: z.object(conn),
@@ -74,7 +93,17 @@ export const helloSchema = z.object({
   version: z.string().max(40),
   protocol: z.number().int(),
   hostname: z.string().max(200).default(''),
-  connections: z.array(z.object({ name: z.string().min(1).max(100), type: z.string().max(40), writable: z.boolean().default(false) })).max(100),
+  connections: z
+    .array(
+      z.object({
+        name: z.string().min(1).max(100),
+        type: z.string().max(40),
+        writable: z.boolean().default(false),
+        /** Address the connection reaches (origin and base path, no credentials), shown in Settings. */
+        endpoint: z.string().max(300).optional(),
+      })
+    )
+    .max(100),
   ai: z.object({ model: z.string().max(200) }).nullable().default(null),
 })
 export type AgentHello = z.infer<typeof helloSchema>

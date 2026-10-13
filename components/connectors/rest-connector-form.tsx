@@ -14,6 +14,8 @@ import {
 } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import KeyValueEditor from '@/components/connectors/key-value-editor'
+import RestNetworkPanel from '@/components/connectors/rest-network-panel'
+import { Notice } from '@/components/ui/notice'
 import { usePrefs } from '@/components/i18n/i18n-provider'
 import {
   REST_DEFAULTS,
@@ -24,7 +26,7 @@ import {
   type RestRequestPreview,
   parseConnectionPaste,
   sanitizeRestCredentials,
-} from '@/lib/connectors/rest-client'
+} from '@/lib/connectors/rest/config'
 
 interface RestConnectorFormProps {
   values: Record<string, string>
@@ -32,6 +34,11 @@ interface RestConnectorFormProps {
   preview?: RestRequestPreview | null
   sending?: boolean
   onSend?: () => void
+  /**
+   * An intranet API reached through a Nexus Agent: the agent's config holds the
+   * base URL and sign-in, so only the request is edited here.
+   */
+  agent?: { name: string; connection: string; endpoint: string | null } | null
 }
 
 function val(values: Record<string, string>, key: keyof typeof REST_DEFAULTS) {
@@ -66,13 +73,15 @@ export default function RestConnectorForm({
   preview,
   sending,
   onSend,
+  agent,
 }: RestConnectorFormProps) {
   const scheme = val(values, 'integrationScheme') as RestIntegrationScheme
   const authMethod = val(values, 'authMethod') as RestAuthMethod
   const bodyType = val(values, 'bodyType') as RestBodyType
   const resolvedBodyType = scheme === 'graphql' ? 'graphql' : bodyType
 
-  const fullUrlPreview = `${val(values, 'baseUrl').replace(/\/+$/, '')}${val(values, 'resourcePath').startsWith('/') ? '' : '/'}${val(values, 'resourcePath')}`
+  const base = agent ? (agent.endpoint ?? `<${agent.connection}>`) : val(values, 'baseUrl')
+  const fullUrlPreview = `${base.replace(/\/+$/, '')}${val(values, 'resourcePath').startsWith('/') ? '' : '/'}${val(values, 'resourcePath')}`
   const [pasteBox, setPasteBox] = useState('')
   const [pasteHint, setPasteHint] = useState('')
   const uid = useId()
@@ -133,6 +142,9 @@ export default function RestConnectorForm({
 
   return (
     <div className="space-y-4">
+      {agent ? (
+        <Notice tone="info">{t('connect.rest.agentNotice', { agent: agent.name, connection: agent.connection })}</Notice>
+      ) : (
       <div className="space-y-2 rounded-lg border border-dashed border-border bg-muted/40 p-3">
         <Label htmlFor={fid('quickImport')} className="text-xs text-muted-foreground">
           {t('connect.rest.quickImport')} <code className="font-mono text-[11px]">url:</code> + <code className="font-mono text-[11px]">auth:</code>
@@ -157,6 +169,7 @@ export default function RestConnectorForm({
           </span>
         </div>
       </div>
+      )}
 
       {/* Postman-style request line */}
       <div className="overflow-hidden rounded-lg border border-border bg-card">
@@ -176,6 +189,11 @@ export default function RestConnectorForm({
               ))}
             </SelectContent>
           </Select>
+          {agent ? (
+            <div className="flex h-10 flex-1 items-center truncate px-3 font-mono text-sm text-muted-foreground" title={t('connect.rest.agentBase', { agent: agent.name })}>
+              {agent.endpoint ?? t('connect.rest.agentBase', { agent: agent.name })}
+            </div>
+          ) : (
           <Input
             className="h-10 flex-1 rounded-none border-0 font-mono text-sm focus-visible:outline-offset-[-2px]"
             aria-label={t('connect.rest.baseUrl')}
@@ -190,6 +208,7 @@ export default function RestConnectorForm({
               }
             }}
           />
+          )}
         </div>
         <div className="flex items-center gap-2 px-3 py-2">
           <Input
@@ -213,11 +232,12 @@ export default function RestConnectorForm({
       <Tabs defaultValue="params" className="w-full">
         <TabsList className="h-9 w-full justify-start overflow-x-auto">
           <TabsTrigger value="params">{t('connect.rest.tabs.params')}</TabsTrigger>
-          <TabsTrigger value="auth">{t('connect.rest.tabs.auth')}</TabsTrigger>
+          {!agent && <TabsTrigger value="auth">{t('connect.rest.tabs.auth')}</TabsTrigger>}
           <TabsTrigger value="headers">{t('connect.rest.tabs.headers')}</TabsTrigger>
           <TabsTrigger value="body">{t('connect.rest.tabs.body')}</TabsTrigger>
           <TabsTrigger value="variables">{t('connect.rest.tabs.variables')}</TabsTrigger>
           <TabsTrigger value="settings">{t('connect.rest.tabs.settings')}</TabsTrigger>
+          {!agent && <TabsTrigger value="network">{t('connect.rest.tabs.network')}</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="params" className="mt-3 rounded-lg border border-border p-3">
@@ -433,6 +453,7 @@ export default function RestConnectorForm({
         </TabsContent>
 
         <TabsContent value="variables" className="mt-3 space-y-3 rounded-lg border border-border p-3">
+          {!agent && (
           <Field id={fid('variablesJson')}
             label={t('connect.rest.envVars')}
             hint={t('connect.rest.envVarsHint')}
@@ -444,6 +465,7 @@ export default function RestConnectorForm({
               onChange={(e) => onChange('variablesJson', e.target.value)}
             />
           </Field>
+          )}
           <Field id={fid('dataPath')} label={t('connect.rest.dataPath')} hint={t('connect.rest.dataPathHint')}>
             <Input id={fid('dataPath')} aria-describedby={`${fid('dataPath')}-hint`} value={val(values, 'dataPath')} onChange={(e) => onChange('dataPath', e.target.value)} placeholder="data.items" />
           </Field>
@@ -464,6 +486,7 @@ export default function RestConnectorForm({
               <Input id={fid('validateStatus')} value={val(values, 'validateStatus')} onChange={(e) => onChange('validateStatus', e.target.value)} placeholder="2xx" />
             </Field>
           </div>
+          {!agent && (
           <Field id={fid('followRedirects')} label={t('connect.rest.followRedirects')}>
             <Select value={val(values, 'followRedirects')} onValueChange={(v) => v && onChange('followRedirects', v)}>
               <SelectTrigger id={fid('followRedirects')}>
@@ -475,6 +498,7 @@ export default function RestConnectorForm({
               </SelectContent>
             </Select>
           </Field>
+          )}
 
           <div className="border-t border-border pt-3">
             <h3 className="mb-2 font-mono text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
@@ -528,6 +552,12 @@ export default function RestConnectorForm({
             )}
           </div>
         </TabsContent>
+
+        {!agent && (
+          <TabsContent value="network" className="mt-3 rounded-lg border border-border p-3">
+            <RestNetworkPanel values={values} onChange={onChange} />
+          </TabsContent>
+        )}
       </Tabs>
 
       {preview && (

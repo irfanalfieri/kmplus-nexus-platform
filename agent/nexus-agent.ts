@@ -3,6 +3,7 @@ import { gzipSync } from 'node:zlib'
 import { z } from 'zod'
 import { AGENT_CONNECTOR_TYPES, AGENT_PROTOCOL, type AgentTask } from '@/lib/agent/protocol'
 import { executeTask, type AgentEnvironment, type LocalConnection } from '@/lib/agent/execute'
+import { publicEndpoint } from '@/lib/connectors/rest/agent-request'
 
 /**
  * KMPlus Nexus Agent (#13): runs inside a customer's network and reaches
@@ -11,7 +12,7 @@ import { executeTask, type AgentEnvironment, type LocalConnection } from '@/lib/
  * local credentials, and posts the results. See agent/README.md.
  */
 
-export const AGENT_VERSION = '1.1.0'
+export const AGENT_VERSION = '1.2.0'
 
 const connectionSchema = z.object({
   name: z.string().trim().min(1).max(100),
@@ -101,7 +102,7 @@ export async function runAgent(config: AgentConfig, opts: RunOptions = {}) {
     const res = await call('/hello', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ version: AGENT_VERSION, protocol: AGENT_PROTOCOL, hostname: hostname(), connections: config.connections.map((c) => ({ name: c.name, type: c.type, writable: c.writable })), ai: config.ai ? { model: config.ai.model } : null }),
+      body: JSON.stringify({ version: AGENT_VERSION, protocol: AGENT_PROTOCOL, hostname: hostname(), connections: config.connections.map((c) => ({ name: c.name, type: c.type, writable: c.writable, endpoint: publicEndpoint(Object.fromEntries(Object.entries(c.credentials).map(([k, v]) => [k, String(v)]))) })), ai: config.ai ? { model: config.ai.model } : null }),
     })
     const body = (await res.json().catch(() => ({}))) as { name?: string; workspace?: string; error?: string }
     if (!res.ok) throw new Error(body.error ?? `hello failed (HTTP ${res.status})`)

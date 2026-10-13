@@ -15,6 +15,7 @@ import { compareWatermarks, type OutputColumn } from './columns'
 import { rowFilterSql, type RowFilter } from '@/lib/governance/row-filters'
 import { agentOf, callAgent } from '@/lib/agent/server'
 import { WRITE_BATCH_ROWS } from '@/lib/agent/protocol'
+import { agentRestRequest } from '@/lib/connectors/rest/agent-request'
 
 /** Data source row as stored (credentials still encrypted). */
 export interface StoredDataSource {
@@ -34,6 +35,9 @@ function credentialsOf(source: StoredDataSource): ConnectorCredentials {
     Object.entries(decryptCredentials(source.id, source.credentials)).map(([k, v]) => [k, v == null ? '' : String(v)])
   )
 }
+
+/** For an intranet API reached through an agent: the request designed in Nexus (none for other sources). */
+const agentRequestOf = (source: StoredDataSource) => agentRestRequest(source.sourceType, credentialsOf(source))
 
 const qIdent = (name: string) => `"${name.replace(/"/g, '""')}"`
 const mIdent = (name: string) => `\`${name.replace(/`/g, '``')}\``
@@ -78,7 +82,7 @@ export class NonRetryableError extends Error {
 export async function readSourceRows(source: StoredDataSource, table: string, maxRows: number, opts: ReadOptions = {}): Promise<Row[]> {
   // Behind a customer's firewall: the Nexus Agent reads it (#13).
   const via = agentOf(source)
-  if (via) return (await callAgent(via.agentId, 'readRows', { connection: via.connection, table, maxRows: Math.min(maxRows, 1_000_000), watermark: opts.watermark }, { timeoutMs: 240_000, workspaceId: via.workspaceId })) as Row[]
+  if (via) return (await callAgent(via.agentId, 'readRows', { connection: via.connection, request: agentRequestOf(source), table, maxRows: Math.min(maxRows, 1_000_000), watermark: opts.watermark }, { timeoutMs: 240_000, workspaceId: via.workspaceId })) as Row[]
   const wm = opts.watermark
   const pg = pgTarget(source)
   if (pg) {
@@ -606,7 +610,7 @@ export async function readSourceChunk(
     // One agent-side cache per worker invocation, like the cache passed in here.
     let cacheKey = cache.get('agent:cacheKey') as string | undefined
     if (!cacheKey) cache.set('agent:cacheKey', (cacheKey = randomUUID()))
-    return (await callAgent(via.agentId, 'readChunk', { connection: via.connection, table, offset, limit, maxRows: opts.maxRows, watermark: wm, cacheKey }, { timeoutMs: 180_000, workspaceId: via.workspaceId })) as ChunkRead
+    return (await callAgent(via.agentId, 'readChunk', { connection: via.connection, request: agentRequestOf(source), table, offset, limit, maxRows: opts.maxRows, watermark: wm, cacheKey }, { timeoutMs: 180_000, workspaceId: via.workspaceId })) as ChunkRead
   }
   const pg = pgTarget(source)
   if (pg) {
@@ -734,7 +738,7 @@ export async function liveQuery(
   const finish = (rows: Row[], pushdown: boolean): LiveQueryResult => ({ rows: rows.slice(0, limit), pushdown, truncated: rows.length > limit })
 
   const via = agentOf(source)
-  if (via) return (await callAgent(via.agentId, 'liveQuery', { connection: via.connection, table, limit, timeoutMs: Math.min(opts.timeoutMs, 120_000), filters }, { timeoutMs: opts.timeoutMs + 15_000, workspaceId: via.workspaceId })) as LiveQueryResult
+  if (via) return (await callAgent(via.agentId, 'liveQuery', { connection: via.connection, request: agentRequestOf(source), table, limit, timeoutMs: Math.min(opts.timeoutMs, 120_000), filters }, { timeoutMs: opts.timeoutMs + 15_000, workspaceId: via.workspaceId })) as LiveQueryResult
 
   const pg = pgTarget(source)
   if (pg) {

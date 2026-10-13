@@ -3,4 +3,4 @@
 import * as actions from '@/app/actions/connector-source'
 import { unwrapActions } from '@/lib/action-result'
 
-export const { testConnectorConnectionAction, scanConnectorSchemaAction, scanDataSourceSchema, getDataSourceTableSample, previewRestConnection, testAndScanDataSource } = unwrapActions(actions)
+export const { testConnectorConnectionAction, scanConnectorSchemaAction, scanDataSourceSchema, getDataSourceTableSample, previewRestConnection, testAndScanDataSource, getConnectorNetworkInfo } = unwrapActions(actions)
