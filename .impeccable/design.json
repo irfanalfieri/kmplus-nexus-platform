@@ -26,7 +26,7 @@
       "title": { "displayName": "Panel / dialog title", "purpose": "SettingsPanel h2, dialog titles, EmptyState titles." },
       "body": { "displayName": "Body", "purpose": "All UI text and table cells (14px)." },
       "body-strong": { "displayName": "Body strong", "purpose": "Buttons, StateMark words, current rail item, Notice titles." },
-      "brand": { "displayName": "Brand", "purpose": "'Nexus' beside the KM+ wordmark in the rail only." },
+      "brand": { "displayName": "Brand", "purpose": "'Nexus' beside the KM+ logo in the rail only." },
       "data": { "displayName": "Data (Plex Mono)", "purpose": "Summary lines, FlowLine bus names, times, ids, counts; tabular figures." },
       "label": { "displayName": "Label (Plex Mono caps)", "purpose": "Table column heads, menu group labels, rail group headings. Never a kicker above a title." },
       "readout": { "displayName": "Readout (Plex Mono)", "purpose": "Large numeric readouts." }
@@ -157,7 +157,7 @@
       "Do keep the rail Teal 100 in both themes, and keep corners at 2px."
     ],
     "donts": [
-      "Don't use raw Tailwind palette classes (`bg-red-500`, `text-gray-600`) or raw hex in components. The KM+ wordmark's Teal 30 plus is the single brand-asset exception.",
+      "Don't use raw Tailwind palette classes (`bg-red-500`, `text-gray-600`) or raw hex in components. The official logo files are the only brand assets with their own colours.",
       "Don't put a drop shadow on anything that sits on the board. Only dialogs, menus and toasts are Raised.",
       "Don't use rounded corners above 2px. Reserve `rounded-full` for avatars and thin progress tracks.",
       "Don't show state as a coloured pill or colour alone.",

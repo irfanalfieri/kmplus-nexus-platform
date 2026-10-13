@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation'
 import { Activity, BarChart3, BookOpen, Database, LayoutDashboard, Plug, Scale, Settings, Shield, ShieldCheck, Workflow, type LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { NAV_GROUPS, sectionHref, type Section } from '@/lib/navigation'
-import { KmWordmark } from '@/components/brand/km-wordmark'
+import { KmLogo } from '@/components/brand/km-logo'
 import WorkspaceSwitcher from '@/components/workspace/workspace-switcher'
 import { useT } from '@/components/i18n/i18n-provider'
 
@@ -35,9 +35,9 @@ export default function Sidebar({ attention, onNavigate }: { attention: { qualit
 
   return (
     <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
-      <div className="flex items-center gap-2.5 px-5 pt-5 pb-4">
-        <KmWordmark className="h-[22px] text-sidebar-accent-foreground" />
-        <span className="text-[15px] font-light tracking-wide text-sidebar-accent-foreground">{t('shell.product')}</span>
+      <div className="flex items-end gap-2.5 px-5 pt-5 pb-4">
+        <KmLogo tone="onDark" className="h-9" priority />
+        <span className="pb-0.5 text-[15px] font-light tracking-wide text-sidebar-accent-foreground">{t('shell.product')}</span>
       </div>
       <div className="px-3 pb-3">
         <WorkspaceSwitcher />

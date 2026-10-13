@@ -33,12 +33,12 @@ Layers of the app (one screen each): Overview, Data Sources, Connectors, Pipelin
 ## Brand Commitments
 
 - KMPlus (KM+) colour guide: `C:\Users\Irfan Alfieri\Downloads\KMPlus Color Palette.pdf` (not in the repo). "Cool Green" (Teal) is the anchor colour of every KM+ identity, paired with neutral black and white; Cyan and Purple are supporting families; each family has ten shades (10–100) with HEX/RGB/CMYK. The guide cites WCAG contrast guidance.
-- Logo: the thin geometric "KM+" wordmark, recreated in code until an official file is supplied (confirmed 2026-10-12). Product name: "KMPlus Nexus".
+- Logo: the official KM+ logo ("KM PLUS" lettering with teal rays), supplied 2026-10-13: `public/brand/kmplus-logo-on-dark.png` (white letters, the original) and `kmplus-logo-on-light.png` (letters in KM+ ink); icons are the rays alone. Product name: "KMPlus Nexus".
 
 ## Evidence on Hand
 
 - Real product functionality and test data (`test-data/`); no customer logos, testimonials or metrics exist and none may be invented.
-- The colour guide PDF above; no official logo file, font licence or typography guide was supplied.
+- The colour guide PDF above and the official logo (2026-10-13); no font licence or typography guide was supplied.
 
 ## Product Principles
 

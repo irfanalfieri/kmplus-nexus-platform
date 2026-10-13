@@ -3,7 +3,7 @@ import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { buttonVariants } from '@/components/ui/button'
-import { KmWordmark } from '@/components/brand/km-wordmark'
+import { KmLogo } from '@/components/brand/km-logo'
 import { FlowLine } from '@/components/ui/flow-line'
 import { cn } from '@/lib/utils'
 
@@ -29,7 +29,7 @@ export default async function Page() {
     <main className="flex min-h-screen flex-col bg-background text-foreground">
       <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-4 py-5 sm:px-6">
         <span className="flex items-center gap-2.5">
-          <KmWordmark className="h-5" />
+          <KmLogo className="h-9" priority />
           <span className="text-base font-semibold tracking-tight">Nexus</span>
         </span>
         <Link href="/sign-in" className={buttonVariants({ variant: 'ghost' })}>

@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Notice } from '@/components/ui/notice'
-import { KmWordmark } from '@/components/brand/km-wordmark'
+import { KmLogo } from '@/components/brand/km-logo'
 
 /**
  * The frame of every sign-in screen: the board, the KM+ wordmark with "Nexus"
@@ -24,7 +24,7 @@ export function AuthShell({ children, className }: { children: React.ReactNode; 
         className="mb-6 flex items-center gap-2.5 rounded-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
         aria-label="KMPlus Nexus home"
       >
-        <KmWordmark className="h-5" title="KMPlus" />
+        <KmLogo className="h-9" priority />
         <span className="text-base font-semibold tracking-tight" aria-hidden>
           Nexus
         </span>

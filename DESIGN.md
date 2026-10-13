@@ -253,7 +253,7 @@ The red (#da1e28, #a2191f, #fa4d56, #ff8389) and yellow (#b28600, #8e6a00, #f1c2
 ### Neutral
 - **Board** (`board`, Gray 10): the app ground. **Panel** (`panel`, white): flat plates, the top bar, dialogs and menus. **Ink** (`ink`, Gray 100): all text.
 - **Muted Ink** (`muted-ink`, Gray 70): descriptions, column heads and meta lines. **Rule** (`rule`, Gray 20): every 1px border and divider. **Input Stroke** (`input-stroke`, Gray 50): field borders, so controls clear 3:1.
-- **The Rail** (`rail`, Teal 100): the shell. It uses Rail Accent (Teal 90) for hover and the current item, Rail Ink (Gray 30) for text, Rail Muted (Gray 50) for group labels and icons, and Rail Signal (Teal 30) for the current-item edge, the current icon, the focus ring and the plus in the wordmark.
+- **The Rail** (`rail`, Teal 100): the shell. It uses Rail Accent (Teal 90) for hover and the current item, Rail Ink (Gray 30) for text, Rail Muted (Gray 50) for group labels and icons, and Rail Signal (Teal 30) for the current-item edge, the current icon and the focus ring.
 - **Dark board:** board Gray 100, panel `#1b2023`, popover Gray 90, muted ink Gray 40 and rules Gray 80.
 
 ### Named Rules
@@ -277,7 +277,7 @@ The red (#da1e28, #a2191f, #fa4d56, #ff8389) and yellow (#b28600, #8e6a00, #f1c2
 - **Title** (600, 1rem, 1.5rem line height): panel h2s (SettingsPanel), dialog titles and EmptyState titles.
 - **Body** (400, 0.875rem, 1.25rem line height): all UI text, table cells and descriptions. Descriptions are capped at about 48rem (`max-w-3xl`). Inputs use 1rem below 768px so mobile browsers do not zoom.
 - **Body strong** (500, 0.875rem): buttons, StateMark words, the current rail item and Notice titles.
-- **Brand** (300, 15px, wide tracking): the "Nexus" product name next to the KM+ wordmark, used only in the rail.
+- **Brand** (300, 15px, wide tracking): the "Nexus" product name next to the KM+ logo, used only in the rail.
 - **Data** (Mono 400, 0.75rem, tabular): the PageHeader summary line, FlowLine bus names, times, ids and row counts.
 - **Label** (Mono 500, 11px, 0.025em, uppercase): table column heads, menu group labels and rail group headings (the rail uses 0.08em tracking). Labels name a column or group. They never sit above a page title.
 - **Readout** (Mono 400, 1.875rem, tabular): large numeric readouts.
@@ -344,7 +344,7 @@ Dialogs come in sizes sm 420, md 560, lg 720, xl 960 and full width. The header 
 Menus are popovers with a minimum width of 224px and 1px Rule, using the Raised shadow. Items are at least 32px tall and highlight with the Muted fill. Group labels use the mono Label style, and radio checks are Teal 70. Toasts sit bottom-right (bottom-centre on mobile), at most three at a time, and are announced politely. They use a teal check or red octagon icon and offer an optional Undo action in cyan. They stay up for 5s, or 8s when they carry an action, and pause on hover or focus.
 
 ### Navigation
-- **Rail:** the KM+ wordmark (thin geometric strokes in rail-bright with a Teal 30 plus) and "Nexus" in light 15px text, then the workspace plate, then the groups. Group headings use the mono Label style in Rail Muted, with a 16px Rail Muted icon and 14px Rail Ink text on each item. Hovered and current items take the Rail Accent fill. The current item adds a 3px Teal 30 left edge, a Teal 30 icon, a 500 weight and `aria-current="page"`. Data quality shows a red mono count with an sr-only sentence.
+- **Rail:** the official KM+ logo (`KmLogo tone="onDark"`, 36px tall: white "KM PLUS" lettering with the teal rays) and "Nexus" in light 15px text, bottom-aligned, then the workspace plate, then the groups. Group headings use the mono Label style in Rail Muted, with a 16px Rail Muted icon and 14px Rail Ink text on each item. Hovered and current items take the Rail Accent fill. The current item adds a 3px Teal 30 left edge, a Teal 30 icon, a 500 weight and `aria-current="page"`. Data quality shows a red mono count with an sr-only sentence.
 - **Top bar:** a 56px white bar with a bottom Rule. The breadcrumb reads workspace (muted) / screen (500 weight).
 - **Profile menu:** a name plus organisation, the 32px Teal 70 initials avatar, and theme, language and sign-out options. Language and theme are stored in the `nexus_lang` and `nexus_theme` cookies.
 
@@ -372,7 +372,8 @@ An honest empty screen. The icon sits on a dashed, open Paused Gray bus, followe
 - **Do** keep the rail Teal 100 in both themes, and keep corners at 2px.
 
 ### Don't:
-- **Don't** use raw Tailwind palette classes (`bg-red-500`, `text-gray-600`) or raw hex in components. The KM+ wordmark's Teal 30 plus is the single brand-asset exception.
+- **Do** use the official logo through `components/brand/km-logo.tsx` only: `public/brand/kmplus-logo-on-dark.png` (white letters, supplied 2026-10-13) on the rail and dark panels, `kmplus-logo-on-light.png` (the same file with the letters in KM+ ink #121619) on light grounds, `tone="auto"` where the ground follows the theme. Size it by height (36px in the rail and on auth pages); never redraw, recolour the rays, stretch or put it on a busy ground. Favicon and app icons (`public/icon-32x32.png`, `icon-192x192.png`, `apple-icon.png`) are the rays alone, on the rail colour where a solid tile is needed.
+- **Don't** use raw Tailwind palette classes (`bg-red-500`, `text-gray-600`) or raw hex in components. The official logo files are the only brand assets with their own colours.
 - **Don't** put a drop shadow on anything that sits on the board. Only dialogs, menus and toasts are Raised.
 - **Don't** use rounded corners above 2px. Reserve `rounded-full` for avatars and thin progress tracks.
 - **Don't** show state as a coloured pill or colour alone.
