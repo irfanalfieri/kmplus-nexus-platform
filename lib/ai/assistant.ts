@@ -66,7 +66,7 @@ async function complete(ctx: WorkspaceContext, status: AiStatus, messages: ChatM
  * Asks the model and checks the answer; one retry with the problem explained.
  * Audits the feature, model and outcome (never the prompt or data).
  */
-export async function askModel<T>(ctx: WorkspaceContext, feature: 'mapping' | 'rule' | 'ask' | 'pipeline' | 'diagnosis', messages: ChatMessage[], check: (answer: unknown) => T): Promise<{ value: T; model: string }> {
+export async function askModel<T>(ctx: WorkspaceContext, feature: 'mapping' | 'rule' | 'ask' | 'pipeline' | 'diagnosis' | 'connector' | 'catalog', messages: ChatMessage[], check: (answer: unknown) => T): Promise<{ value: T; model: string }> {
   const status = await aiStatus(ctx.workspaceId)
   if (!status.ready) throw new Error(status.message)
   let conversation = messages

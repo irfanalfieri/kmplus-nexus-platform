@@ -3,4 +3,4 @@
 import * as actions from '@/app/actions/ai'
 import { unwrapActions } from '@/lib/action-result'
 
-export const { getAiSettings, setAiProvider, suggestMapping, draftRule, askData, draftPipeline, diagnoseRun, applyDiagnosisFix } = unwrapActions(actions)
+export const { getAiSettings, setAiProvider, suggestMapping, draftRule, askData, draftPipeline, diagnoseRun, applyDiagnosisFix, suggestConnector } = unwrapActions(actions)

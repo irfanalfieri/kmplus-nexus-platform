@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { and, desc, eq, isNull, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/lib/db'
-import { agents, dataSources, executionLogs, nexusDatasets, pipelineRunRejects, pipelines, workspaces } from '@/lib/db/schema'
+import { agents, connectorInstalls, dataSources, executionLogs, nexusDatasets, pipelineRunRejects, pipelines, workspaces } from '@/lib/db/schema'
 import { requireWorkspace } from '@/lib/auth/session'
 import { recordAudit } from '@/lib/audit'
 import { diffObjects } from '@/lib/audit-diff'
@@ -17,6 +17,8 @@ import { askPrompt, checkAsk, checkMapping, checkRule, mappingPrompt, rulePrompt
 import { runWidget } from '@/lib/analytics/run'
 import type { DatasetColumn } from '@/lib/analytics/query'
 import { guard } from '@/lib/server-action'
+import { checkConnectorAnswer, connectorPrompt, detectConnectors, scrubPasted, type ConnectorSuggestion } from '@/lib/ai/discovery'
+import { CONNECTOR_CATALOG } from '@/lib/connectors/catalog'
 import { applyFix, checkDiagnosis, checkPipelinePlan, diagnosisPrompt, pipelinePrompt, redactMessage, FIX_KINDS, type PlanSource } from '@/lib/ai/pipelines'
 import { definitionSchema, scheduleSchema, stepTitle, DEFAULT_SCHEDULE, SEVERITIES, TRANSFORMS, type PipelineNode } from '@/lib/pipelines/definition'
 import { savePipelineAs } from '@/lib/pipelines/publish'
@@ -275,6 +277,41 @@ async function applyDiagnosisFixImpl(input: z.input<typeof fixInput>) {
   return saved
 }
 
+// ── AI-4: which connector fits? ──────────────────────────────────────────────
+
+const connectorInput = z.object({
+  text: z.string().trim().min(3, 'Paste a URL, a file\'s first line or an error message').max(4000),
+  /** Rules only (hints under a failed connection test): never waits for a model. */
+  rulesOnly: z.boolean().default(false),
+})
+
+/**
+ * Suggests connectors for a pasted URL, file header or error. Rules answer first; the model
+ * (when one is set up) only fills in when they find nothing. Secrets are scrubbed before either.
+ */
+async function suggestConnectorImpl(input: z.input<typeof connectorInput>) {
+  const ctx = await requireWorkspace()
+  const data = connectorInput.parse(input)
+  const text = scrubPasted(data.text)
+  const catalog = CONNECTOR_CATALOG.map((c) => ({ slug: c.slug, name: c.name, category: c.category, description: c.description }))
+  let suggestions: ConnectorSuggestion[] = detectConnectors(text, catalog)
+  let via: 'rules' | 'ai' = 'rules'
+  let model: string | null = null
+  if (!suggestions.length && !data.rulesOnly && (await aiStatus(ctx.workspaceId)).ready) {
+    const res = await askModel(ctx, 'connector', connectorPrompt({ text, catalog }), (answer) => checkConnectorAnswer(answer, catalog))
+    suggestions = res.value
+    via = 'ai'
+    model = res.model
+  }
+  const installs = await db.select({ slug: connectorInstalls.connectorSlug, installedAt: connectorInstalls.installedAt }).from(connectorInstalls).where(eq(connectorInstalls.workspaceId, ctx.workspaceId))
+  const installed = new Set(installs.filter((i) => i.installedAt).map((i) => i.slug))
+  return {
+    via,
+    model,
+    suggestions: suggestions.map((s) => ({ ...s, name: catalog.find((c) => c.slug === s.slug)?.name ?? s.slug, installed: installed.has(s.slug) })),
+  }
+}
+
 export async function getAiSettings(...args: Parameters<typeof getAiSettingsImpl>) {
   return guard(() => getAiSettingsImpl(...args))
 }
@@ -305,4 +342,8 @@ export async function diagnoseRun(...args: Parameters<typeof diagnoseRunImpl>) {
 
 export async function applyDiagnosisFix(...args: Parameters<typeof applyDiagnosisFixImpl>) {
   return guard(() => applyDiagnosisFixImpl(...args))
+}
+
+export async function suggestConnector(...args: Parameters<typeof suggestConnectorImpl>) {
+  return guard(() => suggestConnectorImpl(...args))
 }

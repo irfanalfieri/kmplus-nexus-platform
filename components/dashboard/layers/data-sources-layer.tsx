@@ -1,5 +1,7 @@
 'use client'
 
+import { AiConnectorSuggest } from '@/components/ai/ai-connector-suggest'
+import { suggestConnector } from '@/lib/actions/ai'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { Database, Eye, KeyRound, Loader2, MoreHorizontal, Pencil, Plus, RefreshCw, Save, Trash2, Upload } from 'lucide-react'
@@ -426,7 +428,19 @@ function AddSourceDialog({
   const [scan, setScan] = useState<SchemaScanResult | null>(null)
   const [restPreview, setRestPreview] = useState<RestRequestPreview | null>(null)
   const [restSending, setRestSending] = useState(false)
+  const [hint, setHint] = useState<{ slug: string; name: string; reason: string; installed: boolean } | null>(null)
   const connector = type ? getConnectorDefinition(type) : undefined
+
+  // A failed test: does the error look like a different system? (rules only, never waits for a model)
+  const checkError = async (message: string) => {
+    try {
+      const res = await suggestConnector({ text: message, rulesOnly: true })
+      const top = res.suggestions.find((x) => x.confidence === 'high' && x.slug !== type)
+      setHint(top ? { slug: top.slug, name: top.name, reason: top.reason, installed: top.installed } : null)
+    } catch {
+      setHint(null)
+    }
+  }
   const valid = type ? credentialsValid(type, values) : false
   const dirty = Boolean(name || type)
 
@@ -453,10 +467,15 @@ function AddSourceDialog({
     setTested(false)
     setScan(null)
     setRestPreview(null)
+    setHint(null)
     try {
       const result = await testAndScanDataSource(type, values)
       if ('preview' in result && result.preview) setRestPreview(result.preview as RestRequestPreview)
-      if (!result.ok) return setError(result.message)
+      if (!result.ok) {
+        setError(result.message)
+        void checkError(result.message)
+        return
+      }
       setScan(result.scan)
       setMessage(t('sources.connectedFound', { count: result.scan.tables.length, method: result.scan.method }))
       setTested(true)
@@ -547,6 +566,18 @@ function AddSourceDialog({
           )}
         </div>
 
+        <AiConnectorSuggest
+          onUse={(slug) => {
+            setType(slug)
+            setValues(defaultCredentialsForConnector(slug))
+            setTested(false)
+            setError('')
+            setMessage('')
+            setScan(null)
+            setRestPreview(null)
+          }}
+        />
+
         {connector && (
           <fieldset className="space-y-3 rounded-md border border-border bg-muted/40 p-4">
             <legend className="px-1 text-sm font-medium">{t('sources.credentialsFor', { connector: connector.name })}</legend>
@@ -567,6 +598,21 @@ function AddSourceDialog({
         )}
 
         {error && <Notice tone="danger">{error}</Notice>}
+        {hint && (
+          <Notice
+            tone="info"
+            live={false}
+            action={
+              hint.installed ? (
+                <Button size="sm" variant="outline" onClick={() => { setType(hint.slug); setValues(defaultCredentialsForConnector(hint.slug)); setHint(null); setError('') }}>
+                  {t('assist.connector.switchTo', { name: hint.name })}
+                </Button>
+              ) : undefined
+            }
+          >
+            {t('assist.connector.errorHint', { name: hint.name, reason: hint.reason })}
+          </Notice>
+        )}
         {tested && message && <Notice tone="success">{message}</Notice>}
       </div>
     </Modal>

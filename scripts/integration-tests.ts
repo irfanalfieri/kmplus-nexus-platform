@@ -29,7 +29,8 @@ import { readFileSync } from 'node:fs'
 import { addAgentDataSource, createAgent, listAgents, revokeAgent } from '@/lib/actions/agents'
 import { getDataSourceTableSample } from '@/lib/actions/connector-source'
 import { parseConfig, runAgent } from '../agent/nexus-agent'
-import { applyDiagnosisFix, askData, diagnoseRun, draftPipeline, draftRule, getAiSettings, setAiProvider, suggestMapping } from '@/lib/actions/ai'
+import { applyDiagnosisFix, askData, diagnoseRun, draftPipeline, draftRule, getAiSettings, setAiProvider, suggestConnector, suggestMapping } from '@/lib/actions/ai'
+import { cookies } from 'next/headers'
 import { startLlmMock } from './test/llm-mock'
 import { POST as agentHello } from '@/app/api/agent/v1/hello/route'
 import { GET as agentTasks } from '@/app/api/agent/v1/tasks/route'
@@ -45,7 +46,7 @@ import { POST as postRuns } from '@/app/api/v1/pipelines/[id]/runs/route'
 import { GET as getRun } from '@/app/api/v1/runs/[id]/route'
 import { deleteRule, listRuleVersions, listRules, saveRule, testRule } from '@/lib/actions/rules'
 import { approveRows, dismissRows, fixRow, getQualityOverview, listQuarantine, replayRows, restoreRows } from '@/lib/actions/quality'
-import { getCatalogSample, getLineage, getQualityHistory, listCatalog, saveCatalogEntry, saveDomainMapping } from '@/lib/actions/catalog'
+import { getCatalogSample, getLineage, getQualityHistory, listCatalog, saveCatalogEntry, saveDomainMapping, askCatalog } from '@/lib/actions/catalog'
 import { createApiKey, revokeApiKey } from '@/lib/actions/api-keys'
 import { uploadFilePart } from '@/lib/actions/files'
 import { GET as getDataset } from '@/app/api/v1/datasets/[name]/route'
@@ -1166,12 +1167,38 @@ async function main() {
         }
         await rejectsWith(() => diagnoseRun({ runId: 'run_not_here' }), /Run not found/)
 
+        // AI-4: rules answer known signatures without the model; the model only fills in.
+        const before4 = llm.requests.length
+        const oracle = await suggestConnector({ text: 'ORA-12541: TNS:no listener at db01:1521' })
+        assert.equal(oracle.via, 'rules')
+        assert.equal(oracle.suggestions[0].slug, 'oracle')
+        assert.equal(llm.requests.length, before4, 'rules need no model call')
+        const vague = await suggestConnector({ text: 'our vendor gives us a JSON feed every night' })
+        assert.equal(vague.via, 'ai')
+        assert.equal(vague.suggestions[0].slug, 'rest')
+        assert.deepEqual((await suggestConnector({ text: 'nothing matches here', rulesOnly: true })).suggestions, [], 'rules only never asks the model')
+        const secret = await suggestConnector({ text: 'postgres://nexus:TopSecret99@db.internal:5432/hr' })
+        assert.equal(secret.suggestions[0].slug, 'postgres')
+        assert.ok(!JSON.stringify(llm.requests).includes('TopSecret99'), 'pasted passwords never reach the model')
+
+        // AI-5: the model re-ranks catalog items; invented columns are dropped; no rows are sent.
+        const answerAi = await askCatalog({ question: 'where are the people?' })
+        assert.equal(answerAi.via, 'ai')
+        assert.ok(answerAi.results.length === 1 && !answerAi.results[0].columns.includes('not_a_column'))
+        assert.ok(!JSON.stringify(llm.requests.at(-1)!.messages).includes('@kmplus.test'), 'catalog search sends names, not rows')
+
         setTestUser(viewer)
         await switchWorkspace(adminWs)
         await rejectsWith(() => suggestMapping({ columns: [{ name: 'id', type: 'integer' }] }), /Your role/)
         setTestUser(admin)
         await switchWorkspace(adminWs)
         await setAiProvider({ provider: 'off' })
+        const answerKeywords = await askCatalog({ question: `${RUN} people` })
+        assert.equal(answerKeywords.via, 'keywords')
+        assert.ok(answerKeywords.results.some((r) => r.name === `${RUN}_people`), 'synonym ranking finds the dataset without a model')
+        ;(await cookies()).set('nexus_lang', 'id')
+        await rejectsWith(() => askData({ question: 'How many?' }), /dimatikan|nonaktif/i)
+        ;(await cookies()).delete('nexus_lang')
         await rejectsWith(() => askData({ question: 'How many?' }), /turned off/)
         await rejectsWith(() => setAiProvider({ provider: 'agent', agentId: 'nope' }), /Agent not found/)
         await setAiProvider({ provider: 'server' })

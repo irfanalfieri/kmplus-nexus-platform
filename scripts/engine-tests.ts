@@ -27,6 +27,10 @@ import { landingSection, settingsHref } from '@/lib/navigation'
 import { localizeCheck, parseCheck } from '@/lib/pipelines/check-messages'
 import { applyFix, checkDiagnosis, checkPipelinePlan, redactMessage } from '@/lib/ai/pipelines'
 import { render } from '@/lib/email'
+import { SERVER_ERRORS } from '@/lib/i18n/server-errors-table'
+import { localizeServerError } from '@/lib/i18n/server-errors'
+import { checkCatalogAnswer, checkConnectorAnswer, detectConnectors, rankCatalog, scrubPasted } from '@/lib/ai/discovery'
+import { serverErrorTemplates } from './test/server-error-sources'
 import { localizeStepTitle } from '@/components/pipelines/step-title'
 import { alertEmail, inviteEmail } from '@/lib/email-templates'
 import { BUILTIN_MAPPING_TEMPLATES, PIPELINE_TEMPLATES, applyMappingTemplate, buildPipelineTemplate, mapToEntity } from '@/lib/pipelines/templates'
@@ -876,6 +880,51 @@ async function main() {
     assert.deepEqual(alert.details?.map((d) => d.label), ['Pipeline', 'Result'])
     assert.deepEqual(alert.lines, ['Something odd'])
     assert.match(alert.action!.url, /\/dashboard\/pipelines$/)
+  })
+
+  await test('server errors: every thrown message has a translation; actions answer in the reader\'s language', () => {
+    const known = new Set(SERVER_ERRORS.map((e) => e.en))
+    const missing = serverErrorTemplates().filter((m) => !known.has(m.en))
+    assert.deepEqual(missing, [], `add these to lib/i18n/server-errors-table.ts (with an Indonesian translation): ${missing.map((m) => `${m.en} (${m.file})`).join(' | ')}`)
+    for (const e of SERVER_ERRORS) {
+      const ph = (s: string) => (s.match(/\{p\d+\}/g) ?? []).sort().join(',')
+      assert.equal(ph(e.id), ph(e.en), `placeholders differ: ${e.en}`)
+      assert.ok(e.id.trim(), `empty translation: ${e.en}`)
+    }
+    assert.equal(localizeServerError('Agent not found', 'en'), 'Agent not found')
+    assert.notEqual(localizeServerError('Agent not found', 'id'), 'Agent not found')
+    assert.equal(localizeServerError('name: Required', 'id'), 'name: Wajib diisi', 'zod issues keep their path')
+    assert.equal(localizeServerError('String must contain at most 120 character(s)', 'id'), 'Maksimal 120 karakter')
+    assert.equal(localizeServerError('email is required', 'id'), 'email wajib diisi', 'check messages too')
+    assert.equal(localizeServerError('Totally new message', 'id'), 'Totally new message', 'unknown text is shown as written')
+  })
+
+  await test('AI-4 / AI-5: connectors from URLs, headers and errors; catalog answers without a model', () => {
+    const catalog = ['sap', 'oracle', 'mysql', 'postgres', 'rest', 'salesforce', 'snowflake', 'supabase', 'talenta', 'ldap', 'file', 'kmplus'].map((slug) => ({ slug, name: slug, category: 'x', description: '' }))
+    const top = (text: string) => detectConnectors(text, catalog)[0]?.slug
+    assert.equal(top('https://acme.my.salesforce.com/services/data'), 'salesforce')
+    assert.equal(top('ORA-12541: TNS:no listener'), 'oracle')
+    assert.equal(top('password authentication failed for user "nexus"'), 'postgres')
+    assert.equal(top('PERNR;ENAME;BEGDA;ORGEH;PLANS;BUKRS'), 'sap', 'SAP PA0001 export header')
+    assert.equal(top('sAMAccountName,mail,department,title'), 'ldap')
+    assert.equal(top('employee_no,name,dept,join_date'), 'file', 'a plain header is an uploaded file')
+    assert.equal(top('https://kms.kmplus.co.id/nexus/v1/entities'), 'kmplus')
+    assert.equal(scrubPasted('postgres://nexus:S3cret!@db.example.com:5432/hr token=abc123'), 'postgres://•••@db.example.com:5432/hr token=•••')
+    assert.throws(() => checkConnectorAnswer({ suggestions: [{ slug: 'sharepoint' }] }, catalog), /Unknown connector/)
+
+    const items = [
+      { key: 'dataset:training_history', kind: 'dataset' as const, name: 'training_history', sourceName: null, description: '', tags: [], domains: [], columns: [{ name: 'employee_code' }, { name: 'course_name' }, { name: 'hours' }, { name: 'org_code', doc: 'Department code' }] },
+      { key: 'dataset:employees', kind: 'dataset' as const, name: 'employees', sourceName: null, description: 'Active staff from SAP', tags: ['hr'], domains: ['employee'], columns: [{ name: 'employee_code' }, { name: 'full_name' }, { name: 'org_code' }] },
+      { key: 'dataset:ad_users', kind: 'dataset' as const, name: 'ad_users', sourceName: null, description: '', tags: [], domains: [], columns: [{ name: 'username' }, { name: 'mail' }] },
+    ]
+    const hits = rankCatalog('Where is training hours by department?', items)
+    assert.equal(hits[0].key, 'dataset:training_history')
+    assert.ok(hits[0].columns.includes('hours') && hits[0].columns.includes('org_code'), 'the columns that answer it')
+    assert.equal(rankCatalog('di mana jam pelatihan per departemen', items)[0].key, 'dataset:training_history', 'Indonesian questions too')
+    assert.equal(rankCatalog('data karyawan', items)[0].key, 'dataset:employees')
+    assert.deepEqual(rankCatalog('the of where', items), [])
+    assert.deepEqual(checkCatalogAnswer({ results: [{ key: 'dataset:employees', columns: ['org_code', 'salary'], reason: 'x' }] }, items)[0].columns, ['org_code'], 'invented columns are dropped')
+    assert.throws(() => checkCatalogAnswer({ results: [{ key: 'dataset:payroll' }] }, items), /Unknown item/)
   })
 
   await test('i18n: both languages, plurals, fallbacks; landing and settings URLs', () => {

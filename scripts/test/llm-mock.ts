@@ -60,6 +60,13 @@ export async function startLlmMock(port = 0) {
           schedule: { type: 'daily', time: '02:00' },
           explanation: 'Reads the table and writes a dataset daily at 02:00 WIB.',
         }
+      } else if (system.startsWith('You recommend which KMPlus Nexus connector')) {
+        answer = { suggestions: [{ slug: 'rest', confidence: 'medium', reason: 'An HTTP API is the closest fit.' }] }
+      } else if (system.startsWith('You find where data lives')) {
+        // The first listed item, with one real and one invented column.
+        const list = JSON.parse(system.slice(system.lastIndexOf('\n[') + 1)) as { key: string; columns: string[] }[]
+        const first = list[0]
+        answer = { results: first ? [{ key: first.key, columns: [first.columns[0]?.split(':')[0] ?? '', 'not_a_column'], reason: 'It holds the people.' }] : [] }
       } else if (system.startsWith('You diagnose')) {
         const input = JSON.parse(user) as { steps: { id: string; type: string; detail: string }[] }
         const map = input.steps.find((s) => s.type === 'map')

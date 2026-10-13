@@ -21,6 +21,8 @@ import { accessFor, applyMasks, liveTableAccess } from '@/lib/governance/masking
 import { DOMAIN_BY_NAME } from '@/lib/domain/model'
 import type { SchemaScanResult } from '@/lib/connectors/types'
 import { guard } from '@/lib/server-action'
+import { aiStatus, askModel } from '@/lib/ai/assistant'
+import { catalogPrompt, checkCatalogAnswer, rankCatalog, type SearchHit, type SearchItem } from '@/lib/ai/discovery'
 
 type Column = { name: string; type: string }
 type Entry = typeof catalogEntries.$inferSelect
@@ -374,6 +376,45 @@ async function deleteDomainMappingImpl(rawEntity: string) {
   await db.delete(domainMappings).where(and(eq(domainMappings.workspaceId, ctx.workspaceId), eq(domainMappings.entity, entity)))
   await recordAudit(ctx, { action: 'DELETE', resource: 'domain_mapping', resourceId: entity })
   revalidatePath('/dashboard', 'layout')
+}
+
+// ── AI-5: natural-language catalog search ───────────────────────────────────
+
+const askCatalogInput = z.object({ question: z.string().trim().min(3, 'Ask where some data is').max(500) })
+
+/**
+ * "Where is training hours by department?" → catalog items and the columns that answer it.
+ * Synonym ranking always runs (no model needed); a configured model re-ranks the shortlist
+ * and explains each hit. Only names, docs and column names are sent, never rows.
+ */
+async function askCatalogImpl(input: z.input<typeof askCatalogInput>) {
+  const ctx = await requireWorkspace()
+  const { question } = askCatalogInput.parse(input)
+  const { items: all } = await listCatalogImpl()
+  const items: SearchItem[] = all.map((i) => ({ key: i.key, kind: i.kind, name: i.name, sourceName: i.sourceName, description: i.description, tags: i.tags, domains: i.domains, columns: i.columns.map((c) => ({ name: c.name, doc: c.doc })) }))
+  let hits: SearchHit[] = rankCatalog(question, items, 5)
+  let via: 'keywords' | 'ai' = 'keywords'
+  let model: string | null = null
+  if ((await aiStatus(ctx.workspaceId)).ready && items.length) {
+    // The model sees the best keyword candidates (or everything in a small catalog).
+    const shortlist = items.length <= 40 ? items : rankCatalog(question, items, 40).map((h) => items.find((i) => i.key === h.key)!).filter(Boolean)
+    if (shortlist.length) {
+      try {
+        const res = await askModel(ctx, 'catalog', catalogPrompt({ question, items: shortlist }), (answer) => checkCatalogAnswer(answer, shortlist))
+        hits = res.value
+        via = 'ai'
+        model = res.model
+      } catch (err) {
+        // The keyword answer still stands when the model fails.
+        console.error('[catalog] AI search failed:', err instanceof Error ? err.message : err)
+      }
+    }
+  }
+  return { via, model, results: hits.map((h) => ({ ...h, name: all.find((i) => i.key === h.key)?.name ?? h.key, kind: all.find((i) => i.key === h.key)?.kind ?? 'dataset', sourceName: all.find((i) => i.key === h.key)?.sourceName ?? null })) }
+}
+
+export async function askCatalog(...args: Parameters<typeof askCatalogImpl>) {
+  return guard(() => askCatalogImpl(...args))
 }
 
 export async function listCatalog(...args: Parameters<typeof listCatalogImpl>) {

@@ -1,5 +1,6 @@
 'use client'
 
+import { AiCatalogAsk } from '@/components/ai/ai-catalog-ask'
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { BookOpen, Database, Eye, Loader2, MousePointerClick, RefreshCw, Save, Search, SearchX, Server, Zap } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -102,6 +103,16 @@ export default function CatalogLayer() {
           <option value="source_table">{t('insights.catalog.kindSourceTables')}</option>
         </NativeSelect>
       </div>
+
+      {data && data.items.length > 0 && (
+        <AiCatalogAsk
+          onOpen={(key) => {
+            setKind('all')
+            setQuery('')
+            setSelectedKey(key)
+          }}
+        />
+      )}
 
       {!data ? (
         !error && (
