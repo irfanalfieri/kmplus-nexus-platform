@@ -95,7 +95,7 @@ export default function GovernanceLayer() {
         <>
           <Controls data={data} />
 
-          <section className="rounded-lg border border-border bg-card p-5" aria-labelledby="gov-policies">
+          <section data-tour="governance-policies" className="rounded-lg border border-border bg-card p-5" aria-labelledby="gov-policies">
             <div className="mb-1 flex items-center gap-2">
               <LockKeyhole className="h-4 w-4 text-muted-foreground" aria-hidden />
               <h2 id="gov-policies" className="text-base font-semibold">{t('insights.governance.policiesTitle')}</h2>

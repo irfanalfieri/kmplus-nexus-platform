@@ -233,7 +233,7 @@ export default function SchedulerMonitoringLayer() {
           <div className="grid gap-6 xl:grid-cols-[1fr_1.2fr]">
             <RunTrend trend={data.trend} />
 
-            <section className="rounded-lg border border-border bg-card p-5" aria-labelledby="mon-health">
+            <section data-tour="monitoring-health" className="rounded-lg border border-border bg-card p-5" aria-labelledby="mon-health">
               <h2 id="mon-health" className="text-base font-semibold">
                 {t('ops.monitoring.healthTitle')}
               </h2>

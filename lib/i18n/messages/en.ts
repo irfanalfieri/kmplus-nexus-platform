@@ -13,6 +13,7 @@ import { connect } from './en/connect'
 import { overview } from './en/overview'
 import { email } from './en/email'
 import { assist } from './en/assist'
+import { tour } from './en/tour'
 
 export const en = {
   common: {
@@ -65,6 +66,7 @@ export const en = {
     analytics: 'Analytics',
     governance: 'Governance',
     settings: 'Settings',
+    help: 'Help & FAQ',
     qualityBadge: '{count, plural, one {# row needs} other {# rows need}} action',
   },
   shell: {
@@ -99,6 +101,7 @@ export const en = {
     analytics: { title: 'Analytics', description: 'Dashboards and questions over your datasets.' },
     governance: { title: 'Governance', description: 'Classification, masking, row filters and erasure.' },
     settings: { title: 'Settings', description: 'Members, access, environments and integrations for this workspace.' },
+    help: { title: 'Help & FAQ', description: 'How Nexus works, step by step, with answers to common questions.' },
   },
   state: {
     live: 'Live',
@@ -463,6 +466,7 @@ export const en = {
   overview,
   email,
   assist,
+  tour,
 } as const
 
 type Widen<T> = T extends string ? string : { [K in keyof T]: Widen<T[K]> }

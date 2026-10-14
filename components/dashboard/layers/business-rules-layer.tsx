@@ -130,7 +130,7 @@ export default function BusinessRulesLayer() {
         description={t('pages.rules.description')}
         actions={
           canEdit && (
-            <Button onClick={() => setEditing(blankRule())} disabled={loading}>
+            <Button data-tour="rules-new" onClick={() => setEditing(blankRule())} disabled={loading}>
               <Plus aria-hidden /> {t('ops.rules.newRule')}
             </Button>
           )

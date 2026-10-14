@@ -248,7 +248,7 @@ export default function DataSourcesLayer() {
               <Button variant="outline" onClick={() => setAdding('destination')}>
                 <Plus /> {t('sources.addDestination')}
               </Button>
-              <Button onClick={() => setAdding('source')}>
+              <Button data-tour="sources-add" onClick={() => setAdding('source')}>
                 <Plus /> {t('sources.addSource')}
               </Button>
             </>
@@ -276,7 +276,7 @@ export default function DataSourcesLayer() {
               action={
                 canManage ? (
                   installedConnectors.length ? (
-                    <Button onClick={() => setAdding('source')}>
+                    <Button data-tour="sources-add" onClick={() => setAdding('source')}>
                       <Plus /> {t('sources.addSource')}
                     </Button>
                   ) : (

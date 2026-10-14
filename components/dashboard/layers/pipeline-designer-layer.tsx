@@ -230,7 +230,7 @@ export default function PipelineDesignerLayer() {
   }
 
   const newButton = editable && (
-    <Button onClick={() => setPicking(true)} disabled={loading}>
+    <Button data-tour="pipelines-new" onClick={() => setPicking(true)} disabled={loading}>
       <Plus /> {t('pipelines.new')}
     </Button>
   )
@@ -323,7 +323,7 @@ export default function PipelineDesignerLayer() {
 
         <ApprovalsPanel refreshKey={approvalsKey} onDecided={() => void load()} history={approvalHistory} onHistoryChange={setApprovalHistory} />
 
-        <section aria-labelledby="pipelines-board" className="rounded-lg border border-border bg-card">
+        <section data-tour="pipelines-board" aria-labelledby="pipelines-board" className="rounded-lg border border-border bg-card">
           <h2 id="pipelines-board" className="sr-only">
             {t('pages.pipelines.title')}
           </h2>

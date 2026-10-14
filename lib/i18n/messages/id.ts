@@ -9,6 +9,7 @@ import { connect } from './id/connect'
 import { overview } from './id/overview'
 import { email } from './id/email'
 import { assist } from './id/assist'
+import { tour } from './id/tour'
 
 /** Bahasa Indonesia. Same shape as en.ts; data and identifiers stay untranslated. */
 export const id: Messages = {
@@ -62,6 +63,7 @@ export const id: Messages = {
     analytics: 'Analitik',
     governance: 'Tata kelola',
     settings: 'Pengaturan',
+    help: 'Bantuan & FAQ',
     qualityBadge: '{count} baris perlu tindakan',
   },
   shell: {
@@ -96,6 +98,7 @@ export const id: Messages = {
     analytics: { title: 'Analitik', description: 'Dasbor dan pertanyaan atas dataset Anda.' },
     governance: { title: 'Tata kelola', description: 'Klasifikasi, penyamaran, filter baris, dan penghapusan data.' },
     settings: { title: 'Pengaturan', description: 'Anggota, akses, lingkungan, dan integrasi ruang kerja ini.' },
+    help: { title: 'Bantuan & FAQ', description: 'Cara kerja Nexus langkah demi langkah, dengan jawaban atas pertanyaan umum.' },
   },
   state: {
     live: 'Aktif',
@@ -460,4 +463,5 @@ export const id: Messages = {
   overview,
   email,
   assist,
+  tour,
 }

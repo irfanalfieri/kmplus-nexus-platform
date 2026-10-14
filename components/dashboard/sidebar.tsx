@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Activity, BarChart3, BookOpen, Database, LayoutDashboard, Plug, Scale, Settings, Shield, ShieldCheck, Workflow, type LucideIcon } from 'lucide-react'
+import { Activity, BarChart3, BookOpen, Database, LayoutDashboard, LifeBuoy, Plug, Scale, Settings, Shield, ShieldCheck, Workflow, type LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { NAV_GROUPS, sectionHref, type Section } from '@/lib/navigation'
 import { KmLogo } from '@/components/brand/km-logo'
@@ -21,11 +21,12 @@ export const SECTION_ICONS: Record<Section, LucideIcon> = {
   analytics: BarChart3,
   governance: Shield,
   settings: Settings,
+  help: LifeBuoy,
 }
 
 export function currentSection(pathname: string): Section | null {
   const slug = pathname.split('/')[2]
-  return (NAV_GROUPS.flatMap((g) => g.items) as readonly string[]).includes(slug) ? (slug as Section) : null
+  return slug === 'help' || (NAV_GROUPS.flatMap((g) => g.items) as readonly string[]).includes(slug) ? (slug as Section) : null
 }
 
 /** The rail: wordmark, workspace, and the screens grouped by job. */

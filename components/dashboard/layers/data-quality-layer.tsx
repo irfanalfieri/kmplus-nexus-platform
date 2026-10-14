@@ -271,7 +271,7 @@ export default function DataQualityLayer() {
       <PageHeader title={t('pages.quality.title')} description={t('pages.quality.description')} meta={meta} />
 
       <div className="space-y-5">
-        <section aria-labelledby="inbox-title" className="rounded-lg border border-border bg-card">
+        <section data-tour="quality-inbox" aria-labelledby="inbox-title" className="rounded-lg border border-border bg-card">
           <h2 id="inbox-title" className="sr-only">
             {t('quality.inbox')}
           </h2>

@@ -93,7 +93,7 @@ export default function CatalogLayer() {
       {error && <Notice tone="danger">{error}</Notice>}
 
       <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-[240px] flex-1">
+        <div data-tour="catalog-search" className="relative min-w-[240px] flex-1">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" aria-hidden />
           <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('insights.catalog.searchPlaceholder')} className="pl-8" aria-label={t('insights.catalog.searchLabel')} />
         </div>

@@ -53,6 +53,9 @@ const MATRIX = {
 
 export type Permission = keyof typeof MATRIX
 
+/** Every permission, in the order of the matrix (the Help page draws it). */
+export const PERMISSIONS = Object.keys(MATRIX) as Permission[]
+
 export function can(role: Role | null | undefined, permission: Permission): boolean {
   return !!role && (MATRIX[permission] as readonly Role[]).includes(role)
 }

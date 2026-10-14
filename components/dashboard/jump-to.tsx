@@ -38,7 +38,8 @@ export function JumpTo() {
       const p = SETTINGS_TAB_PERMISSION[tab]
       return !p || can(role, p)
     }).map((tab) => ({ id: `settings-${tab}`, label: t(`settings.${tab}`), group: t('nav.settings'), href: settingsHref(tab), Icon: SECTION_ICONS.settings }))
-    return [...screens, ...settings]
+    const help = { id: 'help', label: t('nav.help'), group: t('nav.primary'), href: sectionHref('help'), Icon: SECTION_ICONS.help }
+    return [...screens, help, ...settings]
   }, [t, role])
 
   const q = query.trim().toLowerCase()
@@ -55,6 +56,7 @@ export function JumpTo() {
     <>
       <button
         type="button"
+        data-tour="jump-to"
         onClick={() => setOpen(true)}
         className="flex h-8 w-full max-w-xs items-center gap-2 rounded-md border border-border bg-background px-2.5 text-sm text-muted-foreground outline-none hover:border-input focus-visible:outline-2 focus-visible:outline-ring"
       >

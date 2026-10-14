@@ -1,7 +1,7 @@
 /** Client-safe map of the dashboard: one URL per screen. */
 import type { Permission, Role } from '@/lib/auth/permissions'
 
-export const SECTIONS = ['overview', 'sources', 'connectors', 'pipelines', 'rules', 'quality', 'catalog', 'monitoring', 'analytics', 'governance', 'settings'] as const
+export const SECTIONS = ['overview', 'sources', 'connectors', 'pipelines', 'rules', 'quality', 'catalog', 'monitoring', 'analytics', 'governance', 'settings', 'help'] as const
 export type Section = (typeof SECTIONS)[number]
 
 export const NAV_GROUPS = [

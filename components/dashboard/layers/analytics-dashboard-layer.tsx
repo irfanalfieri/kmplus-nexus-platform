@@ -192,7 +192,7 @@ export default function AnalyticsDashboardLayer() {
       ) : (
         <div className="grid gap-6 lg:grid-cols-[240px_1fr]">
           <aside className="space-y-3">
-            <ul className="space-y-1" aria-label={t('insights.analytics.dashboardsLabel')}>
+            <ul data-tour="analytics-dashboards" className="space-y-1" aria-label={t('insights.analytics.dashboardsLabel')}>
               {list.dashboards.map((d) => (
                 <li key={d.id}>
                   <button

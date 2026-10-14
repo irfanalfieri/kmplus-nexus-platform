@@ -1,0 +1,112 @@
+/** English text for "Guide me" (the guided tour) and the Help & FAQ page chrome; id/tour.ts mirrors it. */
+export const tour = {
+  guideMe: 'Guide me',
+  guideMeLabel: 'Start the guided tour',
+  help: 'Help & FAQ',
+  helpLabel: 'Open Help & FAQ',
+  workflow: 'Workflow progress',
+  progress: 'Step {step} of {total}',
+  current: 'you are here',
+  done: 'done',
+  end: 'End tour',
+  back: 'Back',
+  next: 'Next',
+  finish: 'Finish',
+  readMore: 'Read more in Help',
+  showMe: 'Back to {screen}',
+  notVisible: 'This control isn’t on screen for your role or this workspace yet, so the tour points at the screen title.',
+  stages: {
+    home: 'Home',
+    connect: 'Connect',
+    build: 'Build',
+    operate: 'Operate',
+    govern: 'Govern',
+    analyze: 'Analyze & administer',
+  },
+  steps: {
+    welcome: {
+      title: 'Welcome to Nexus',
+      body: 'Nexus moves HR data from the systems you already run into KMPlus products and your own datasets: checked, governed and on schedule. This tour walks the workflow in order. You can keep working while it runs.',
+    },
+    lines: {
+      title: 'Every pipeline is a line',
+      body: 'The Overview draws each pipeline from its source to where it writes. A tripped line failed its last run; a held line has rows waiting in quarantine. Tripped lines come first.',
+    },
+    needs: {
+      title: 'What needs you',
+      body: 'Held rows, approvals waiting for a second person and failed runs collect here, so the first screen of the day is also the to-do list.',
+    },
+    connectors: {
+      title: '1 · Install connectors',
+      body: 'Connectors are the kinds of systems Nexus can talk to: HR applications, databases, APIs, files, cloud storage, observability tools and secrets managers. Search or filter by category, then install the ones you need.',
+    },
+    sources: {
+      title: '2 · Add a data source',
+      body: 'A data source is one connection with its sign-in: your Talenta account, the HR database, a folder in S3. Test it and Nexus lists its tables. Systems inside your network connect through a Nexus Agent.',
+    },
+    pipelinesNew: {
+      title: '3 · Build a pipeline',
+      body: 'A pipeline reads from a source, checks and shapes every row, and writes to a dataset or a KMPlus product. Start from a template, describe it in words for an AI draft, or draw it step by step.',
+    },
+    pipelinesBoard: {
+      title: 'Run, schedule and publish',
+      body: 'Each pipeline shows its flow, state and last run. Edits are saved as a draft until you publish; a workspace can require a second person to approve each publish.',
+    },
+    rules: {
+      title: '4 · Business rules',
+      body: 'Rules are checks and decisions reused across pipelines: a valid NIK, an end date after the start date, managers flagged for approval. Rows that break a rule are held, not lost.',
+    },
+    monitoring: {
+      title: '5 · Monitor runs',
+      body: 'Every run, schedule and the background worker in one place. Cancel a queued run, retry a finished one, or open its steps to see where rows went.',
+    },
+    quality: {
+      title: '6 · Fix held rows',
+      body: 'The quarantine inbox holds rows that failed a check or wait for approval. Fix the value, approve or dismiss, and send them on: the run re-enters at the step that held them.',
+    },
+    catalog: {
+      title: '7 · Find and document data',
+      body: 'The catalog lists every dataset and source table with its columns, owner, documentation and lineage. Search in plain words: “who joined last month” finds the right tables.',
+    },
+    governance: {
+      title: '8 · Govern access',
+      body: 'Classify columns, mask personal data, and filter rows per role, so a viewer sees only their unit and never a full NIK. The same rules apply to the Data API and AI answers.',
+    },
+    analytics: {
+      title: '9 · Analyze',
+      body: 'Build dashboards over your datasets, or ask a question in words. Charts respect each reader’s masks and row filters, and every chart has a table view.',
+    },
+    settings: {
+      title: '10 · Administer the workspace',
+      body: 'Members and roles, single sign-on and SCIM, environments (dev → staging → prod), Nexus Agents, the AI model, Data API keys, webhooks and the audit log.',
+    },
+    jump: {
+      title: 'Go anywhere with Ctrl K',
+      body: 'Type the name of any screen or settings section to jump straight to it.',
+    },
+    finish: {
+      title: 'Help is always here',
+      body: 'Help & FAQ has the full guide with diagrams, screenshots and answers to common questions. Restart this tour any time from Guide me.',
+    },
+  },
+  page: {
+    searchLabel: 'Search the guide',
+    searchPlaceholder: 'Search the guide and FAQ',
+    contents: 'On this page',
+    noMatch: 'Nothing in the guide matches “{query}”.',
+    matches: '{count, plural, one {# section matches} other {# sections match}}',
+    openScreen: 'Open {screen}',
+    startTour: 'Take the guided tour',
+    startTourBody: 'Sixteen short steps across the real screens, in workflow order.',
+    faqTitle: 'Frequently asked questions',
+    faqCount: '{count, plural, one {# question} other {# questions}}',
+    chapters: '{count, plural, one {# chapter} other {# chapters}}',
+    clearSearch: 'Clear search',
+    screenshot: 'Screenshot: {caption}',
+    figure: 'Figure',
+    diagram: 'Diagram',
+    backToTop: 'Back to top',
+    roleCan: 'Can',
+    roleCannot: 'Cannot',
+  },
+}

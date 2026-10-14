@@ -132,7 +132,7 @@ export default function OverviewLayer() {
         </section>
 
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]">
-          <section aria-labelledby="lines-title" className="rounded-lg border border-border bg-card">
+          <section data-tour="overview-lines" aria-labelledby="lines-title" className="rounded-lg border border-border bg-card">
             <div className="flex flex-wrap items-end gap-x-4 gap-y-1 border-b border-border px-4 py-3">
               <div className="min-w-0 flex-1">
                 <h2 id="lines-title" className="text-base font-semibold">
@@ -210,7 +210,7 @@ export default function OverviewLayer() {
               </section>
             )}
 
-            <section aria-labelledby="needs-title" className="rounded-lg border border-border bg-card">
+            <section data-tour="overview-needs" aria-labelledby="needs-title" className="rounded-lg border border-border bg-card">
               <h2 id="needs-title" className="border-b border-border px-4 py-3 text-base font-semibold">
                 {t('overview.needs.title')}
               </h2>

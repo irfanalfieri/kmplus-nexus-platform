@@ -42,6 +42,13 @@ import { agentRestRequest, isWithinBaseUrl, mergeAgentRestRequest, publicEndpoin
 import { buildRestRequest, parseRestConfig, previewRestRequest } from '@/lib/connectors/rest-client'
 import { compareVersions } from '@/lib/agent/protocol'
 import { CONNECTOR_CATALOG } from '@/lib/connectors/catalog'
+import { readdirSync, readFileSync as readGuideFile } from 'node:fs'
+import { HELP_CONTENT } from '@/lib/help'
+import { HELP_SCREENS } from '@/lib/help/screens'
+import { matchesQuery } from '@/lib/help/search'
+import { TOUR_STAGES, TOUR_STEPS } from '@/lib/tour/steps'
+import { SECTIONS, sectionHref } from '@/lib/navigation'
+import { PERMISSIONS } from '@/lib/auth/permissions'
 import { CONNECTOR_GROUPS } from '@/lib/connectors/types'
 import { rfc3986, signAwsRequest } from '@/lib/net/aws-sigv4'
 import { SECRET_MANAGER_SLUGS, findSecretRefs, hasSecretRefs, isSecretManager, secretRef } from '@/lib/secrets/types'
@@ -1148,6 +1155,57 @@ async function main() {
     ])
     assert.deepEqual(mappingColumns({ properties: { '@timestamp': { type: 'date' }, http: { properties: { status: { type: 'long' } } } } }).map((c) => c.name), ['@timestamp', 'http.status'])
     assert.deepEqual(flattenRow({ labels: { job: 'hr' }, tags: ['a', 'b'] }), { 'labels.job': 'hr', tags: 'a, b' })
+  })
+
+  await test('Guide me + Help: tour steps open real screens with real markers; EN and ID guides match; screenshots exist', () => {
+    // Tour: unique ids, every route is a screen, stages in workflow order, every marker present in the UI code.
+    assert.equal(new Set(TOUR_STEPS.map((s) => s.id)).size, TOUR_STEPS.length)
+    const routes = new Set(SECTIONS.map(sectionHref))
+    const stageOrder = TOUR_STEPS.map((s) => TOUR_STAGES.indexOf(s.stage))
+    assert.deepEqual(stageOrder, [...stageOrder].sort((a, b) => a - b), 'tour stages go forward')
+    const ui = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? ui(`${dir}/${e.name}`) : e.name.endsWith('.tsx') ? [readGuideFile(`${dir}/${e.name}`, 'utf8')] : []))
+    const code = ui('components').join('\n')
+    const en = HELP_CONTENT.en
+    for (const step of TOUR_STEPS) {
+      assert.ok(routes.has(step.route), `tour route ${step.route}`)
+      if (step.target) assert.ok(code.includes(`data-tour="${step.target}"`), `marker ${step.target}`)
+      assert.ok(step.doc === 'faq' || en.chapters.some((c) => c.id === step.doc), `tour doc ${step.doc}`)
+      for (const locale of ['en', 'id'] as const) {
+        const t = createTranslator(locale)
+        for (const k of ['title', 'body'] as const) {
+          const key = `tour.steps.${step.id}.${k}` as Parameters<typeof t>[0]
+          assert.notEqual(t(key), key, `${locale} ${key}`)
+        }
+      }
+    }
+
+    // The two guides have the same chapters, sections, blocks, FAQs and diagram labels.
+    const shape = (c: typeof en) => ({
+      chapters: c.chapters.map((ch) => ({ id: ch.id, screen: ch.screen, sections: ch.sections.map((s) => ({ id: s.id, blocks: s.blocks.map((b) => (b.kind === 'shot' ? `shot:${b.screen}` : b.kind === 'diagram' ? `diagram:${b.diagram}` : b.kind === 'table' ? `table:${b.rows.length}x${b.head.length}` : 'items' in b ? `${b.kind}:${b.items.length}` : b.kind)) })) })),
+      faqs: c.faqs.map((f) => `${f.group}/${f.id}`),
+      groups: c.faqGroups.map((g) => g.id),
+      steps: c.diagrams.pipeline.steps.length,
+      stages: c.diagrams.workflow.stages.length,
+      permissions: Object.keys(c.diagrams.roles.permissions).sort(),
+    })
+    assert.deepEqual(shape(HELP_CONTENT.id), shape(en))
+    assert.deepEqual(Object.keys(en.diagrams.roles.permissions).sort(), [...PERMISSIONS].sort())
+    const ids = en.chapters.flatMap((c) => [c.id, ...c.sections.map((s) => `${c.id}-${s.id}`)])
+    assert.equal(new Set(ids).size, ids.length, 'unique anchors')
+    for (const f of en.faqs) assert.ok(en.faqGroups.some((g) => g.id === f.group), `faq group ${f.group}`)
+
+    // Every screenshot the guide shows exists for both languages and themes.
+    for (const c of Object.values(HELP_CONTENT))
+      for (const b of c.chapters.flatMap((ch) => ch.sections.flatMap((s) => s.blocks))) if (b.kind === 'shot') assert.ok(b.screen in HELP_SCREENS)
+    for (const screen of Object.keys(HELP_SCREENS))
+      for (const lang of ['en', 'id'])
+        for (const suffix of ['', '-dark']) readGuideFile(`public/help/screens/${lang}/${screen}${suffix}.webp`)
+
+    // Search: every word, any order, case and accents ignored, markup ignored.
+    assert.ok(matchesQuery('Install a **Nexus Agent** on a server', 'agent nexus'))
+    assert.ok(matchesQuery('Pengelola rahasia', 'RAHASIA'))
+    assert.ok(!matchesQuery('Data sources', 'sources agent'))
   })
 
   console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`)

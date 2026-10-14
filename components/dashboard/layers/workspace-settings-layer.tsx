@@ -53,7 +53,7 @@ export default function WorkspaceSettingsLayer({ tab }: { tab: SettingsTab }) {
     <div>
       <PageHeader title={t('pages.settings.title')} description={t('settings.intro', { role: ROLE_INFO[role].label })} />
       <div className="grid gap-6 lg:grid-cols-[13rem_minmax(0,1fr)]">
-        <nav aria-label={t('settings.sections')} className="-mx-4 overflow-x-auto px-4 lg:mx-0 lg:overflow-visible lg:px-0">
+        <nav data-tour="settings-tabs" aria-label={t('settings.sections')} className="-mx-4 overflow-x-auto px-4 lg:mx-0 lg:overflow-visible lg:px-0">
           <ul className="flex gap-1 lg:sticky lg:top-0 lg:flex-col">
             {visible.map((s) => (
               <li key={s} className="shrink-0">

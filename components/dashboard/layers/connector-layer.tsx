@@ -161,7 +161,7 @@ export default function ConnectorLayer() {
         </div>
       ) : (
         <>
-          <div className="space-y-3">
+          <div data-tour="connectors-find" className="space-y-3">
             <div className="flex flex-wrap items-center gap-3">
               <div className="relative w-full max-w-md">
                 <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
