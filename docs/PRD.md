@@ -691,6 +691,8 @@ Data schemas: `nexus_data` (datasets), `nexus_raw` (uploaded files). All product
 
 ## 13. Roadmap & phase exit criteria
 
+The five-year scaling plan (targets, scale triggers, architecture stages, 2026–2031) is in [product-roadmap.md](product-roadmap.md).
+
 The original roadmap puts the **Data Mapping Studio in Phase 2**. A pipeline can't produce useful output without mapping, so **basic mapping (MP-1..5, MP-9) moves into Phase 1**. The same goes for minimal **workspaces, RBAC, and encrypted secrets**: they're hard to retrofit, and enterprise pilots need them.
 
 ### Phase 1 — Foundation *(current)*
