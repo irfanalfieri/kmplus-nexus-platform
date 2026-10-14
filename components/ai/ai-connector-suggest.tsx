@@ -86,7 +86,7 @@ export function AiConnectorSuggest({ onUse }: { onUse: (slug: string) => void })
                       {t('assist.connector.use', { name: s.name })}
                     </Button>
                   ) : (
-                    <Link href="/dashboard/connectors" className={buttonVariants({ size: 'sm', variant: 'outline' })}>
+                    <Link href={`/dashboard/connectors?q=${encodeURIComponent(s.name)}`} className={buttonVariants({ size: 'sm', variant: 'outline' })}>
                       {t('assist.connector.install', { name: s.name })}
                     </Link>
                   )}

@@ -8,6 +8,7 @@ import { isConnectorSlug } from '@/lib/connectors/catalog'
 import { sampleConnectorTable } from '@/lib/connectors/runtime'
 import { createPgPool as externalPgPool } from '@/lib/connectors/drivers/postgres'
 import { readFileChunk } from '@/lib/connectors/drivers/file'
+import { liveSqlServerQuery, readSqlServerChunk, readSqlServerRows } from '@/lib/connectors/drivers/sqlserver'
 import type { ConnectorCredentials } from '@/lib/connectors/types'
 import type { ColumnType } from './definition'
 import type { Row } from './transforms'
@@ -123,6 +124,8 @@ export async function readSourceRows(source: StoredDataSource, table: string, ma
       await conn.end()
     }
   }
+
+  if (source.sourceType === 'sqlserver') return readSqlServerRows(credentialsOf(source), table, maxRows, wm)
 
   if (source.sourceType === 'supabase') {
     const creds = credentialsOf(source)
@@ -646,6 +649,11 @@ export async function readSourceChunk(
     }
   }
 
+  if (source.sourceType === 'sqlserver') {
+    const read = await readSqlServerChunk(credentialsOf(source), table, { offset, limit, watermark: wm, cache })
+    return { rows: read.rows, exhausted: read.rows.length < limit || offset + limit >= opts.maxRows, types: read.types }
+  }
+
   if (source.sourceType === 'file') {
     const rows = await readFileChunk(credentialsOf(source).storageKey ?? '', table, { offset, limit, watermark: wm })
     return { rows, exhausted: rows.length < limit || offset + limit >= opts.maxRows, types: fileTypeHints(source, table) }
@@ -706,7 +714,7 @@ export async function finalizeDatasetReplace(tableName: string, staging: string)
 // ── Live queries (DV-1 / DV-3) ───────────────────────────────────────────────
 // Catalog tables in "live" mode are read from the source on demand, read-only,
 // with a row limit and a timeout. Equality filters are pushed down to SQL
-// sources (PostgreSQL, MySQL, file uploads); other connectors read up to the
+// sources (PostgreSQL, MySQL, SQL Server, file uploads); other connectors read up to the
 // limit and filter in Nexus.
 
 export interface LiveQueryResult {
@@ -774,6 +782,11 @@ export async function liveQuery(
     } finally {
       await conn.end()
     }
+  }
+
+  if (source.sourceType === 'sqlserver') {
+    // Only a SELECT we build (identifiers quoted, values bound) runs, with the request timeout.
+    return finish(await liveSqlServerQuery(credentialsOf(source), table, { take, timeoutMs: opts.timeoutMs, filters }), true)
   }
 
   if (source.sourceType === 'file') {

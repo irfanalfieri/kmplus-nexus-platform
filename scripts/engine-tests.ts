@@ -41,6 +41,10 @@ import { signRequest, verifyRequestSignature } from '@/lib/net/request-signing'
 import { agentRestRequest, isWithinBaseUrl, mergeAgentRestRequest, publicEndpoint, restRequestDesign } from '@/lib/connectors/rest/agent-request'
 import { buildRestRequest, parseRestConfig, previewRestRequest } from '@/lib/connectors/rest-client'
 import { compareVersions } from '@/lib/agent/protocol'
+import { CONNECTOR_CATALOG } from '@/lib/connectors/catalog'
+import { CONNECTOR_GROUPS } from '@/lib/connectors/types'
+import { connectorMatches, groupConnectors, isConnectorGroup, normalizeSearch } from '@/lib/connectors/search'
+import { msIdent, sqlServerChunkQuery, sqlServerColumnType, sqlServerConfig, sqlServerLiveQuery, sqlServerSchema } from '@/lib/connectors/drivers/sqlserver'
 import { issuerFor, PUBLIC_EMAIL_DOMAINS, DOMAIN_RE } from '@/lib/auth/sso-presets'
 import { rateLimitHeaders } from '@/lib/api/rate-limit'
 import { openApiSpec } from '@/lib/api/openapi'
@@ -1021,6 +1025,65 @@ async function main() {
     assert.equal(verifyRequestSignature({ ...ok, secret: 'other' }), false)
     assert.equal(verifyRequestSignature({ ...ok, now: now + 6 * 60_000 }), false, 'older than 5 minutes')
     assert.equal(verifyRequestSignature({ ...ok, signature: null }), false)
+  })
+
+  await test('Connectors screen: every connector has a category; search by name, system, format and Indonesian words; SQL Server queries quote and bind', () => {
+    for (const c of CONNECTOR_CATALOG) assert.ok((CONNECTOR_GROUPS as readonly string[]).includes(c.group), `${c.slug} has a category`)
+    const find = (q: string, extra: (c: (typeof CONNECTOR_CATALOG)[number]) => string[] = () => []) => CONNECTOR_CATALOG.filter((c) => connectorMatches(c, q, extra(c))).map((c) => c.slug)
+    assert.deepEqual(find('hris'), ['talenta'])
+    assert.deepEqual(find('Mekari'), ['talenta'])
+    assert.deepEqual(find('excel'), ['file'])
+    assert.deepEqual(find('active dir'), ['ldap'])
+    assert.deepEqual(find('sql server'), ['sqlserver'])
+    assert.deepEqual(find('mssql'), ['sqlserver'])
+    assert.deepEqual(find('azure sql'), ['sqlserver'])
+    assert.deepEqual(find('erp'), ['sap'])
+    assert.deepEqual(find('crm'), ['salesforce'])
+    assert.deepEqual(find('lms'), ['kmplus'])
+    assert.deepEqual(find('Oracle Connector'), ['oracle'], 'the AI suggestion links here with the connector name')
+    assert.deepEqual(find('zzz'), [])
+    assert.equal(find('').length, CONNECTOR_CATALOG.length)
+    assert.ok(!find('ad').includes('file'), 'word starts, not substrings ("upload" does not match "ad")')
+    const databases = CONNECTOR_CATALOG.filter((c) => c.group === 'databases').map((c) => c.slug).sort()
+    assert.deepEqual(find('basis data').sort(), databases, 'Indonesian keywords')
+    assert.deepEqual(find('Database'), find('database'))
+    assert.ok(find('pangkalan', () => ['Pangkalan data']).length === CONNECTOR_CATALOG.length, 'translated text passed by the screen is searched too')
+    assert.equal(normalizeSearch('  Ëxcel / CSV! '), 'excel / csv')
+    const grouped = groupConnectors(CONNECTOR_CATALOG)
+    assert.deepEqual(grouped.map((g) => g.group), ['applications', 'kmplus', 'databases', 'apis', 'files', 'identity'])
+    assert.equal(grouped.reduce((n, g) => n + g.items.length, 0), CONNECTOR_CATALOG.length)
+    assert.ok(isConnectorGroup('databases') && !isConnectorGroup('nope'))
+
+    // SQL Server: identifiers bracket-quoted, values bound, stable order for chunked reads.
+    assert.equal(msIdent('Employees'), '[Employees]')
+    assert.equal(msIdent('a]b; DROP TABLE x--'), '[a]]b; DROP TABLE x--]')
+    assert.equal(
+      sqlServerChunkQuery({ schema: 'hr', table: 'Employees', orderBy: ['EmpID'], afterWatermark: false }),
+      'SELECT * FROM [hr].[Employees] ORDER BY [EmpID] OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY'
+    )
+    assert.equal(
+      sqlServerChunkQuery({ schema: 'dbo', table: 'Emp', orderBy: ['EmpID', 'UpdatedAt'], watermarkColumn: 'UpdatedAt', afterWatermark: true }),
+      'SELECT * FROM [dbo].[Emp] WHERE [UpdatedAt] > @after ORDER BY [UpdatedAt], [EmpID] OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY'
+    )
+    assert.match(sqlServerChunkQuery({ schema: 'dbo', table: 'v_people', orderBy: [], afterWatermark: false }), /ORDER BY \(SELECT NULL\)/, 'views and heaps have no key')
+    assert.equal(sqlServerLiveQuery({ schema: 'dbo', table: 'Emp', filterColumns: ['Dept', 'Status'] }), 'SELECT TOP (@take) * FROM [dbo].[Emp] WHERE CAST([Dept] AS nvarchar(max)) = @f0 AND CAST([Status] AS nvarchar(max)) = @f1')
+    assert.equal(sqlServerColumnType('datetime2'), 'timestamp')
+    assert.equal(sqlServerColumnType('BIGINT'), 'integer')
+    assert.equal(sqlServerColumnType('money'), 'numeric')
+    assert.equal(sqlServerColumnType('bit'), 'boolean')
+    assert.equal(sqlServerColumnType('date'), 'date')
+    assert.equal(sqlServerColumnType('nvarchar'), null)
+    const cfg = sqlServerConfig({ host: 'sql01', database: 'HRIS', username: 'nexus', password: 'x' })
+    assert.equal(cfg.port, 1433)
+    assert.equal(cfg.options?.encrypt, true, 'encrypted by default')
+    assert.equal(cfg.options?.trustServerCertificate, false, 'certificates verified by default')
+    const named = sqlServerConfig({ host: 'sql01', database: 'HRIS', username: 'nexus', instance: 'SQLEXPRESS', encrypt: 'false', trustServerCertificate: 'true' })
+    assert.equal(named.port, undefined, 'a named instance is found through SQL Browser')
+    assert.equal(named.options?.instanceName, 'SQLEXPRESS')
+    assert.equal(named.options?.encrypt, false)
+    assert.throws(() => sqlServerConfig({ host: 'sql01' }), /host, database and username/)
+    assert.equal(sqlServerSchema({}), 'dbo')
+    assert.equal(detectConnectors('Login failed for user \'nexus\'. (Microsoft SQL Server, Error: 18456)', CONNECTOR_CATALOG.map((c) => ({ slug: c.slug, name: c.name, category: c.category, description: c.description })))[0]?.slug, 'sqlserver')
   })
 
   console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`)

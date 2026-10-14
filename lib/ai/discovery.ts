@@ -40,6 +40,7 @@ const RULES: { slug: string; confidence: ConnectorSuggestion['confidence']; test
   { slug: 'snowflake', confidence: 'high', test: /\bsnowflakecomputing\.com\b|\bsnowflake\b/i, reason: 'Snowflake account address' },
   { slug: 'kmplus', confidence: 'high', test: /\b(kms|lms|tms|pms|cms|ims)\.kmplus\.co\.id\b|\/nexus\/v1\b/i, reason: 'KMPlus product address (Nexus Ingest Contract)' },
   { slug: 'oracle', confidence: 'high', test: /\bORA-\d{5}\b|\boracle:\/\/|\bjdbc:oracle\b|\bTNS:|:1521\b|\bXEPDB1\b/i, reason: 'Oracle connection string or ORA- error' },
+  { slug: 'sqlserver', confidence: 'high', test: /\b(mssql|sqlserver):\/\/|\bjdbc:sqlserver\b|\bServer=tcp:|\.database\.windows\.net\b|:1433\b|Login failed for user|\bMicrosoft SQL Server\b|\bSQL Server\b|\bMsg \d+, Level \d+/i, reason: 'SQL Server connection string or error' },
   { slug: 'mysql', confidence: 'high', test: /\bmysql:\/\/|\bjdbc:mysql\b|\bER_[A-Z_]+\b|:3306\b|\bmariadb\b/i, reason: 'MySQL / MariaDB connection string or error' },
   { slug: 'postgres', confidence: 'high', test: /\bpostgres(ql)?:\/\/|\bjdbc:postgresql\b|\b28P01\b|password authentication failed for user|:5432\b|\bpg_hba\.conf\b/i, reason: 'PostgreSQL connection string or error' },
   { slug: 'ldap', confidence: 'high', test: /\bldaps?:\/\/|:636\b|:389\b|\bDC=[\w-]+,\s*DC=|\bsAMAccountName\b|\buserPrincipalName\b|\bInvalidCredentials(Error)?\b|\bActive Directory\b/i, reason: 'LDAP / Active Directory address or attribute' },

@@ -41,7 +41,7 @@ export const AGENT_OPS = ['test', 'scan', 'sample', 'readChunk', 'readRows', 'wr
 export type AgentOp = (typeof AGENT_OPS)[number]
 
 /** Connector types an agent can serve (file uploads live in Nexus itself). */
-export const AGENT_CONNECTOR_TYPES = ['postgres', 'mysql', 'oracle', 'snowflake', 'sap', 'ldap', 'rest', 'talenta', 'supabase', 'kmplus'] as const
+export const AGENT_CONNECTOR_TYPES = ['postgres', 'mysql', 'sqlserver', 'oracle', 'snowflake', 'sap', 'ldap', 'rest', 'talenta', 'supabase', 'kmplus'] as const
 
 const watermark = z.object({ column: z.string().min(1).max(200), after: z.string().nullable() }).optional()
 /**

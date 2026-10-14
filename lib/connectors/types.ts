@@ -3,6 +3,7 @@ export type ConnectorSlug =
   | 'oracle'
   | 'mysql'
   | 'postgres'
+  | 'sqlserver'
   | 'rest'
   | 'salesforce'
   | 'snowflake'
@@ -20,10 +21,20 @@ export interface CredentialField {
   placeholder?: string
 }
 
+/**
+ * How the Connectors screen groups connectors (filter chips and sections).
+ * `category` stays the finer label shown on each card.
+ */
+export const CONNECTOR_GROUPS = ['applications', 'kmplus', 'databases', 'apis', 'files', 'identity'] as const
+export type ConnectorGroup = (typeof CONNECTOR_GROUPS)[number]
+
 export interface ConnectorDefinition {
   slug: ConnectorSlug
   name: string
   category: string
+  group: ConnectorGroup
+  /** Extra words people search for (systems, vendors, formats), lower case; English and Indonesian. */
+  keywords: string[]
   version: string
   description: string
   /** Included free on account creation (shows as Installed) */

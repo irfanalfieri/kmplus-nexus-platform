@@ -3,6 +3,7 @@ import * as supabase from './drivers/supabase'
 import * as mysql from './drivers/mysql'
 import * as postgres from './drivers/postgres'
 import * as oracle from './drivers/oracle'
+import * as sqlserver from './drivers/sqlserver'
 import * as rest from './drivers/rest'
 import * as sap from './drivers/sap'
 import * as salesforce from './drivers/salesforce'
@@ -21,6 +22,8 @@ export async function testConnectorConnection(
       return supabase.testSupabaseConnector(credentials)
     case 'mysql':
       return mysql.testMysqlConnection(credentials)
+    case 'sqlserver':
+      return sqlserver.testSqlServerConnection(credentials)
     case 'postgres':
       return postgres.testPostgresConnection(credentials)
     case 'oracle':
@@ -55,6 +58,8 @@ export async function scanConnectorSchema(
       return supabase.scanSupabaseConnector(credentials)
     case 'mysql':
       return mysql.scanMysqlSchema(credentials)
+    case 'sqlserver':
+      return sqlserver.scanSqlServerSchema(credentials)
     case 'postgres':
       return postgres.scanPostgresSchema(credentials)
     case 'oracle':
@@ -91,6 +96,8 @@ export async function sampleConnectorTable(
       return supabase.sampleSupabaseTable(credentials, tableName, limit)
     case 'mysql':
       return mysql.sampleMysqlTable(credentials, tableName, limit)
+    case 'sqlserver':
+      return sqlserver.sampleSqlServerTable(credentials, tableName, limit)
     case 'postgres':
       return postgres.samplePostgresTable(credentials, tableName, limit)
     case 'oracle':

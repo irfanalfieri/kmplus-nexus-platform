@@ -137,7 +137,7 @@ export function SourceEditor({ step, options, onChange }: { step: SourceStep; op
           </Field>
           <p className="mt-1 text-xs text-muted-foreground">
             {t('steps.source.watermarkHelp')}
-            {source && !['postgres', 'mysql', 'supabase'].includes(source.sourceType) && t('steps.source.watermarkPostFilter')}
+            {source && !['postgres', 'mysql', 'sqlserver', 'supabase'].includes(source.sourceType) && t('steps.source.watermarkPostFilter')}
           </p>
         </div>
       )}

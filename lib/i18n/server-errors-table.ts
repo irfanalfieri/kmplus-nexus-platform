@@ -349,4 +349,11 @@ export const SERVER_ERRORS: readonly { en: string; id: string }[] = [
   { en: 'Too many redirects.', id: 'Terlalu banyak pengalihan.' },
   { en: "The request leaves the API's base URL ({p0}). Change the resource path.", id: "Permintaan keluar dari URL dasar API ({p0}). Ubah path sumber daya." },
   { en: 'Nexus Agent "{p0}" runs version {p1}; intranet API requests designed in Nexus need version {p2} or later. Download the new agent in Settings → Nexus Agents and restart it.', id: 'Nexus Agent "{p0}" menjalankan versi {p1}; permintaan API intranet yang dirancang di Nexus memerlukan versi {p2} atau lebih baru. Unduh agent baru di Pengaturan → Nexus Agents lalu jalankan ulang.' },
+  { en: "SQL Server host, database and username are required.", id: "Host, database, dan nama pengguna SQL Server wajib diisi." },
+  { en: "SQL Server rejected the sign-in: {p0}", id: "SQL Server menolak proses masuk: {p0}" },
+  { en: "SQL Server is unreachable: {p0}. Check host, port and firewall; a server inside a company network is reached through a Nexus Agent.", id: "SQL Server tidak dapat dijangkau: {p0}. Periksa host, port, dan firewall; server di dalam jaringan perusahaan dijangkau melalui Nexus Agent." },
+  { en: "SQL Server instance not found: {p0}. Check the instance name, or use the port instead.", id: "Instance SQL Server tidak ditemukan: {p0}. Periksa nama instance, atau gunakan port sebagai gantinya." },
+  { en: "Connected to SQL Server {p0}.", id: "Terhubung ke SQL Server {p0}." },
+  { en: "Connected to SQL Server.", id: "Terhubung ke SQL Server." },
+  { en: "SQL Server is unreachable: {p0}. Check host, port and the firewall between this agent and the server.", id: "SQL Server tidak dapat dijangkau: {p0}. Periksa host, port, dan firewall antara agent ini dan server." },
 ]

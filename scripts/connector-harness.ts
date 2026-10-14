@@ -141,6 +141,14 @@ const cases: Case[] = [
         sampleTable: env.SUPABASE_TEST_TABLE,
       }
     : { slug: 'supabase', label: 'Supabase', skip: 'set SUPABASE_TEST_URL + SUPABASE_TEST_SECRET_KEY (and optionally SUPABASE_TEST_TABLE)' },
+  env.SQLSERVER_TEST_HOST
+    ? {
+        slug: 'sqlserver',
+        label: 'SQL Server (SQLSERVER_TEST_*)',
+        credentials: { host: env.SQLSERVER_TEST_HOST, port: env.SQLSERVER_TEST_PORT ?? '1433', database: env.SQLSERVER_TEST_DATABASE ?? '', username: env.SQLSERVER_TEST_USER ?? '', password: env.SQLSERVER_TEST_PASSWORD ?? '', schema: env.SQLSERVER_TEST_SCHEMA ?? 'dbo', trustServerCertificate: env.SQLSERVER_TEST_TRUST_CERT ?? 'false' },
+        sampleTable: env.SQLSERVER_TEST_TABLE,
+      }
+    : { slug: 'sqlserver', label: 'SQL Server', skip: 'no public SQL Server; set SQLSERVER_TEST_HOST/DATABASE/USER/PASSWORD (e.g. docker run mcr.microsoft.com/mssql/server)' },
   env.ORACLE_TEST_CONNECTION
     ? { slug: 'oracle', label: 'Oracle (ORACLE_TEST_CONNECTION)', credentials: { connectionString: env.ORACLE_TEST_CONNECTION, schema: env.ORACLE_TEST_SCHEMA ?? '' }, sampleTable: env.ORACLE_TEST_TABLE }
     : { slug: 'oracle', label: 'Oracle', skip: 'no public Oracle server; set ORACLE_TEST_CONNECTION=oracle://user:pass@host:1521/service' },
