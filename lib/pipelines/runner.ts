@@ -1,4 +1,5 @@
 import { and, eq, inArray } from 'drizzle-orm'
+import { withResolvedSecrets } from '@/lib/secrets/resolve'
 import { db } from '@/lib/db'
 import { dataSources, nexusDatasets, workspaceMembers } from '@/lib/db/schema'
 import { newId } from '@/lib/auth/session'
@@ -44,7 +45,8 @@ export async function loadSource(workspaceId: string, dataSourceId: string): Pro
     .where(and(eq(dataSources.id, dataSourceId), eq(dataSources.workspaceId, workspaceId)))
     .limit(1)
   if (!source) throw new NonRetryableError('The data source used by this pipeline no longer exists.')
-  return source
+  // Secret references ({{secret:…}}) are resolved here, once per load, and only kept in memory.
+  return withResolvedSecrets(source)
 }
 
 /** Physical table of a workspace dataset: the existing one, else the derived name. */

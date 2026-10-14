@@ -1,5 +1,7 @@
 'use server'
 
+import { isSecretManager } from '@/lib/secrets/types'
+import { resolveSecretRefs } from '@/lib/secrets/resolve'
 import { z } from 'zod'
 import { and, desc, eq, isNull, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
@@ -80,7 +82,7 @@ async function suggestMappingImpl(input: z.input<typeof mappingInput>) {
     const [source] = await db.select().from(dataSources).where(and(eq(dataSources.id, data.dataSourceId), eq(dataSources.workspaceId, ctx.workspaceId))).limit(1)
     if (source) {
       try {
-        const res = await sampleSource(source, Object.fromEntries(Object.entries(decryptCredentials(source.id, source.credentials)).map(([k, v]) => [k, v == null ? '' : String(v)])), data.table, 5)
+        const res = await sampleSource(source, await resolveSecretRefs(ctx.workspaceId, decryptCredentials(source.id, source.credentials)), data.table, 5)
         const rows = (res.rows ?? []) as Record<string, unknown>[]
         const { masks } = await liveTableAccess(ctx.workspaceId, null, ctx.role, data.columns.map((c) => c.name))
         samples = applyMasks(rows, masks)
@@ -160,7 +162,7 @@ async function draftPipelineImpl(input: z.input<typeof pipelineInput>) {
     db.select({ name: nexusDatasets.name, columns: nexusDatasets.columns }).from(nexusDatasets).where(eq(nexusDatasets.workspaceId, ctx.workspaceId)).orderBy(nexusDatasets.name),
   ])
   // Schema only (names and types), never sample values.
-  const sources: PlanSource[] = sourceRows.map((r) => {
+  const sources: PlanSource[] = sourceRows.filter((r) => !isSecretManager(r.sourceType)).map((r) => {
     const config = (r.config ?? {}) as { role?: 'source' | 'destination'; schemaScan?: SchemaScanResult }
     return {
       id: r.id,

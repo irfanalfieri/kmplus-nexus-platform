@@ -12,6 +12,17 @@ import * as talenta from './drivers/talenta'
 import * as ldap from './drivers/ldap'
 import * as file from './drivers/file'
 import * as kmplus from './drivers/kmplus'
+import * as prometheus from './drivers/prometheus'
+import * as elasticsearch from './drivers/elasticsearch'
+import * as datadog from './drivers/datadog'
+import * as newrelic from './drivers/newrelic'
+import * as grafana from './drivers/grafana'
+import * as s3 from './drivers/s3'
+import * as azureblob from './drivers/azureblob'
+import * as gcs from './drivers/gcs'
+import { secretManagerDriver } from '@/lib/secrets/managers'
+import { isSecretManager } from '@/lib/secrets/types'
+import type { Row } from './http'
 
 export async function testConnectorConnection(
   slug: ConnectorSlug,
@@ -44,6 +55,28 @@ export async function testConnectorConnection(
       return file.testFileConnection(credentials)
     case 'kmplus':
       return kmplus.testKmplusConnection(credentials)
+    case 'prometheus':
+      return prometheus.testPrometheusConnection(credentials)
+    case 'elasticsearch':
+      return elasticsearch.testElasticsearchConnection(credentials)
+    case 'datadog':
+      return datadog.testDatadogConnection(credentials)
+    case 'newrelic':
+      return newrelic.testNewRelicConnection(credentials)
+    case 'grafana':
+      return grafana.testGrafanaConnection(credentials)
+    case 's3':
+      return s3.testS3Connection(credentials)
+    case 'azureblob':
+      return azureblob.testAzureBlobConnection(credentials)
+    case 'gcs':
+      return gcs.testGcsConnection(credentials)
+    case 'vault':
+    case 'awssecrets':
+    case 'azurekeyvault':
+    case 'gcpsecrets':
+    case 'doppler':
+      return secretManagerDriver(slug).test(credentials)
     default:
       return { ok: false, message: `Unsupported connector: ${slug}` }
   }
@@ -80,6 +113,29 @@ export async function scanConnectorSchema(
       return file.scanFileSchema(credentials)
     case 'kmplus':
       return kmplus.scanKmplusSchema(credentials)
+    case 'prometheus':
+      return prometheus.scanPrometheusSchema(credentials)
+    case 'elasticsearch':
+      return elasticsearch.scanElasticsearchSchema(credentials)
+    case 'datadog':
+      return datadog.scanDatadogSchema(credentials)
+    case 'newrelic':
+      return newrelic.scanNewRelicSchema(credentials)
+    case 'grafana':
+      return grafana.scanGrafanaSchema(credentials)
+    case 's3':
+      return s3.scanS3Schema(credentials)
+    case 'azureblob':
+      return azureblob.scanAzureBlobSchema(credentials)
+    case 'gcs':
+      return gcs.scanGcsSchema(credentials)
+    case 'vault':
+    case 'awssecrets':
+    case 'azurekeyvault':
+    case 'gcpsecrets':
+    case 'doppler':
+      // Secrets managers have no tables: their secrets are never listed in the catalog or pipelines.
+      return { tables: [], scannedAt: new Date().toISOString(), method: 'secrets-manager' }
     default:
       throw new Error(`Unsupported connector: ${slug}`)
   }
@@ -118,7 +174,52 @@ export async function sampleConnectorTable(
       return file.sampleFileTable(credentials, tableName, limit)
     case 'kmplus':
       return kmplus.sampleKmplusEntity(credentials, tableName, limit)
+    case 'prometheus':
+      return prometheus.samplePrometheusTable(credentials, tableName, limit)
+    case 'elasticsearch':
+      return elasticsearch.sampleElasticsearchIndex(credentials, tableName, limit)
+    case 'datadog':
+      return datadog.sampleDatadogTable(credentials, tableName, limit)
+    case 'newrelic':
+      return newrelic.sampleNewRelicTable(credentials, tableName, limit)
+    case 'grafana':
+      return grafana.sampleGrafanaTable(credentials, tableName, limit)
+    case 's3':
+      return s3.sampleS3Table(credentials, tableName, limit)
+    case 'azureblob':
+      return azureblob.sampleAzureBlobTable(credentials, tableName, limit)
+    case 'gcs':
+      return gcs.sampleGcsTable(credentials, tableName, limit)
     default:
+      if (isSecretManager(slug)) throw Object.assign(new Error('Secrets managers are never read as data. Reference their secrets in other data sources’ credentials instead.'), { retryable: false })
       throw new Error(`Unsupported connector: ${slug}`)
+  }
+}
+
+/**
+ * Pipeline reads for connectors with their own read path (instead of a large
+ * "sample"): whole files from cloud storage, and Elasticsearch scrolls with the
+ * incremental watermark in the query. `watermarkApplied`: the rows are already
+ * filtered and ordered by the watermark. Null: use the sample.
+ */
+export async function readConnectorRows(
+  slug: ConnectorSlug,
+  credentials: ConnectorCredentials,
+  table: string,
+  maxRows: number,
+  watermark?: { column: string; after: string | null }
+): Promise<{ rows: Row[]; watermarkApplied: boolean } | null> {
+  switch (slug) {
+    case 's3':
+      return { rows: await s3.readS3Rows(credentials, table, maxRows), watermarkApplied: false }
+    case 'azureblob':
+      return { rows: await azureblob.readAzureBlobRows(credentials, table, maxRows), watermarkApplied: false }
+    case 'gcs':
+      return { rows: await gcs.readGcsRows(credentials, table, maxRows), watermarkApplied: false }
+    case 'elasticsearch':
+      return { rows: await elasticsearch.readElasticsearchRows(credentials, table, maxRows, watermark), watermarkApplied: Boolean(watermark) }
+    default:
+      if (isSecretManager(slug)) throw Object.assign(new Error('Secrets managers are never read as data. Reference their secrets in other data sources’ credentials instead.'), { retryable: false })
+      return null
   }
 }

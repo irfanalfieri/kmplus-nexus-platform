@@ -12,6 +12,8 @@ import { previewRestConnection } from '@/lib/actions/connector-source'
 import RestConnectorForm from '@/components/connectors/rest-connector-form'
 import SalesforceConnectorForm from '@/components/connectors/salesforce-connector-form'
 import { credentialFieldLabel } from '@/components/connectors/connector-credential-form'
+import SecretRefPicker from '@/components/connectors/secret-ref-picker'
+import { hasSecretRefs } from '@/lib/secrets/types'
 import { useT } from '@/components/i18n/i18n-provider'
 import type { RestRequestPreview } from '@/lib/connectors/rest/config'
 
@@ -147,12 +149,13 @@ export default function EditCredentialsDialog({ sourceId, sourceName, onClose, o
                   </Label>
                   <Input
                     id={inputId}
-                    type={f.type === 'password' ? 'password' : f.type === 'number' ? 'number' : 'text'}
+                    type={f.type === 'password' && !hasSecretRefs({ v: values[f.key] ?? '' }) ? 'password' : f.type === 'number' ? 'number' : 'text'}
                     value={values[f.key] ?? ''}
                     placeholder={f.type === 'password' ? (secretStored ? t('connect.editCredentials.secretUnchanged') : t('connect.editCredentials.notSet')) : f.placeholder}
                     autoComplete="off"
                     onChange={(e) => setValue(f.key, e.target.value)}
                   />
+                  {f.type === 'password' && <SecretRefPicker fieldLabel={credentialFieldLabel(t, f)} onPick={(ref) => setValue(f.key, ref)} />}
                 </div>
               )
             })

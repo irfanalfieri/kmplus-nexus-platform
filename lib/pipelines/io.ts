@@ -5,7 +5,7 @@ import { createClient } from '@supabase/supabase-js'
 import { pool as nexusPool } from '@/lib/db'
 import { decryptCredentials } from '@/lib/security/credentials'
 import { isConnectorSlug } from '@/lib/connectors/catalog'
-import { sampleConnectorTable } from '@/lib/connectors/runtime'
+import { readConnectorRows, sampleConnectorTable } from '@/lib/connectors/runtime'
 import { createPgPool as externalPgPool } from '@/lib/connectors/drivers/postgres'
 import { readFileChunk } from '@/lib/connectors/drivers/file'
 import { liveSqlServerQuery, readSqlServerChunk, readSqlServerRows } from '@/lib/connectors/drivers/sqlserver'
@@ -149,10 +149,12 @@ export async function readSourceRows(source: StoredDataSource, table: string, ma
   }
 
   if (!isConnectorSlug(source.sourceType)) throw new NonRetryableError(`Unsupported source type "${source.sourceType}".`)
-  // SAP / Salesforce / REST / Snowflake / Oracle / Talenta / LDAP: the connector's capped read.
+  // Cloud storage files and Elasticsearch have their own read (Elasticsearch filters by watermark itself).
+  const own = await readConnectorRows(source.sourceType, credentialsOf(source), table, maxRows, wm)
+  if (own?.watermarkApplied) return own.rows
+  // SAP / Salesforce / REST / Snowflake / Oracle / Talenta / LDAP / observability APIs: the connector's capped read.
   // These APIs can't filter by watermark server-side, so filter and order here.
-  const result = await sampleConnectorTable(source.sourceType, credentialsOf(source), table, maxRows)
-  let rows = (result.rows ?? []) as Row[]
+  let rows = own ? own.rows : (((await sampleConnectorTable(source.sourceType, credentialsOf(source), table, maxRows)).rows ?? []) as Row[])
   if (wm) {
     if (rows.length && !(wm.column in rows[0])) throw new NonRetryableError(`Watermark column "${wm.column}" is not in ${table}.`)
     if (wm.after != null) rows = rows.filter((r) => r[wm.column] != null && compareWatermarks(r[wm.column], wm.after) > 0)

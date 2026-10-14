@@ -1,4 +1,5 @@
 import { and, desc, eq } from 'drizzle-orm'
+import { withResolvedSecrets } from '@/lib/secrets/resolve'
 import { NextResponse } from 'next/server'
 import { db, pool } from '@/lib/db'
 import { catalogEntries, dataSources, domainMappings, executionLogs, nexusDatasets, pipelines } from '@/lib/db/schema'
@@ -110,7 +111,7 @@ async function readLiveTable(caller: ApiCaller, alias: string, params: URLSearch
     else if (key.startsWith('filter')) throw new ApiQueryError('Live tables support equality filters only: filter[field]=value.')
   }
   const limit = Math.min(Number(params.get('limit') ?? e.liveRowLimit) || e.liveRowLimit, e.liveRowLimit)
-  const res = await liveQuery(source, e.tableName, { limit, timeoutMs: e.liveTimeoutSeconds * 1000, filters })
+  const res = await liveQuery(await withResolvedSecrets(source), e.tableName, { limit, timeoutMs: e.liveTimeoutSeconds * 1000, filters })
   const columns = Array.from(new Set(res.rows.flatMap((r) => Object.keys(r))))
   const { masks, rowFilters } = await liveTableAccess(caller.workspaceId, alias, caller.role, columns)
   const blocked = filters.find((f) => masks[f.column])

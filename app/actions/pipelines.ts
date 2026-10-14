@@ -1,5 +1,6 @@
 'use server'
 
+import { isSecretManager } from '@/lib/secrets/types'
 import { createHash, randomBytes } from 'node:crypto'
 import { z } from 'zod'
 import { headers } from 'next/headers'
@@ -118,7 +119,8 @@ async function getBuilderOptionsImpl() {
     db.select().from(mappingTemplates).where(eq(mappingTemplates.workspaceId, ctx.workspaceId)).orderBy(mappingTemplates.name),
   ])
   return {
-    dataSources: sources.map((s) => {
+    // Secrets managers only supply credentials: never a pipeline source or destination.
+    dataSources: sources.filter((s) => !isSecretManager(s.sourceType)).map((s) => {
       const config = (s.config ?? {}) as { role?: 'source' | 'destination'; schemaScan?: SchemaScanResult }
       return {
         id: s.id,

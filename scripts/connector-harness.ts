@@ -14,8 +14,19 @@ import { databaseSsl } from '@/lib/db'
 import { REST_DEFAULTS } from '@/lib/connectors/rest-client'
 import { sampleConnectorTable, scanConnectorSchema, testConnectorConnection } from '@/lib/connectors/runtime'
 import type { ConnectorCredentials, ConnectorSlug } from '@/lib/connectors/types'
+import { isSecretManager } from '@/lib/secrets/types'
+import { secretManagerDriver } from '@/lib/secrets/managers'
+import { secretField } from '@/lib/secrets/types'
 
-type Case = { slug: ConnectorSlug; label: string; publicEndpoint?: boolean; credentials?: ConnectorCredentials; sampleTable?: string; skip?: string; setup?: () => Promise<() => void | Promise<void>> }
+// ── Infrastructure and secrets managers: one local mock of all 13 services ──
+let infraMock: Awaited<ReturnType<typeof import('./test/infra-mock').startInfraMock>> | null = null
+async function startInfra() {
+  process.env.NEXUS_ALLOW_PRIVATE_URLS = 'true'
+  if (!infraMock) infraMock = await (await import('./test/infra-mock')).startInfraMock()
+  return () => undefined
+}
+
+type Case = { slug: ConnectorSlug; label: string; publicEndpoint?: boolean; credentials?: ConnectorCredentials; sampleTable?: string; skip?: string; setup?: () => Promise<() => void | Promise<void>>; infra?: boolean; secretPath?: string; expectValue?: string }
 type Outcome = { label: string; slug: string; status: 'PASS' | 'FAIL' | 'SKIP' | 'UNREACHABLE'; detail: string; ms: number }
 
 const env = process.env
@@ -165,6 +176,19 @@ const cases: Case[] = [
     ? { slug: 'file', label: 'File upload (temporary nexus_raw table)', setup: startFileFixture, sampleTable: 'employees' }
     : { slug: 'file', label: 'File upload', skip: 'run with --env-file=.env.local (uses the Nexus database)' },
   { slug: 'kmplus', label: 'KMPlus product (local mock of the Nexus Ingest Contract)', setup: startKmplus, sampleTable: 'employee' },
+  { slug: 'prometheus', label: 'Prometheus (local mock of the HTTP API)', setup: startInfra, infra: true, sampleTable: 'service_up' },
+  { slug: 'elasticsearch', label: 'Elasticsearch (local mock: indices, mapping, scroll)', setup: startInfra, infra: true, sampleTable: 'logs-hr' },
+  { slug: 'datadog', label: 'Datadog (local mock, checks API + app keys)', setup: startInfra, infra: true, sampleTable: 'hr_api_latency' },
+  { slug: 'newrelic', label: 'New Relic (local mock of NerdGraph)', setup: startInfra, infra: true, sampleTable: 'apm_applications' },
+  { slug: 'grafana', label: 'Grafana (local mock of the HTTP API)', setup: startInfra, infra: true, sampleTable: 'dashboards' },
+  { slug: 's3', label: 'S3-compatible (local mock, verifies Signature V4)', setup: startInfra, infra: true, sampleTable: 'daily/*.csv' },
+  { slug: 'azureblob', label: 'Azure Blob (local mock, SAS token)', setup: startInfra, infra: true, sampleTable: 'reference/orgs.ndjson' },
+  { slug: 'gcs', label: 'Google Cloud Storage (local mock, verifies the JWT)', setup: startInfra, infra: true, sampleTable: 'daily/employees_2026-10-01.csv' },
+  { slug: 'vault', label: 'HashiCorp Vault (local mock, AppRole, KV v2)', setup: startInfra, infra: true, secretPath: 'hr/db#password', expectValue: 'p@ss' },
+  { slug: 'awssecrets', label: 'AWS Secrets Manager (local mock, verifies Signature V4)', setup: startInfra, infra: true, secretPath: 'hr/db#password', expectValue: 'p@ss' },
+  { slug: 'azurekeyvault', label: 'Azure Key Vault (local mock, Entra ID client credentials)', setup: startInfra, infra: true, secretPath: 'hr-db-password', expectValue: 'p@ss' },
+  { slug: 'gcpsecrets', label: 'Google Secret Manager (local mock, verifies the JWT)', setup: startInfra, infra: true, secretPath: 'hr-db#password', expectValue: 'p@ss' },
+  { slug: 'doppler', label: 'Doppler (local mock, service token)', setup: startInfra, infra: true, secretPath: 'HR_DB_PASSWORD', expectValue: 'p@ss' },
 ]
 
 // ── KMPlus product mock (Nexus Ingest Contract) on 127.0.0.1 ──────────────
@@ -200,12 +224,24 @@ async function runCase(c: Case): Promise<Outcome> {
       : c.slug === 'postgres' && !c.credentials ? { connectionString: postgresFixtureUrl, schema: fixtureSchema }
       : c.slug === 'file' ? { storageKey: FILE_KEY }
       : c.slug === 'kmplus' ? { product: 'LMS', baseUrl: kmplusMock!.baseUrl, apiToken: kmplusMock!.token }
+      : c.infra ? infraMock!.credentials[c.slug]
       : c.credentials!
     const test = await testConnectorConnection(c.slug, credentials)
     if (!test.ok && c.publicEndpoint && NETWORK_ERROR.test(test.message)) {
       return done('UNREACHABLE', `third-party demo endpoint down or blocked (${test.message}); not a connector failure. Re-run later or set private test credentials.`)
     }
     if (!test.ok) return done('FAIL', `test: ${test.message}`)
+    if (isSecretManager(c.slug)) {
+      // Secrets managers have no tables: list the names, then read one secret through a reference path.
+      const driver = secretManagerDriver(c.slug)
+      const names = await driver.list(credentials)
+      const [path, field] = (c.secretPath ?? '').split('#')
+      const value = secretField(await driver.get(credentials, path), field, path)
+      if (c.expectValue !== undefined && value !== c.expectValue) return done('FAIL', `secret ${c.secretPath} has an unexpected value`)
+      const scan = await scanConnectorSchema(c.slug, credentials)
+      if (scan.tables.length) return done('FAIL', 'a secrets manager must not expose tables')
+      return done('PASS', `${test.message} · ${names.length} secret names listed · ${c.secretPath} resolved (value not shown) · no tables`)
+    }
     const scan = await scanConnectorSchema(c.slug, credentials)
     if (!scan.tables.length) return done('FAIL', 'scan returned no tables/objects')
     const table = c.sampleTable ?? scan.tables[0].name
@@ -251,6 +287,7 @@ for (const c of cases) {
 console.log('\nNegative checks:')
 for (const line of await negativeChecks()) console.log(`  ${line}`)
 if (missing.length) console.log(`\nWARNING: catalog connectors without a test case: ${missing.join(', ')}`)
+await infraMock?.stop()
 const failed = outcomes.filter((o) => o.status === 'FAIL').length
 console.log(`\n${outcomes.filter((o) => o.status === 'PASS').length} passed, ${failed} failed, ${outcomes.filter((o) => o.status === 'UNREACHABLE').length} unreachable, ${outcomes.filter((o) => o.status === 'SKIP').length} skipped`)
 process.exit(failed ? 1 : 0)

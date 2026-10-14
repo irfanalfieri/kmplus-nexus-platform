@@ -201,6 +201,18 @@ export const connect: Messages['connect'] = {
     liveBody: 'Skema dan contoh data dimuat dari koneksi {type} produksi Anda.',
     noObjects: 'Tidak ada objek skema yang ditemukan.',
   },
+  secrets: {
+    use: 'Gunakan rahasia',
+    useFor: 'Gunakan rahasia untuk {field}',
+    none: 'Belum ada pengelola rahasia. Pasang salah satu (Vault, AWS Secrets Manager, Azure Key Vault, Google Secret Manager, Doppler) dan tambahkan di Sumber data.',
+    openConnectors: 'Buka pengelola rahasia',
+    manager: 'Pengelola rahasia',
+    choose: 'Pilih…',
+    path: 'Rahasia (nama atau path)',
+    field: 'Field (opsional)',
+    insert: 'Sisipkan referensi',
+    hint: 'Nexus membaca nilainya dari pengelola rahasia setiap kali terhubung; hanya referensinya yang disimpan.',
+  },
   network: {
     title: 'API di dalam jaringan perusahaan Anda',
     intro: 'Nexus berjalan di cloud, sehingga tidak bisa membuka koneksi ke alamat intranet dengan sendirinya. Ada dua cara menghubungkannya:',

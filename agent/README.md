@@ -46,7 +46,7 @@ Keep it running as a service: systemd (`ExecStart=/usr/bin/node /opt/nexus-agent
 ```
 
 - `${NAME}` anywhere in the file is replaced by the environment variable `NAME`; the agent refuses to start if one is missing.
-- `type` is a Nexus connector: `postgres`, `mysql`, `sqlserver`, `oracle`, `snowflake`, `sap`, `ldap`, `rest`, `talenta`, `supabase`, `kmplus`. `credentials` uses the same fields as the connector's form in Nexus.
+- `type` is a Nexus connector: `postgres`, `mysql`, `sqlserver`, `oracle`, `prometheus`, `elasticsearch`, `grafana`, `datadog`, `newrelic`, `s3` (e.g. MinIO), `azureblob`, `gcs`, `snowflake`, `sap`, `ldap`, `rest`, `talenta`, `supabase`, `kmplus`. `credentials` uses the same fields as the connector's form in Nexus.
 - `writable` (default `false`): allow pipelines to write to it. Nexus never creates or truncates tables.
 - Connections may use private and intranet addresses (`10.x`, `hr-api.corp.local`, plain `http://`): that is what the agent is for. Nexus in the cloud refuses them for direct connections.
 

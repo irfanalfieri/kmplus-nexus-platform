@@ -16,7 +16,8 @@ import { db, pool } from '@/lib/db'
 import { agentTasks as agentTaskTable, agents as agentTable, apiKeys, apiRateLimits, auditLogs, businessRuleVersions, businessRules, catalogEntries, connectorInstalls, dashboards, dataSources, datasetPolicies, datasetQualitySnapshots, domainMappings, mappingTemplates, notifications, pipelineApprovals, scimGroups, scimTokens, scimUsers, ssoProvider, webhookDeliveries, webhooks, workspaceSso, executionLogs, nexusDatasets, pipelineJobs, pipelineRunRejects, pipelines, pipelineVersions, session, user, verification, workspaceInvites, workspaceMembers, workspaces } from '@/lib/db/schema'
 import { acceptInvite, changeMemberRole, createInvite, getWorkspaceContext, listMembers, resetMemberTwoFactor, switchWorkspace } from '@/lib/actions/workspaces'
 import { installConnector } from '@/lib/actions/connectors'
-import { createDataSource, deleteDataSource, getDataSources, getEditableCredentials, renameDataSource, setDataSourceRole, testConnection, updateDataSourceCredentials } from '@/lib/actions/data-sources'
+import { createDataSource, deleteDataSource, getDataSources, getEditableCredentials, listSecretManagers, listSecretNames, renameDataSource, setDataSourceRole, testConnection, updateDataSourceCredentials } from '@/lib/actions/data-sources'
+import { startInfraMock } from './test/infra-mock'
 import { writeDataset } from '@/lib/pipelines/io'
 import { startKmplusMock } from './test/kmplus-mock'
 import { cancelPipelineRun, createWebhookTrigger, discardDraft, getBuilderOptions, getDatasetPreview, getRunStatus, listPipelines, listRuns, publishPipeline, retryPipelineRun, runPipelineNow, savePipeline } from '@/lib/actions/pipelines'
@@ -1366,6 +1367,129 @@ async function main() {
       const offline = await addAgentDataSource({ agentId: sleepy.id, connection: 'HR' })
       await rejectsWith(() => testConnection(offline.id), /offline \(last seen/)
       assert.ok(t2.startsWith('nxa_'))
+    })
+
+    await test('Secrets managers supply credentials (never data); infrastructure sources: S3 files and Elasticsearch logs into datasets', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      process.env.NEXUS_ALLOW_PRIVATE_URLS = 'true'
+      const infra = await startInfraMock()
+      try {
+        // The database URL lives only in Vault; the Postgres source holds a reference to it.
+        infra.vaultSecrets['hr/db'].url = process.env.DATABASE_URL!
+        for (const slug of ['vault', 'postgres', 's3', 'elasticsearch']) await installConnector(slug)
+        const vaultName = `${RUN} Vault`
+        const vaultId = await createDataSource({ name: vaultName, type: 'secrets manager', sourceType: 'vault', config: { role: 'source' }, credentials: infra.credentials.vault })
+        await testConnection(vaultId)
+        assert.deepEqual((await listSecretNames(vaultId)).sort(), ['hr/api', 'hr/db'], 'names only')
+        assert.ok((await listSecretManagers()).some((m) => m.id === vaultId))
+
+        const ref = `{{secret:${vaultName}:hr/db#url}}`
+        const pgId = await createDataSource({ name: `${RUN} pg via vault`, type: 'database', sourceType: 'postgres', config: { role: 'source' }, credentials: { connectionString: ref, schema: FIXTURE_SCHEMA } })
+        await testConnection(pgId)
+        const [pgRow] = await db.select().from(dataSources).where(eq(dataSources.id, pgId))
+        const storedCreds = decryptCredentials(pgId, pgRow.credentials) as Record<string, string>
+        assert.equal(storedCreds.connectionString, ref, 'only the reference is stored')
+        assert.ok(!JSON.stringify(pgRow).includes(process.env.DATABASE_URL!.split('@')[1] ?? '\u0000'), 'the resolved URL is never saved')
+        const editable = await getEditableCredentials(pgId)
+        assert.ok(editable.supported && !editable.custom && editable.values.connectionString === ref, 'the edit form shows the reference (not a secret)')
+        assert.equal((await getDataSourceTableSample(pgId, 'employees', 5)).rows.length > 0, true)
+
+        // A pipeline run resolves the reference when it loads the source.
+        const viaVault = await savePipeline({
+          publish: true,
+          name: `${RUN} via vault`,
+          definition: {
+            schemaVersion: 2,
+            nodes: [
+              { id: 's', type: 'source', position: { x: 0, y: 0 }, dataSourceId: pgId, table: 'employees' },
+              { id: 'd', type: 'destination', position: { x: 300, y: 0 }, kind: 'dataset', datasetName: `${RUN}_via_vault`, mode: 'replace' },
+            ],
+            edges: [{ id: 'e1', from: 's', to: 'd' }],
+            settings: { retries: 0 },
+          },
+          schedule: { type: 'manual' } as never,
+        })
+        const run1 = await runPipelineNow(viaVault.id)
+        takeAfterCallbacks()
+        await processJobs({})
+        const st1 = await getRunStatus(run1.runId)
+        assert.equal(st1.status, 'success', st1.errorMessage ?? '')
+
+        // A wrong reference fails clearly, without retrying.
+        await updateDataSourceCredentials(pgId, { connectionString: `{{secret:${vaultName}:hr/missing#url}}` }).then(
+          (r) => assert.equal(r.ok, false),
+          (e: Error) => assert.match(e.message, /not found/)
+        )
+        await rejectsWith(() => createDataSource({ name: `${RUN} bad ref`, type: 'database', sourceType: 'postgres', config: { role: 'source' }, credentials: { connectionString: '{{secret:Nope:hr/db#url}}' } }).then((id) => testConnection(id)), /No secrets manager named "Nope"/)
+
+        // Secrets managers never appear as pipeline sources/destinations or catalog items, and can't be sampled.
+        const options = await getBuilderOptions()
+        assert.ok(!options.dataSources.some((d) => d.id === vaultId), 'not offered in the pipeline editor')
+        assert.ok(!(await listCatalog()).items.some((i) => i.sourceName === vaultName), 'not in the catalog')
+        await rejectsWith(() => getDataSourceTableSample(vaultId, 'hr/db', 5), /never read as data/)
+
+        // S3: a folder of daily CSV exports is one table; rows carry their file.
+        const s3Id = await createDataSource({ name: `${RUN} exports`, type: 'cloud storage', sourceType: 's3', config: { role: 'source' }, credentials: infra.credentials.s3 })
+        await testConnection(s3Id)
+        const [s3Row] = await db.select().from(dataSources).where(eq(dataSources.id, s3Id))
+        const s3Tables = ((s3Row.config as { schemaScan?: { tables: { name: string }[] } }).schemaScan?.tables ?? []).map((t) => t.name)
+        assert.ok(s3Tables.includes('daily/*.csv') && s3Tables.includes('reference/orgs.ndjson') && !s3Tables.includes('readme.txt'), s3Tables.join(', '))
+        const files = await savePipeline({
+          publish: true,
+          name: `${RUN} s3 daily`,
+          definition: {
+            schemaVersion: 2,
+            nodes: [
+              { id: 's', type: 'source', position: { x: 0, y: 0 }, dataSourceId: s3Id, table: 'daily/*.csv' },
+              { id: 'd', type: 'destination', position: { x: 300, y: 0 }, kind: 'dataset', datasetName: `${RUN}_s3_daily`, mode: 'replace' },
+            ],
+            edges: [{ id: 'e1', from: 's', to: 'd' }],
+            settings: { retries: 0 },
+          },
+          schedule: { type: 'manual' } as never,
+        })
+        const run2 = await runPipelineNow(files.id)
+        takeAfterCallbacks()
+        await processJobs({})
+        const st2 = await getRunStatus(run2.runId)
+        assert.equal(st2.status, 'success', st2.errorMessage ?? '')
+        assert.equal(st2.recordsProcessed, 3, 'two files, three rows')
+        const daily = await getDatasetPreview(`${RUN}_s3_daily`)
+        assert.ok(daily.rows.every((r) => String(r._source_file).startsWith('daily/')))
+        assert.deepEqual(daily.rows.map((r) => Number(r.salary)).sort(), [1000, 2000, 3000])
+
+        // Elasticsearch: incremental sync pushes the watermark into the query.
+        const esId = await createDataSource({ name: `${RUN} logs`, type: 'observability', sourceType: 'elasticsearch', config: { role: 'source' }, credentials: infra.credentials.elasticsearch })
+        await testConnection(esId)
+        const logs = await savePipeline({
+          publish: true,
+          name: `${RUN} es logs`,
+          definition: {
+            schemaVersion: 2,
+            nodes: [
+              { id: 's', type: 'source', position: { x: 0, y: 0 }, dataSourceId: esId, table: 'logs-hr', mode: 'incremental', watermarkColumn: '@timestamp' },
+              { id: 'd', type: 'destination', position: { x: 300, y: 0 }, kind: 'dataset', datasetName: `${RUN}_es_logs`, mode: 'append' },
+            ],
+            edges: [{ id: 'e1', from: 's', to: 'd' }],
+            settings: { retries: 0 },
+          },
+          schedule: { type: 'manual' } as never,
+        })
+        const run3 = await runPipelineNow(logs.id)
+        takeAfterCallbacks()
+        await processJobs({})
+        const st3 = await getRunStatus(run3.runId)
+        assert.equal(st3.status, 'success', st3.errorMessage ?? '')
+        assert.equal(st3.recordsProcessed, 5)
+        const run4 = await runPipelineNow(logs.id)
+        takeAfterCallbacks()
+        await processJobs({})
+        assert.equal((await getRunStatus(run4.runId)).recordsProcessed, 0, 'the second run reads only newer documents')
+        assert.ok(infra.seen.some((r) => r.service === 'es' && r.path === '/_search/scroll'), 'scroll cleared')
+      } finally {
+        await infra.stop()
+      }
     })
 
     await test('admins reset a member\'s 2FA (lost phone); members cannot', async () => {

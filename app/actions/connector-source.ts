@@ -24,6 +24,7 @@ import type { Permission } from '@/lib/auth/permissions'
 import { revalidatePath } from 'next/cache'
 import { guard } from '@/lib/server-action'
 import { sampleSource, scanSource, testSource } from '@/lib/agent/sources'
+import { resolveSecretRefs } from '@/lib/secrets/resolve'
 import { sourceKey } from '@/lib/catalog/definition'
 import { applyMasks, liveTableAccess } from '@/lib/governance/masking'
 
@@ -76,19 +77,19 @@ async function getOwnedSource(sourceId: string, workspaceId: string) {
 }
 
 async function testConnectorConnectionActionImpl(rawSlug: string, rawCredentials: ConnectorCredentials) {
-  await workspaceFor('sources:manage')
+  const workspaceId = await workspaceFor('sources:manage')
   const slug = parseSlug(rawSlug)
   const credentials = userCredentials(slug, rawCredentials)
   await assertConnectorInstalled(slug)
-  return testConnectorConnection(slug, credentials)
+  return testConnectorConnection(slug, await resolveSecretRefs(workspaceId, credentials))
 }
 
 async function scanConnectorSchemaActionImpl(rawSlug: string, rawCredentials: ConnectorCredentials) {
-  await workspaceFor('sources:manage')
+  const workspaceId = await workspaceFor('sources:manage')
   const slug = parseSlug(rawSlug)
   const credentials = userCredentials(slug, rawCredentials)
   await assertConnectorInstalled(slug)
-  return scanConnectorSchema(slug, credentials)
+  return scanConnectorSchema(slug, await resolveSecretRefs(workspaceId, credentials))
 }
 
 async function scanDataSourceSchemaImpl(rawSourceId: string) {
@@ -105,7 +106,7 @@ async function scanDataSourceSchemaImpl(rawSourceId: string) {
     if (auth.refreshed) credentials = auth.refreshed as ConnectorCredentials
   }
 
-  const scan = await scanSource(source, credentials)
+  const scan = await scanSource(source, await resolveSecretRefs(workspaceId, credentials))
 
   await db
     .update(dataSources)
@@ -134,7 +135,7 @@ async function getDataSourceTableSampleImpl(rawSourceId: string, rawTableName: s
   await assertConnectorInstalled(source.sourceType)
   const credentials = parseCredentials(source.id, source.credentials)
   await recordAudit(ctx, { action: 'VIEW_DATA', resource: 'data_source', resourceId: sourceId, changes: { what: 'source_sample', table: tableName } })
-  const sample = await sampleSource(source, credentials, tableName, limit)
+  const sample = await sampleSource(source, await resolveSecretRefs(workspaceId, credentials), tableName, limit)
   // Personal columns are masked for roles without unmasked access, like catalog live samples (TD-21).
   const [entry] = await db.select({ alias: catalogEntries.alias }).from(catalogEntries).where(and(eq(catalogEntries.workspaceId, workspaceId), eq(catalogEntries.key, sourceKey(sourceId, tableName)))).limit(1)
   const rows = sample.rows as Record<string, unknown>[]
@@ -152,12 +153,12 @@ async function previewRestConnectionImpl(rawCredentials: ConnectorCredentials, r
     // Intranet API: the agent sends the request with its own base URL and sign-in.
     if (source.sourceType === 'rest' && agentOf(source)) {
       await assertConnectorInstalled('rest')
-      const test = (await testSource(source, restRequestDesign(credentials))) as { ok: boolean; message: string; preview?: RestRequestPreview }
+      const test = (await testSource(source, await resolveSecretRefs(workspaceId, restRequestDesign(credentials)))) as { ok: boolean; message: string; preview?: RestRequestPreview }
       return test.preview ?? failedPreview(test.message)
     }
   }
   await assertConnectorInstalled('rest')
-  return previewRestRequest(parseRestConfig(credentials))
+  return previewRestRequest(parseRestConfig(await resolveSecretRefs(workspaceId, credentials)))
 }
 
 function failedPreview(message: string): RestRequestPreview {
@@ -185,9 +186,10 @@ async function testAndScanDataSourceImpl(
   rawSlug: string,
   rawCredentials: ConnectorCredentials
 ) {
-  await workspaceFor('sources:manage')
+  const workspaceId = await workspaceFor('sources:manage')
   const slug = parseSlug(rawSlug)
-  const credentials = userCredentials(slug, rawCredentials)
+  // Secret references are resolved for the test only; the browser keeps the references.
+  const credentials = await resolveSecretRefs(workspaceId, userCredentials(slug, rawCredentials))
   await assertConnectorInstalled(slug)
 
   const test = await testConnectorConnection(slug, credentials)

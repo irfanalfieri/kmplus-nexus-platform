@@ -43,6 +43,13 @@ import { buildRestRequest, parseRestConfig, previewRestRequest } from '@/lib/con
 import { compareVersions } from '@/lib/agent/protocol'
 import { CONNECTOR_CATALOG } from '@/lib/connectors/catalog'
 import { CONNECTOR_GROUPS } from '@/lib/connectors/types'
+import { rfc3986, signAwsRequest } from '@/lib/net/aws-sigv4'
+import { SECRET_MANAGER_SLUGS, findSecretRefs, hasSecretRefs, isSecretManager, secretRef } from '@/lib/secrets/types'
+import { secretField } from '@/lib/secrets/types'
+import { fileTables, normalizePrefix, xmlText } from '@/lib/connectors/storage/files'
+import { promResultRows } from '@/lib/connectors/drivers/prometheus'
+import { mappingColumns } from '@/lib/connectors/drivers/elasticsearch'
+import { flattenRow, parseNamedQueries } from '@/lib/connectors/http'
 import { connectorMatches, groupConnectors, isConnectorGroup, normalizeSearch } from '@/lib/connectors/search'
 import { msIdent, sqlServerChunkQuery, sqlServerColumnType, sqlServerConfig, sqlServerLiveQuery, sqlServerSchema } from '@/lib/connectors/drivers/sqlserver'
 import { issuerFor, PUBLIC_EMAIL_DOMAINS, DOMAIN_RE } from '@/lib/auth/sso-presets'
@@ -1032,7 +1039,11 @@ async function main() {
     const find = (q: string, extra: (c: (typeof CONNECTOR_CATALOG)[number]) => string[] = () => []) => CONNECTOR_CATALOG.filter((c) => connectorMatches(c, q, extra(c))).map((c) => c.slug)
     assert.deepEqual(find('hris'), ['talenta'])
     assert.deepEqual(find('Mekari'), ['talenta'])
-    assert.deepEqual(find('excel'), ['file'])
+    assert.deepEqual(find('excel'), ['file', 's3', 'azureblob', 'gcs'], 'uploads and cloud storage files')
+    assert.deepEqual(find('apm'), ['prometheus', 'elasticsearch', 'datadog', 'newrelic'])
+    assert.deepEqual(find('minio'), ['s3'])
+    assert.deepEqual(find('vault'), ['vault', 'azurekeyvault'])
+    assert.deepEqual(find('rahasia').sort(), ['awssecrets', 'azurekeyvault', 'doppler', 'gcpsecrets', 'vault'])
     assert.deepEqual(find('active dir'), ['ldap'])
     assert.deepEqual(find('sql server'), ['sqlserver'])
     assert.deepEqual(find('mssql'), ['sqlserver'])
@@ -1050,7 +1061,7 @@ async function main() {
     assert.ok(find('pangkalan', () => ['Pangkalan data']).length === CONNECTOR_CATALOG.length, 'translated text passed by the screen is searched too')
     assert.equal(normalizeSearch('  Ëxcel / CSV! '), 'excel / csv')
     const grouped = groupConnectors(CONNECTOR_CATALOG)
-    assert.deepEqual(grouped.map((g) => g.group), ['applications', 'kmplus', 'databases', 'apis', 'files', 'identity'])
+    assert.deepEqual(grouped.map((g) => g.group), ['applications', 'kmplus', 'databases', 'apis', 'files', 'infrastructure', 'identity', 'secrets'])
     assert.equal(grouped.reduce((n, g) => n + g.items.length, 0), CONNECTOR_CATALOG.length)
     assert.ok(isConnectorGroup('databases') && !isConnectorGroup('nope'))
 
@@ -1084,6 +1095,59 @@ async function main() {
     assert.throws(() => sqlServerConfig({ host: 'sql01' }), /host, database and username/)
     assert.equal(sqlServerSchema({}), 'dbo')
     assert.equal(detectConnectors('Login failed for user \'nexus\'. (Microsoft SQL Server, Error: 18456)', CONNECTOR_CATALOG.map((c) => ({ slug: c.slug, name: c.name, category: c.category, description: c.description })))[0]?.slug, 'sqlserver')
+  })
+
+  await test('Infrastructure & secrets: Signature V4 matches AWS, secret references, file tables, PromQL rows, named queries', () => {
+    // AWS's published Signature Version 4 example (IAM ListUsers, 2015-08-30).
+    const signed = signAwsRequest({
+      method: 'GET',
+      url: 'https://iam.amazonaws.com/?Action=ListUsers&Version=2010-05-08',
+      region: 'us-east-1',
+      service: 'iam',
+      credentials: { accessKeyId: 'AKIDEXAMPLE', secretAccessKey: 'wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY' },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8' },
+      now: new Date('2015-08-30T12:36:00Z'),
+    })
+    assert.match(signed.Authorization, /Signature=5d672d79c15b13162d9279b0855cfba6789a8edb4c82c400e06b5924a6f2b5d7$/)
+    assert.equal(rfc3986("a b!*'()~"), 'a%20b%21%2A%27%28%29~')
+
+    // Secret references: whole values or parts of one; never matched across braces.
+    const refs = findSecretRefs('postgres://nexus:{{secret:Vault prod:hr/db#password}}@db.corp:5432/hr?x={{ secret: AWS : prod/api }}')
+    assert.deepEqual(refs.map((r) => [r.source, r.path, r.field]), [['Vault prod', 'hr/db', 'password'], ['AWS', 'prod/api', undefined]])
+    assert.equal(secretRef('Vault prod', 'hr/db', 'password'), '{{secret:Vault prod:hr/db#password}}')
+    assert.ok(hasSecretRefs({ a: 'x', b: '{{secret:V:p}}' }) && !hasSecretRefs({ a: '{{name}}' }))
+    assert.equal(secretField('plain', undefined, 'x'), 'plain')
+    assert.equal(secretField('{"password":"p"}', 'password', 'x'), 'p')
+    assert.equal(secretField({ password: 'p' }, undefined, 'x'), 'p', 'a single field needs no #field')
+    assert.throws(() => secretField({ user: 'u', password: 'p' }, undefined, 'x'), /several fields/)
+    assert.throws(() => secretField({ password: 'p' }, 'token', 'x'), /no field "token"/)
+    assert.ok(isSecretManager('vault') && !isSecretManager('s3'))
+    assert.deepEqual(CONNECTOR_CATALOG.filter((c) => c.group === 'secrets').map((c) => c.slug).sort(), [...SECRET_MANAGER_SLUGS].sort(), 'every secrets manager is in the Secrets managers category')
+
+    // Cloud storage: files and folders of one format become tables.
+    const objects = [
+      { key: 'exports/daily/e_1.csv', size: 10, modified: '2026-10-01' },
+      { key: 'exports/daily/e_2.csv', size: 10, modified: '2026-10-02' },
+      { key: 'exports/orgs.xlsx', size: 10, modified: null },
+      { key: 'exports/notes.txt', size: 10, modified: null },
+      { key: 'exports/daily/', size: 0, modified: null },
+    ]
+    const tables = fileTables(objects, 'exports/')
+    assert.deepEqual(tables.map((x) => x.name), ['daily/*.csv', 'daily/e_1.csv', 'daily/e_2.csv', 'orgs.xlsx'])
+    assert.deepEqual(tables[0].keys, ['exports/daily/e_1.csv', 'exports/daily/e_2.csv'])
+    assert.equal(tables[0].modified, '2026-10-02')
+    assert.equal(normalizePrefix('/exports'), 'exports/')
+    assert.equal(xmlText('<a><Key>x &amp; y</Key></a>', 'Key'), 'x & y')
+
+    // Observability: PromQL results as rows; "name = query" lists.
+    assert.deepEqual(promResultRows({ resultType: 'vector', result: [{ metric: { job: 'hr' }, value: [1791900000, '0.5'] }] }), [{ job: 'hr', value: 0.5, timestamp: '2026-10-13T14:00:00.000Z' }])
+    assert.equal(promResultRows({ resultType: 'matrix', result: [{ metric: { job: 'hr' }, values: [[1, '1'], [2, '2']] }] }).length, 2)
+    assert.deepEqual(parseNamedQueries('Api Latency = histogram_quantile(0.95, x) ;; errors=sum(rate(e[5m]))\nbad line'), [
+      { name: 'api_latency', query: 'histogram_quantile(0.95, x)' },
+      { name: 'errors', query: 'sum(rate(e[5m]))' },
+    ])
+    assert.deepEqual(mappingColumns({ properties: { '@timestamp': { type: 'date' }, http: { properties: { status: { type: 'long' } } } } }).map((c) => c.name), ['@timestamp', 'http.status'])
+    assert.deepEqual(flattenRow({ labels: { job: 'hr' }, tags: ['a', 'b'] }), { 'labels.job': 'hr', tags: 'a, b' })
   })
 
   console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`)

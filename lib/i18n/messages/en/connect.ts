@@ -204,6 +204,18 @@ export const connect = {
     liveBody: 'Schema and samples are loaded from your production {type} connection.',
     noObjects: 'No schema objects found.',
   },
+  secrets: {
+    use: 'Use a secret',
+    useFor: 'Use a secret for {field}',
+    none: 'No secrets manager yet. Install one (Vault, AWS Secrets Manager, Azure Key Vault, Google Secret Manager, Doppler) and add it in Data sources.',
+    openConnectors: 'Open secrets managers',
+    manager: 'Secrets manager',
+    choose: 'Choose…',
+    path: 'Secret (name or path)',
+    field: 'Field (optional)',
+    insert: 'Insert reference',
+    hint: 'Nexus reads the value from the secrets manager each time it connects; only the reference is saved.',
+  },
   network: {
     title: 'APIs inside your company network',
     intro: 'Nexus runs in the cloud, so it cannot open a connection to an intranet address by itself. Two ways to connect one:',

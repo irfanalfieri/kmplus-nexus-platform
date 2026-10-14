@@ -9,6 +9,8 @@ import type { MessageKey, Translate } from '@/lib/i18n/translate'
 import type { CredentialField } from '@/lib/connectors/types'
 import RestConnectorForm from '@/components/connectors/rest-connector-form'
 import SalesforceConnectorForm from '@/components/connectors/salesforce-connector-form'
+import SecretRefPicker from '@/components/connectors/secret-ref-picker'
+import { hasSecretRefs } from '@/lib/secrets/types'
 
 const OPTIONAL_SUFFIX = ' (optional)'
 const KNOWN_FIELDS: Record<string, string> = connectMessages.fields
@@ -76,12 +78,14 @@ export default function ConnectorCredentialForm({
             </Label>
             <Input
               id={`${uid}-${field.key}`}
-              type={field.type === 'password' ? 'password' : field.type === 'number' ? 'number' : 'text'}
+              // A secret reference is not a secret: show it as text.
+              type={field.type === 'password' && !hasSecretRefs({ v: values[field.key] ?? '' }) ? 'password' : field.type === 'number' ? 'number' : 'text'}
               placeholder={field.placeholder ?? label}
               value={values[field.key] ?? ''}
               onChange={(e) => onChange(field.key, e.target.value)}
               required={field.required}
             />
+            {field.type === 'password' && <SecretRefPicker fieldLabel={label} onPick={(ref) => onChange(field.key, ref)} />}
           </div>
         )
       })}

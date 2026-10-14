@@ -1,5 +1,7 @@
 'use server'
 
+import { isSecretManager } from '@/lib/secrets/types'
+import { withResolvedSecrets } from '@/lib/secrets/resolve'
 import { z } from 'zod'
 import { and, eq, gte, inArray, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
@@ -114,7 +116,8 @@ async function listCatalogImpl() {
         ...doc(e),
       }
     }),
-    ...sources.flatMap((s) => {
+    // Secrets managers have no tables and never appear in the catalog.
+    ...sources.filter((s) => !isSecretManager(s.sourceType)).flatMap((s) => {
       const scan = ((s.config ?? {}) as { schemaScan?: SchemaScanResult }).schemaScan
       return (scan?.tables ?? []).map((t) => {
         const key = sourceKey(s.id, t.name)
@@ -184,7 +187,7 @@ async function getCatalogSampleImpl(rawKey: string): Promise<Sample> {
   const [e] = await db.select().from(catalogEntries).where(and(eq(catalogEntries.workspaceId, ctx.workspaceId), eq(catalogEntries.key, key))).limit(1)
   if (e?.accessMode === 'cached' && e.alias) return datasetSample(ctx, e.alias)
   const limit = Math.min(20, e?.liveRowLimit ?? 1000)
-  const res = await liveQuery(source, ref.tableName, { limit, timeoutMs: (e?.liveTimeoutSeconds ?? 30) * 1000 })
+  const res = await liveQuery(await withResolvedSecrets(source), ref.tableName, { limit, timeoutMs: (e?.liveTimeoutSeconds ?? 30) * 1000 })
   const columns = Array.from(new Set(res.rows.flatMap((r) => Object.keys(r))))
   const { masks } = await liveTableAccess(ctx.workspaceId, e?.alias ?? null, ctx.role, columns)
   await recordAudit(ctx, { action: 'VIEW_DATA', resource: 'data_source', resourceId: source.id, changes: { what: 'catalog_live_sample', table: ref.tableName, rows: res.rows.length } })

@@ -1,5 +1,6 @@
 'use client'
 
+import { isSecretManager, secretRef } from '@/lib/secrets/types'
 import { AiConnectorSuggest } from '@/components/ai/ai-connector-suggest'
 import { suggestConnector } from '@/lib/actions/ai'
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -177,7 +178,7 @@ export default function DataSourcesLayer() {
       {adding && (
         <AddSourceDialog
           role={adding}
-          connectors={installedConnectors}
+          connectors={adding === 'destination' ? installedConnectors.filter((c) => !isSecretManager(c.slug)) : installedConnectors}
           onClose={() => setAdding(null)}
           onCreated={async (name) => {
             setAdding(null)
@@ -314,7 +315,10 @@ export default function DataSourcesLayer() {
                         <div className="text-xs text-muted-foreground">{getConnectorDefinition(source.sourceType)?.name ?? source.sourceType.toUpperCase()}</div>
                       </Td>
                       <Td>
-                        {canManage ? (
+                        {isSecretManager(source.sourceType) ? (
+                          // Secrets managers supply credentials to other sources; they are never read or written as data.
+                          <span title={t('sources.secretsHint', { name: source.name })}>{t('sources.roleSecrets')}</span>
+                        ) : canManage ? (
                           <select
                             value={role}
                             disabled={busy !== null}
@@ -339,7 +343,7 @@ export default function DataSourcesLayer() {
                           <StateMark state={connected ? 'live' : source.status === 'error' ? 'tripped' : 'idle'}>{connected ? t('sources.connected') : source.status === 'error' ? t('sources.error') : t('sources.disconnected')}</StateMark>
                         )}
                       </Td>
-                      <Td className="text-right font-mono text-xs">{scan ? scan.tables.length : '—'}</Td>
+                      <Td className="text-right font-mono text-xs">{scan && !isSecretManager(source.sourceType) ? scan.tables.length : '—'}</Td>
                       <Td className="font-mono text-xs text-muted-foreground">{ago(source.lastConnected)}</Td>
                       <Td className="text-right">
                         <div className="flex items-center justify-end gap-1.5">
@@ -348,7 +352,7 @@ export default function DataSourcesLayer() {
                               <Upload /> {t('sources.upload')}
                             </Button>
                           )}
-                          {connected && canPreview && (
+                          {connected && canPreview && !isSecretManager(source.sourceType) && (
                             <Button
                               size="sm"
                               variant="outline"
@@ -477,7 +481,7 @@ function AddSourceDialog({
         return
       }
       setScan(result.scan)
-      setMessage(t('sources.connectedFound', { count: result.scan.tables.length, method: result.scan.method }))
+      setMessage(isSecretManager(type) ? `${result.test.message} ${t('sources.secretsReady', { example: secretRef(name.trim() || 'Name', 'path/to/secret', 'field') })}` : t('sources.connectedFound', { count: result.scan.tables.length, method: result.scan.method }))
       setTested(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : t('sources.testFailed'))
@@ -553,7 +557,7 @@ function AddSourceDialog({
               }}
             >
               <SelectTrigger id="new-source-type" className="w-full">
-                <SelectValue placeholder={t('sources.connectorPlaceholder')} />
+                <SelectValue placeholder={t('sources.connectorPlaceholder')}>{(value: string | null) => (value ? (getConnectorDefinition(value)?.name ?? value) : t('sources.connectorPlaceholder'))}</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {connectors.map((c) => (

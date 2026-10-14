@@ -12,6 +12,21 @@ export type ConnectorSlug =
   | 'ldap'
   | 'file'
   | 'kmplus'
+  // Infrastructure: observability and cloud file storage (read-only sources)
+  | 'prometheus'
+  | 'elasticsearch'
+  | 'datadog'
+  | 'newrelic'
+  | 'grafana'
+  | 's3'
+  | 'azureblob'
+  | 'gcs'
+  // Secrets managers: supply credentials to other data sources, never read as data
+  | 'vault'
+  | 'awssecrets'
+  | 'azurekeyvault'
+  | 'gcpsecrets'
+  | 'doppler'
 
 export interface CredentialField {
   key: string
@@ -25,7 +40,7 @@ export interface CredentialField {
  * How the Connectors screen groups connectors (filter chips and sections).
  * `category` stays the finer label shown on each card.
  */
-export const CONNECTOR_GROUPS = ['applications', 'kmplus', 'databases', 'apis', 'files', 'identity'] as const
+export const CONNECTOR_GROUPS = ['applications', 'kmplus', 'databases', 'apis', 'files', 'infrastructure', 'identity', 'secrets'] as const
 export type ConnectorGroup = (typeof CONNECTOR_GROUPS)[number]
 
 export interface ConnectorDefinition {

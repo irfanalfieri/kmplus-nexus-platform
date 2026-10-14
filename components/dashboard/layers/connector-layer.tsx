@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { AppWindow, Boxes, Braces, Database, Download, FileSpreadsheet, Loader2, Lock, Plug, Search, Trash2, Users, X } from 'lucide-react'
+import { AppWindow, Boxes, Braces, Database, Download, FileSpreadsheet, KeyRound, Loader2, Lock, Plug, Search, Server, Trash2, Users, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Notice } from '@/components/ui/notice'
@@ -26,7 +26,9 @@ const GROUP_ICONS: Record<ConnectorGroup, ReactNode> = {
   databases: <Database aria-hidden />,
   apis: <Braces aria-hidden />,
   files: <FileSpreadsheet aria-hidden />,
+  infrastructure: <Server aria-hidden />,
   identity: <Users aria-hidden />,
+  secrets: <KeyRound aria-hidden />,
 }
 
 const chipClass = (active: boolean) =>

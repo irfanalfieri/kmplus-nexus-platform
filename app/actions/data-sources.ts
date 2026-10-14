@@ -1,7 +1,7 @@
 'use server'
 
 import { z } from 'zod'
-import { and, desc, eq } from 'drizzle-orm'
+import { and, desc, eq, inArray } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/lib/db'
 import { agents, dataSources, pipelines } from '@/lib/db/schema'
@@ -14,6 +14,9 @@ import { diffObjects } from '@/lib/audit-diff'
 import { hasCustomCredentialForm, maskCredentials, restoreSecrets } from '@/lib/connectors/secret-mask'
 import { guard } from '@/lib/server-action'
 import { restRequestDesign } from '@/lib/connectors/rest/agent-request'
+import { forgetCachedSecrets, resolveSecretRefs } from '@/lib/secrets/resolve'
+import { SECRET_MANAGER_SLUGS, hasSecretRefs, isSecretManager } from '@/lib/secrets/types'
+import { secretManagerDriver } from '@/lib/secrets/managers'
 
 const idSchema = z.string().trim().min(1).max(100)
 const roleSchema = z.enum(['source', 'destination'])
@@ -116,7 +119,7 @@ async function testConnectionImpl(rawId: string) {
 
   const { testSource, scanSource } = await import('@/lib/agent/sources')
   await assertConnectorInstalled(source.sourceType)
-  const credentials = asStrings(decryptCredentials(source.id, source.credentials))
+  const credentials = await resolveSecretRefs(ctx.workspaceId, asStrings(decryptCredentials(source.id, source.credentials)))
   // Agent-backed sources are tested by the agent, with its local credentials.
   const test = await testSource(source, credentials)
   if (!test.ok) throw new Error(test.message)
@@ -158,7 +161,8 @@ async function getEditableCredentialsImpl(rawId: string) {
   const secretsSet: string[] = []
   for (const field of definition.credentialFields) {
     if (field.type === 'password') {
-      if (stored[field.key]) secretsSet.push(field.key)
+      if (stored[field.key] && hasSecretRefs({ v: stored[field.key] })) values[field.key] = stored[field.key]
+      else if (stored[field.key]) secretsSet.push(field.key)
     } else {
       values[field.key] = stored[field.key] ?? ''
     }
@@ -223,9 +227,12 @@ async function testAndSave(ctx: WorkspaceContext, source: typeof dataSources.$in
       return { ok: false as const, message: err instanceof Error ? err.message : 'Salesforce sign-in failed.' }
     }
   }
-  const test = await testSource(source, merged)
+  // Secret references are resolved for the test only; the saved credentials keep the references.
+  const live = await resolveSecretRefs(ctx.workspaceId, merged)
+  const test = await testSource(source, live)
   if (!test.ok) return { ok: false as const, message: test.message }
-  const scan = await scanSource(source, merged)
+  const scan = await scanSource(source, live)
+  if (isSecretManager(source.sourceType)) forgetCachedSecrets()
 
   await db
     .update(dataSources)
@@ -241,6 +248,29 @@ async function testAndSave(ctx: WorkspaceContext, source: typeof dataSources.$in
   await audit(ctx, 'UPDATE_CREDENTIALS', source.id, { fields: changedFields })
   revalidatePath('/dashboard', 'layout')
   return { ok: true as const, message: `${test.message} Found ${scan.tables.length} objects.` }
+}
+
+/** Secrets managers of the workspace, for the "Use a secret" picker in credential forms (names only). */
+async function listSecretManagersImpl() {
+  const ctx = await requireWorkspace('sources:manage')
+  const rows = await db
+    .select({ id: dataSources.id, name: dataSources.name, sourceType: dataSources.sourceType, status: dataSources.status })
+    .from(dataSources)
+    .where(and(eq(dataSources.workspaceId, ctx.workspaceId), inArray(dataSources.sourceType, [...SECRET_MANAGER_SLUGS])))
+    .orderBy(dataSources.name)
+  return rows
+}
+
+/** Names of the secrets a secrets manager can read (never their values), for the picker. */
+async function listSecretNamesImpl(rawId: string, rawPrefix = '') {
+  const ctx = await requireWorkspace('sources:manage')
+  const source = await getOwned(ctx, idSchema.parse(rawId))
+  if (!isSecretManager(source.sourceType)) throw new Error('This data source is not a secrets manager.')
+  const prefix = z.string().max(300).parse(rawPrefix)
+  const credentials = await resolveSecretRefs(ctx.workspaceId, decryptCredentials(source.id, source.credentials))
+  const names = await secretManagerDriver(source.sourceType).list(credentials, prefix)
+  await audit(ctx, 'VIEW_DATA', source.id, { what: 'secret_names', count: names.length })
+  return names
 }
 
 async function renameDataSourceImpl(rawId: string, rawName: string) {
@@ -314,6 +344,14 @@ export async function getEditableCredentials(...args: Parameters<typeof getEdita
 
 export async function updateDataSourceCredentials(...args: Parameters<typeof updateDataSourceCredentialsImpl>) {
   return guard(() => updateDataSourceCredentialsImpl(...args))
+}
+
+export async function listSecretManagers(...args: Parameters<typeof listSecretManagersImpl>) {
+  return guard(() => listSecretManagersImpl(...args))
+}
+
+export async function listSecretNames(...args: Parameters<typeof listSecretNamesImpl>) {
+  return guard(() => listSecretNamesImpl(...args))
 }
 
 export async function renameDataSource(...args: Parameters<typeof renameDataSourceImpl>) {

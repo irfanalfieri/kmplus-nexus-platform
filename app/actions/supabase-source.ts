@@ -1,5 +1,6 @@
 'use server'
 
+import { resolveSecretRefs } from '@/lib/secrets/resolve'
 import { z } from 'zod'
 import { db } from '@/lib/db'
 import { dataSources } from '@/lib/db/schema'
@@ -74,7 +75,7 @@ async function scanSupabaseSourceSchemaImpl(rawSourceId: string) {
     throw new Error('Source is not a Supabase connection')
   }
 
-  const credentials = parseCredentials(source.id, source.credentials)
+  const credentials = (await resolveSecretRefs(source.workspaceId, parseCredentials(source.id, source.credentials) as unknown as Record<string, unknown>)) as unknown as SupabaseCredentials
   const scan = await scanSupabaseSchema(credentials)
 
   await db
@@ -110,7 +111,7 @@ async function getSupabaseTableSampleActionImpl(
     throw new Error('Source is not a Supabase connection')
   }
 
-  const credentials = parseCredentials(source.id, source.credentials)
+  const credentials = (await resolveSecretRefs(source.workspaceId, parseCredentials(source.id, source.credentials) as unknown as Record<string, unknown>)) as unknown as SupabaseCredentials
   await recordAudit(ctx, { action: 'VIEW_DATA', resource: 'data_source', resourceId: sourceId, changes: { what: 'source_sample', table: tableName } })
   return fetchSupabaseTableSample(credentials, tableName, limit)
 }
