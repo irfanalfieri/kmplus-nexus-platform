@@ -70,6 +70,7 @@ const ALL_SCREENS = [
   ['governance', '/dashboard/governance'],
   ['analytics', '/dashboard/analytics'],
   ['settings', '/dashboard/settings'],
+  ['environments', '/dashboard/settings/environments'],
 ]
 const SCREENS = ALL_SCREENS.filter(([key]) => !only || only.split(',').includes(key))
 

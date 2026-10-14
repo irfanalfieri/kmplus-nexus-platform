@@ -1187,6 +1187,7 @@ async function main() {
       groups: c.faqGroups.map((g) => g.id),
       steps: c.diagrams.pipeline.steps.length,
       stages: c.diagrams.workflow.stages.length,
+      envStages: c.diagrams.environments.stages.length,
       permissions: Object.keys(c.diagrams.roles.permissions).sort(),
     })
     assert.deepEqual(shape(HELP_CONTENT.id), shape(en))

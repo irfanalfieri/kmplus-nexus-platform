@@ -16,6 +16,7 @@ export const HELP_SCREENS = {
   governance: { width: 1440, height: 900 },
   analytics: { width: 1440, height: 900 },
   settings: { width: 1440, height: 900 },
+  environments: { width: 1440, height: 900 },
 } as const
 
 export type HelpScreen = keyof typeof HELP_SCREENS

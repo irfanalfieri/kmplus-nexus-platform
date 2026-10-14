@@ -1,8 +1,9 @@
 import type { HelpContent } from '../types'
 
-/** Panduan dalam Bahasa Indonesia; id bab, bagian dan FAQ sama dengan en.ts. */
+/** Panduan dalam Bahasa Indonesia; id dan bentuk blok sama dengan en.ts. */
 export const helpId: HelpContent = {
   chapters: [
+    // ── 1 ───────────────────────────────────────────────────────────────────
     {
       id: 'start',
       title: 'Memulai',
@@ -14,7 +15,7 @@ export const helpId: HelpContent = {
           title: 'Apa itu Nexus',
           blocks: [
             { kind: 'p', text: 'KMPlus Nexus adalah platform integrasi di balik produk KMPlus (KMS, LMS, TMS, PMS, CMS, IMS). Nexus **terhubung** ke sistem tempat data SDM Anda sudah berada, **memindahkan** data itu lewat pipeline yang diperiksa, **mengatur** siapa boleh melihat apa, dan **mengirimkannya** ke produk KMPlus, ke dataset yang bisa Anda analisis, dan ke sistem lain melalui API dan webhook.' },
-            { kind: 'diagram', diagram: 'workflow', caption: 'Alur kerja. Setiap layar Nexus termasuk salah satu tahap ini; tur terpandu mengunjunginya dengan urutan yang sama.' },
+            { kind: 'diagram', diagram: 'workflow', caption: 'Alur kerja. Setiap layar Nexus termasuk salah satu tahap ini; tur terpandu mengunjunginya dengan urutan yang sama, begitu juga bab-bab panduan ini.' },
             { kind: 'p', text: 'Tidak ada yang disalin manual. Pipeline yang diterbitkan berjalan sesuai jadwal (atau saat pipeline lain selesai, ada panggilan API, atau webhook masuk), memeriksa setiap baris di perjalanan, dan menahan baris yang gagal alih-alih menghilangkannya.' },
           ],
         },
@@ -33,7 +34,8 @@ export const helpId: HelpContent = {
                 ['Eksekusi', 'Satu kali pipeline dijalankan: antre → berjalan → berhasil atau gagal, per potongan 5.000 baris.'],
                 ['Karantina', 'Baris yang ditahan oleh pemeriksaan atau menunggu persetujuan. Baris yang sudah diperbaiki dikirim ulang dari langkah yang menahannya.'],
                 ['Aturan bisnis', 'Pemeriksaan atau keputusan yang bisa dipakai ulang (NIK valid, tanggal selesai setelah tanggal mulai) oleh pipeline mana pun.'],
-                ['Workspace', 'Ruang perusahaan Anda: anggota, peran, sumber data, dan pipeline. Lingkungan menghubungkan workspace dev, staging, dan prod.'],
+                ['Workspace', 'Ruang perusahaan Anda: anggota, peran, sumber data, dan pipeline.'],
+                ['Lingkungan', 'Workspace yang ditandai Development, Staging, atau Production. Pipeline berpindah dari satu ke berikutnya lewat promosi.'],
                 ['Nexus Agent', 'Program kecil di jaringan Anda yang menjangkau sistem yang tidak bisa dijangkau cloud (database dan API intranet).'],
               ],
             },
@@ -50,11 +52,28 @@ export const helpId: HelpContent = {
                 '**Rel** di kiri mengelompokkan layar menurut tugas: Bangun, Operasikan, Tata kelola, Analisis, dan Ruang kerja. Di bawah 1024 px rel dibuka dari tombol menu.',
                 '**Pergi ke… (Ctrl K)** di bilah atas langsung menuju layar atau bagian pengaturan mana pun berdasarkan nama.',
                 '**Pandu saya** memulai tur terpandu; **Bantuan & FAQ** membuka panduan ini.',
-                '**Lonceng** menampilkan eksekusi gagal dan baris tertahan; **menu akun** mengganti tema (terang, gelap, sistem) dan bahasa (English, Bahasa Indonesia).',
+                '**Lonceng** menampilkan eksekusi gagal dan baris tertahan; **menu akun** mengganti tema dan bahasa serta untuk keluar.',
+                '**Pengalih workspace** di bawah logo berpindah antar-workspace dan lingkungan Anda.',
                 'Setiap layar punya alamat sendiri, jadi bisa Anda tandai atau kirim ke rekan kerja.',
               ],
             },
             { kind: 'note', tone: 'info', text: 'Yang Anda lihat bergantung pada peran Anda. Kontrol yang tidak bisa Anda gunakan disembunyikan; server memeriksa ulang setiap tindakan, jadi penyembunyian hanya kemudahan, bukan perlindungannya.' },
+          ],
+        },
+        {
+          id: 'overview',
+          title: 'Membaca Ringkasan',
+          blocks: [
+            {
+              kind: 'list',
+              items: [
+                '**Bacaan** menghitung 24 jam terakhir: eksekusi, kegagalan, baris ditulis, baris ditahan, dan dataset.',
+                '**Jalur** menggambar setiap pipeline dari sumbernya sampai tujuan tulisnya. Jalur merah (trip) gagal pada eksekusi terakhir atau menahan baris; jalur teal aktif. Jalur yang trip tampil paling atas.',
+                '**Perlu Anda tangani** mengumpulkan baris tertahan, persetujuan yang menunggu orang kedua, eksekusi gagal, dan sumber yang terputus, masing-masing dengan tautan ke tempat memperbaikinya.',
+                '**Siapkan ruang kerja Anda** mencentang langkah awal (konektor, sumber, pipeline, eksekusi pertama, jadwal) sampai semuanya selesai.',
+                '**Berikutnya** menampilkan eksekusi terjadwal berikutnya.',
+              ],
+            },
           ],
         },
         {
@@ -67,69 +86,120 @@ export const helpId: HelpContent = {
                 '**Konektor**: pasang konektor untuk sistem SDM Anda (mis. Talenta, SAP, atau sebuah database).',
                 '**Sumber data → Tambah sumber**: isi kredensialnya lalu **Uji**. Nexus menampilkan tabel yang bisa dibacanya.',
                 '**Pipeline → Pipeline baru**: pilih templat seperti **HRIS → Employee**, pilih tabel sumber, lalu buka editor.',
-                '**Uji coba** di editor untuk melihat baris mengalir di setiap langkah, lalu **Terbitkan** dan atur jadwal.',
+                '**Uji pada sampel** di editor untuk melihat baris mengalir di setiap langkah, lalu **Simpan & publikasikan** dan atur jadwal.',
                 'Pantau eksekusi pertama di **Pemantauan**, dan perbaiki baris tertahan di **Kualitas data**.',
               ],
             },
           ],
         },
+        {
+          id: 'prefs',
+          title: 'Bahasa, tema, dan waktu',
+          blocks: [
+            { kind: 'p', text: 'Menu akun (nama Anda, kanan atas) mengganti antarmuka antara **English** dan **Bahasa Indonesia** serta tema antara **terang**, **gelap**, dan **sistem**. Pilihan diingat di browser ini. Data, nama kolom, dan pengenal tidak pernah diterjemahkan.' },
+            { kind: 'p', text: 'Waktu ditampilkan dalam **Waktu Indonesia Barat (WIB)**, dan jadwal diatur dalam WIB. Stempel waktu yang disimpan tanpa zona dianggap UTC.' },
+          ],
+        },
       ],
     },
+    // ── 2 ───────────────────────────────────────────────────────────────────
     {
       id: 'connect',
       title: 'Hubungkan sistem Anda',
-      summary: 'Konektor, sumber data, Nexus Agent untuk intranet, pengelola rahasia, dan sumber infrastruktur.',
+      summary: 'Konektor, sumber data, file, Nexus Agent untuk intranet, pengelola rahasia, sumber infrastruktur, dan tujuan.',
       screen: 'sources',
       sections: [
         {
           id: 'connectors',
-          title: 'Konektor',
+          title: 'Konektor dan kategori',
           blocks: [
             { kind: 'shot', screen: 'connectors', caption: 'Konektor dikelompokkan per kategori, dengan pencarian.' },
-            { kind: 'p', text: 'Konektor dikelompokkan sebagai **Aplikasi** (SAP SuccessFactors / HCM, Talenta, Salesforce …), **Produk KMPlus**, **Database & gudang data** (PostgreSQL, MySQL, SQL Server, Oracle, Snowflake, Supabase), **API** (REST API apa pun), **File** (unggah CSV dan Excel), **Infrastruktur** (observabilitas dan penyimpanan cloud), **Identitas & direktori** (Active Directory / LDAP), dan **Pengelola rahasia**. Pencarian mencocokkan nama dan kata kunci, jadi “excel” menemukan unggah file dan penyimpanan cloud.' },
-            { kind: 'p', text: 'Memasang konektor memerlukan izin *pasang konektor* (admin). Konektor bertanda premium mungkin berbayar nanti; saat ini semua konektor gratis dipasang.' },
+            {
+              kind: 'table',
+              head: ['Kategori', 'Contoh'],
+              rows: [
+                ['Aplikasi', 'SAP SuccessFactors / HCM, Talenta (Mekari), Salesforce'],
+                ['Produk KMPlus', 'KMS, LMS, TMS, PMS, CMS, IMS (tujuan)'],
+                ['Database & gudang data', 'PostgreSQL, MySQL, Microsoft SQL Server, Oracle, Snowflake, Supabase'],
+                ['API', 'REST API apa pun, dirancang lewat formulir'],
+                ['File', 'Unggah CSV dan Excel'],
+                ['Infrastruktur', 'Prometheus, Elasticsearch / OpenSearch, Datadog, New Relic, Grafana, penyimpanan kompatibel S3, Azure Blob, Google Cloud Storage'],
+                ['Identitas & direktori', 'Active Directory / LDAP'],
+                ['Pengelola rahasia', 'HashiCorp Vault, AWS Secrets Manager, Azure Key Vault, Google Secret Manager, Doppler'],
+              ],
+            },
+            { kind: 'p', text: 'Pencarian mencocokkan nama dan kata kunci dalam bahasa Inggris dan Indonesia, jadi “excel” menemukan unggah file dan penyimpanan cloud. Memasang konektor memerlukan izin *pasang konektor* (admin). Konektor bertanda premium mungkin berbayar nanti; saat ini semua konektor gratis dipasang.' },
           ],
         },
         {
           id: 'sources',
-          title: 'Sumber data',
+          title: 'Tambahkan sumber data',
           blocks: [
             { kind: 'shot', screen: 'sources', caption: 'Sumber data, dengan fungsi masing-masing dan kapan terakhir diuji.' },
             {
               kind: 'steps',
               items: [
-                '**Tambah sumber**, pilih konektor yang terpasang dan isi kredensialnya. Kolom kata sandi bisa berisi referensi rahasia alih-alih kata sandinya (lihat Pengelola rahasia).',
+                '**Tambah sumber** (atau **Tambah tujuan**), pilih konektor yang terpasang dan isi kredensialnya. Kolom kata sandi bisa berisi referensi rahasia alih-alih kata sandinya (lihat Pengelola rahasia).',
                 '**Uji** memeriksa koneksi dan memindai tabel serta kolomnya.',
                 'Beri nama dan pilih **fungsinya**: sumber (Nexus membaca), tujuan (Nexus menulis), atau keduanya.',
-                '**Jelajahi** tabel sumber dan pratinjau contoh baris (disamarkan sesuai peran Anda).',
               ],
             },
             { kind: 'note', tone: 'info', text: 'Kredensial dienkripsi dengan kunci milik workspace Anda dan tidak pernah dikirim balik ke browser. Saat Anda mengedit sumber, rahasia tampil tersamar dan tidak berubah kecuali Anda mengetik yang baru.' },
-            { kind: 'p', text: 'Nexus tidak pernah membuat atau mengosongkan tabel di database Anda sendiri. Nexus hanya menulis ke sumber data yang ditambahkan sebagai tujuan, ke tabel yang sudah ada.' },
+          ],
+        },
+        {
+          id: 'browse',
+          title: 'Uji, jelajahi, dan pratinjau',
+          blocks: [
+            {
+              kind: 'list',
+              items: [
+                '**Jelajahi tabel** menampilkan setiap tabel beserta kolom dan tipenya, serta pratinjau contoh baris (disamarkan sesuai peran Anda).',
+                '**Uji ulang** setelah kata sandi atau skema berubah; daftar tabel diperbarui.',
+                'Sumber yang dipakai pipeline tidak bisa dihapus sampai pipeline berhenti memakainya (termasuk draf).',
+                'Nexus tidak pernah membuat atau mengosongkan tabel di database Anda sendiri. Nexus hanya menulis ke sumber data yang ditambahkan sebagai tujuan, ke tabel yang sudah ada.',
+              ],
+            },
           ],
         },
         {
           id: 'files',
-          title: 'File (CSV dan Excel)',
+          title: 'File: CSV dan Excel',
           blocks: [
-            { kind: 'p', text: 'Sumber **Unggah File** menerima file CSV, TSV, atau XLSX hingga 50 MB. File dibaca di browser Anda, diberi tipe (angka, tanggal, benar/salah), lalu disimpan sebagai tabel yang bisa dibaca Nexus seperti tabel lain. Unggah versi baru ke sumber yang sama dan eksekusi berikutnya membacanya; templat **CSV / Excel → Dataset** mengubahnya menjadi dataset dalam satu langkah.' },
+            { kind: 'p', text: 'Sumber **Unggah File** menerima file CSV, TSV, atau XLSX hingga 50 MB. File dibaca di browser Anda, diberi tipe (angka, tanggal, benar/salah), lalu disimpan sebagai tabel yang bisa dibaca Nexus seperti tabel lain.' },
+            {
+              kind: 'list',
+              items: [
+                '**Unggah file** pada sumber: pilih sheet untuk file Excel, lalu **ganti** tabelnya atau **tambahkan** ke tabel.',
+                'Eksekusi pipeline berikutnya membaca baris baru; templat **CSV / Excel → Dataset** mengubah unggahan menjadi dataset dalam satu langkah.',
+                'Untuk ekspor berkala, taruh file di folder penyimpanan cloud (lihat Infrastruktur).',
+              ],
+            },
           ],
         },
         {
           id: 'agent',
-          title: 'Sistem di dalam jaringan Anda (Nexus Agent)',
+          title: 'Sistem di dalam jaringan Anda: Nexus Agent',
           blocks: [
             { kind: 'diagram', diagram: 'architecture', caption: 'Nexus Agent terhubung keluar ke Nexus. Tidak ada yang di jaringan Anda perlu menerima koneksi dari internet.' },
             { kind: 'p', text: 'Database dan API di intranet Anda (alamat seperti `10.x`, `192.168.x`, atau `hr.company.local`) tidak bisa dijangkau dari cloud, dan Nexus sengaja menolaknya. Pasang **Nexus Agent** di server di dalam jaringan: agent terhubung **keluar** lewat HTTPS, mengambil pekerjaan, menjalankannya di dekat sistem Anda, dan hanya mengembalikan hasilnya.' },
             {
               kind: 'steps',
               items: [
-                '**Pengaturan → Nexus Agent → Agent baru**: beri nama dan salin token sekali pakainya.',
+                '**Pengaturan → Nexus Agent → Buat agent**: beri nama dan salin konfigurasinya (ditampilkan sekali, beserta tokennya).',
                 'Unduh agent (satu file, Node 20 atau lebih baru), tulis `nexus-agent.json` berisi token dan koneksi Anda (kata sandi bisa diambil dari variabel lingkungan), lalu jalankan. `--check` menguji koneksi terlebih dahulu.',
-                'Kembali di Nexus, agent tampil online. **Sumber data → Tambah sumber → Lewat agent** menampilkan koneksinya.',
+                'Kembali di Nexus, agent tampil online beserta koneksinya; **Tambah sebagai sumber** menjadikan satu koneksi sebuah sumber data. Uji di sana untuk memindai tabelnya.',
               ],
             },
-            { kind: 'p', text: 'REST API intranet bekerja dengan cara yang sama: agent menyimpan URL dasar dan kredensialnya, Nexus hanya mengirim rancangan permintaan. Jika tim TI Anda lebih memilih memublikasikan API-nya, Nexus bisa memanggilnya langsung dengan sertifikat klien (mTLS), CA perusahaan, dan permintaan bertanda tangan (`X-Nexus-Signature`) dari alamat IP keluar tetap yang tercantum di **Jaringan** pada formulir REST.' },
+            { kind: 'p', text: 'Sumber lewat agent menyimpan kata sandinya di konfigurasi agent di server Anda; Nexus tidak menyimpan satu pun.' },
+          ],
+        },
+        {
+          id: 'intranet',
+          title: 'API intranet',
+          blocks: [
+            { kind: 'p', text: 'REST API intranet bekerja lewat agent dengan cara yang sama: agent menyimpan URL dasar dan kredensialnya, Nexus hanya mengirim rancangan permintaan (path, paging, field). Permintaan selalu tetap berada di bawah URL dasar milik agent.' },
+            { kind: 'p', text: 'Jika tim TI Anda lebih memilih memublikasikan API-nya, Nexus bisa memanggilnya langsung. Tab **Jaringan** pada formulir REST mengatur sertifikat klien (mTLS), CA perusahaan, dan permintaan bertanda tangan (`X-Nexus-Signature`), serta mencantumkan alamat IP keluar tetap milik Nexus untuk firewall Anda.' },
           ],
         },
         {
@@ -154,15 +224,32 @@ export const helpId: HelpContent = {
           id: 'infrastructure',
           title: 'Infrastruktur: observabilitas dan penyimpanan cloud',
           blocks: [
-            { kind: 'p', text: 'Kategori **Infrastruktur** membaca data operasional sebagai tabel: **Prometheus** (target, peringatan, dan kueri PromQL Anda), **Elasticsearch / OpenSearch** (indeks, inkremental pada kolom tanggal), **Datadog**, **New Relic**, **Grafana**, serta file di **penyimpanan kompatibel S3** (S3, MinIO, R2 …), **Azure Blob**, dan **Google Cloud Storage**. Folder berisi ekspor harian (`daily/*.csv`) menjadi satu tabel, sehingga file baru terus mengisi pipeline yang sama.' },
+            {
+              kind: 'list',
+              items: [
+                '**Prometheus**: target, peringatan, aturan, dan satu tabel per kueri PromQL yang Anda beri nama.',
+                '**Elasticsearch / OpenSearch** (dan Elastic APM): setiap indeks yang cocok dengan pola; inkremental pada kolom tanggal seperti `@timestamp`.',
+                '**Datadog**, **New Relic**, dan **Grafana**: monitor, SLO, layanan APM, isu peringatan, dasbor, serta kueri metrik atau NRQL Anda sendiri.',
+                '**Penyimpanan kompatibel S3** (S3, MinIO, R2 …), **Azure Blob**, dan **Google Cloud Storage**: setiap file CSV, TSV, JSON, NDJSON, atau XLSX menjadi tabel, dan folder berisi satu format (`daily/*.csv`) menjadi satu tabel, sehingga ekspor harian baru terus mengisi pipeline yang sama.',
+              ],
+            },
+          ],
+        },
+        {
+          id: 'destinations',
+          title: 'Tujuan: produk KMPlus dan database Anda',
+          blocks: [
+            { kind: 'p', text: 'Produk KMPlus adalah tujuan. Tambahkan produk sebagai sumber data (URL dan tokennya), lalu akhiri pipeline dengan langkah tujuan yang menulis ke sana. Nexus mengirim catatan lewat **Nexus Ingest Contract**; catatan yang ditolak produk ditahan di karantina pada langkah tujuan beserta alasan dari produk, sehingga bisa Anda perbaiki dan kirim ulang.' },
+            { kind: 'p', text: 'Sumber PostgreSQL, MySQL, dan Supabase yang ditambahkan sebagai tujuan juga bisa menerima baris (tambah atau upsert ke tabel yang sudah ada).' },
           ],
         },
       ],
     },
+    // ── 3 ───────────────────────────────────────────────────────────────────
     {
       id: 'pipelines',
       title: 'Bangun pipeline',
-      summary: 'Templat, editor, langkah, uji coba, penerbitan, jadwal, dan pemicu.',
+      summary: 'Templat, editor, langkah, pemeriksaan, tujuan, penerbitan, jadwal, persetujuan, serta lingkungan dengan promosi.',
       screen: 'pipelines',
       sections: [
         {
@@ -176,11 +263,11 @@ export const helpId: HelpContent = {
               rows: [
                 ['Sumber', 'Membaca tabel, kueri, atau API. Pembacaan inkremental menyimpan watermark, sehingga setiap eksekusi hanya membaca yang berubah.'],
                 ['Filter', 'Menyimpan baris yang cocok dengan kondisi (semua / salah satu, grup bersarang).'],
-                ['Pemetaan', 'Mengganti nama dan mengonversi kolom: rapikan spasi, huruf besar/kecil, tanggal, angka, hash, nilai bersyarat, dan lookup ke dataset lain (mis. ORG_CODE → nama organisasi). Bisa dipetakan ke entitas Unified Data Model seperti Employee.'],
-                ['Validasi', 'Memeriksa setiap baris: wajib, email, telepon, NIK, NPWP, unik, rentang, tanggal, “ada di”, hierarki manajer. Error menahan baris; peringatan hanya mencatatnya.'],
+                ['Pemetaan', 'Mengganti nama dan mengonversi kolom, dan bisa memetakan ke entitas Unified Data Model seperti Employee.'],
+                ['Validasi', 'Memeriksa setiap baris. Error menahan baris; peringatan hanya mencatatnya.'],
                 ['Aturan', 'Menerapkan aturan bisnis dari layar Aturan, termasuk baris yang harus menunggu persetujuan.'],
                 ['Router', 'Mengirim baris ke cabang berbeda berdasarkan kondisi.'],
-                ['Tujuan', 'Menulis ke dataset (tambah, upsert berdasarkan kunci, atau ganti) atau ke sumber data tujuan seperti produk KMPlus.'],
+                ['Tujuan', 'Menulis ke dataset atau ke sumber data tujuan seperti produk KMPlus.'],
               ],
             },
           ],
@@ -208,9 +295,76 @@ export const helpId: HelpContent = {
             {
               kind: 'list',
               items: [
-                '**Uji coba** membaca sampel, menjalankan setiap langkah, dan menampilkan berapa baris yang lolos, diubah, atau ditahan di masing-masing langkah, beserta barisnya (disamarkan sesuai peran Anda).',
-                '**Simpan** menyimpan draf; versi terbit tetap berjalan sampai Anda **Terbitkan**. Setiap penerbitan adalah versi yang bisa dibandingkan dan dipulihkan.',
-                'Saat eksekusi gagal, **Diagnosis dengan AI** meminta asisten AI menjelaskan kegagalan dari pesan langkah (tidak pernah nilai baris) dan bisa menyarankan perbaikan sebagai draf baru.',
+                '**Tambahkan setelah langkah terpilih** di kiri menyisipkan langkah Filter, Pemetaan & transformasi, Validasi, Aturan bisnis, Router, atau Tujuan.',
+                'Pilih langkah untuk mengeditnya di kanan; **Langkah berikutnya** menghubungkannya ke langkah selanjutnya (Router punya satu per cabang).',
+                '**Pengaturan eksekusi** mengatur pengulangan, batas waktu, ukuran batch, ambang karantina, dan kapan memberi peringatan (tidak pernah, saat gagal, atau saat gagal atau ada baris tertahan).',
+                '**Jadwal** mengatur kapan versi terbit berjalan (lihat Jadwal dan pemicu).',
+              ],
+            },
+          ],
+        },
+        {
+          id: 'mapping',
+          title: 'Pemetaan dan transformasi',
+          blocks: [
+            { kind: 'p', text: 'Langkah **Pemetaan & transformasi** menampilkan setiap kolom keluaran beserta kolom sumber dan tipenya. **Petakan otomatis** mencocokkan sinonim SDM (mis. `PERNR`, `NIK`, `employee_no`) ke nama baku Unified Data Model, dan templat pemetaan yang tersimpan (bawaan untuk SAP, Talenta, dan Active Directory) mengisi satu langkah sekaligus.' },
+            {
+              kind: 'table',
+              head: ['Jenis', 'Transformasi'],
+              rows: [
+                ['Teks', 'rapikan spasi, huruf besar / kecil / judul, ganti, ganti dan ambil regex, awalan, akhiran, substring, gabung, pisah'],
+                ['Nilai', 'bawaan jika kosong, coalesce, bersyarat (jika … maka … selain itu)'],
+                ['Angka & tanggal', 'ke angka, bulatkan, format angka, format tanggal (dengan format masukan dan zona waktu), ke boolean'],
+                ['Privasi', 'hash (pseudonim tetap)'],
+                ['Lookup', 'cari nilai di dataset lain, mis. `ORG_CODE` → nama organisasi'],
+              ],
+            },
+          ],
+        },
+        {
+          id: 'checks',
+          title: 'Pemeriksaan validasi',
+          blocks: [
+            { kind: 'p', text: 'Langkah **Validasi** menjalankan pemeriksaan pada setiap baris. Setiap pemeriksaan punya tingkat: **error** menahan baris di karantina, **peringatan** dan **info** hanya mencatatnya pada eksekusi.' },
+            {
+              kind: 'list',
+              items: [
+                '**Format**: wajib, email, telepon, NIK, NPWP, regex, panjang minimum dan maksimum, salah satu dari daftar.',
+                '**Nilai dan tanggal**: minimum, maksimum, tanggal valid, tidak di masa depan, bandingkan dua field (tanggal selesai setelah tanggal mulai).',
+                '**Lintas baris dan dataset**: unik, ada di dataset lain, hierarki manajer (setiap manajer ada, tanpa putaran).',
+                '**Kondisi**: kondisi apa pun yang disusun dengan penyusun aturan.',
+              ],
+            },
+            { kind: 'p', text: 'Templat HRIS → Employee menambahkan **paket aturan SDM** berisi pemeriksaan ini untuk kolom yang ditemukannya.' },
+          ],
+        },
+        {
+          id: 'writing',
+          title: 'Tujuan dan mode tulis',
+          blocks: [
+            {
+              kind: 'table',
+              head: ['Mode', 'Yang terjadi'],
+              rows: [
+                ['Ganti', 'Dataset dibangun ulang dari eksekusi ini; pembaca melihat baris lama sampai baris baru lengkap.'],
+                ['Tambah', 'Baris ditambahkan. Potongan yang dilanjutkan atau diulang menggantikan salinannya sendiri, jadi tidak ada yang ditulis dua kali.'],
+                ['Upsert', 'Baris dicocokkan pada kolom kunci lalu diperbarui atau disisipkan. **Tandai baris yang tidak ada lagi di sumber sebagai terhapus** menghapus-lunak orang yang sudah keluar (memerlukan pembacaan penuh, bukan inkremental).'],
+              ],
+            },
+            { kind: 'p', text: 'Satu pipeline bisa punya beberapa tujuan, mis. dataset employees dan sebuah produk KMPlus.' },
+          ],
+        },
+        {
+          id: 'publish',
+          title: 'Uji, simpan, terbitkan, dan versi',
+          blocks: [
+            {
+              kind: 'list',
+              items: [
+                '**Uji pada sampel** membaca baris nyata, menjalankan setiap langkah, dan tidak menulis apa pun. Setiap langkah lalu menampilkan berapa baris yang lolos, berubah, atau ditahan; pilih langkah untuk melihat barisnya (disamarkan sesuai peran Anda).',
+                '**Simpan draf** menyimpan perubahan Anda; versi **terbit** tetap berjalan sampai Anda **Simpan & publikasikan**.',
+                'Setiap penerbitan adalah versi dengan catatan perubahan opsional. Riwayat versi bisa **memulihkan** versi sebelumnya: versi itu menjadi versi yang berjalan (setelah disetujui, jika workspace Anda mewajibkannya).',
+                'Saat eksekusi gagal, **Diagnosis dengan AI** menjelaskan kegagalan dari pesan langkah (tidak pernah nilai baris) dan bisa menyarankan perbaikan sebagai draf baru.',
               ],
             },
           ],
@@ -235,18 +389,67 @@ export const helpId: HelpContent = {
         },
         {
           id: 'approvals',
-          title: 'Persetujuan dan lingkungan',
+          title: 'Persetujuan penerbitan',
           blocks: [
-            { kind: 'p', text: 'Workspace bisa mewajibkan **orang kedua menyetujui** setiap penerbitan, atau hanya penerbitan yang menghapus atau mengganti data (**Pengaturan → Persetujuan & lingkungan**). Permintaan menunggu di **Persetujuan** pada layar Pipeline sampai admin atau steward menyetujuinya.' },
-            { kind: 'p', text: '**Lingkungan** menghubungkan workspace sebagai dev → staging → prod. **Promosikan** menyalin versi terbit pipeline ke lingkungan berikutnya, mencocokkan sumber data dan aturan berdasarkan nama. Produksi terkunci secara bawaan: pipeline di sana hanya berubah lewat promosi.' },
+            { kind: 'p', text: 'Workspace bisa mewajibkan **orang kedua** menyetujui suatu versi sebelum berjalan. Atur di **Pengaturan → Persetujuan & lingkungan**:' },
+            {
+              kind: 'table',
+              head: ['Pengaturan', 'Yang menunggu persetujuan'],
+              rows: [
+                ['Nonaktif', 'Tidak ada: editor menerbitkan langsung.'],
+                ['Perubahan destruktif', 'Versi yang mengganti dataset atau menandai baris terhapus.'],
+                ['Setiap penerbitan', 'Setiap versi, termasuk promosi ke workspace ini.'],
+              ],
+            },
+            { kind: 'p', text: 'Versi yang menunggu tampil di **Riwayat persetujuan** pada layar Pipeline dan di **Perlu Anda tangani** pada Ringkasan. Admin atau data steward menyetujui atau menolaknya; tidak ada yang menyetujui perubahannya sendiri, jadi persetujuan memerlukan setidaknya dua admin atau steward.' },
+          ],
+        },
+        {
+          id: 'environments',
+          title: 'Lingkungan: Development, Staging, Production, dan promosi',
+          blocks: [
+            { kind: 'p', text: 'Bangun dan uji pipeline dengan aman sebelum menyentuh data produksi. **Grup lingkungan** menghubungkan hingga tiga workspace sebagai **Development → Staging → Production**. Masing-masing memiliki **anggota, sumber data, dan kredensialnya sendiri**, sehingga Development bisa membaca database SDM uji sementara Production membaca yang asli, dengan pipeline yang sama.' },
+            { kind: 'diagram', diagram: 'environments', caption: 'Jalur promosi. Pipeline dibangun di Development lalu maju satu lingkungan demi satu lingkungan; Production hanya berubah lewat promosi.' },
+            { kind: 'shot', screen: 'environments', caption: 'Pengaturan → Persetujuan & lingkungan: workspace yang terhubung, mana yang terkunci, dan ke mana pipeline dipromosikan.' },
+            {
+              kind: 'steps',
+              items: [
+                '**Siapkan**: di workspace Development buka **Pengaturan → Persetujuan & lingkungan → Siapkan lingkungan**, tentukan tahap workspace ini, lalu buat tahap yang belum ada (Anda menjadi adminnya). Atau **Tautkan ruang kerja** yang sudah Anda kelola sebagai salah satu tahap.',
+                '**Siapkan setiap lingkungan**: tambahkan sumber data yang sama **namanya** di Staging dan Production (mis. “Database SDM”), masing-masing dengan koneksi dan kredensialnya sendiri. Undang orang yang bekerja di sana.',
+                '**Bangun dan terbitkan di Development**, uji dengan sampel dan eksekusinya.',
+                '**Promosikan**: di layar Pipeline buka menu pipeline → **Promosikan ke Staging**. Pratinjau menampilkan apa saja yang dipetakan oleh promosi.',
+                'Periksa hasilnya di Staging, lalu promosikan dari Staging ke **Production** dengan cara yang sama.',
+              ],
+            },
+            {
+              kind: 'table',
+              head: ['Promosi memetakan', 'Caranya'],
+              rows: [
+                ['Sumber data', 'Berdasarkan nama dan jenis konektor: pipeline memakai sumber dan kredensial milik lingkungan tujuan. Sumber yang belum ada memblokir promosi sampai Anda menambahkannya di sana.'],
+                ['Aturan bisnis', 'Berdasarkan nama: dibuat di tujuan, atau diperbarui ke versi yang dipromosikan.'],
+                ['Pipeline berantai', 'Referensi “jalankan setelah” dan “picu pipeline” mengikuti pipeline yang sama di tujuan, jadi promosikan pipeline itu terlebih dahulu.'],
+                ['Dataset', 'Berdasarkan nama; tidak ada yang perlu dipetakan.'],
+              ],
+            },
+            {
+              kind: 'list',
+              items: [
+                'Promosi menyalin versi **terbit**, jadi terbitkan dulu. Pipeline baru dibuat di tujuan dengan **jadwal nonaktif** sampai seseorang mengaktifkannya; pipeline yang sudah ada diperbarui ke versi baru.',
+                'Jika tujuan mewajibkan persetujuan, versi yang dipromosikan **menunggu di sana** untuk orang kedua sebelum berjalan.',
+                '**Production terkunci sejak awal**: pipeline di sana tidak bisa diedit langsung, hanya menerima promosi. Eksekusi, jadwal, dan persetujuan berjalan seperti biasa. Admin bisa membuka kuncinya (dan menguncinya lagi).',
+                'Setiap baris pipeline menampilkan versinya di lingkungan berikutnya (mis. `STAGING: v3` atau `belum dipromosikan`).',
+                'Anda harus menjadi admin atau data steward di lingkungan tujuan untuk mempromosikan ke sana. Setiap promosi dicatat di log audit.',
+              ],
+            },
           ],
         },
       ],
     },
+    // ── 4 ───────────────────────────────────────────────────────────────────
     {
       id: 'rules',
       title: 'Aturan bisnis',
-      summary: 'Pemeriksaan dan keputusan yang dipakai ulang di banyak pipeline.',
+      summary: 'Pemeriksaan dan keputusan yang ditulis sekali dan dipakai ulang di banyak pipeline.',
       screen: 'rules',
       sections: [
         {
@@ -254,16 +457,48 @@ export const helpId: HelpContent = {
           title: 'Aturan dalam praktik',
           blocks: [
             { kind: 'shot', screen: 'rules', caption: 'Aturan bisnis beserta tempat masing-masing dipakai.' },
-            { kind: 'p', text: 'Aturan adalah kondisi plus tindakan: **sertakan** atau **kecualikan** baris, **isi** atau **hitung** kolom, **arahkan** ke cabang, **beri tahu** seseorang, **wajibkan persetujuan** (baris menunggu di karantina untuk orang kedua), atau **picu** pipeline lain. Kondisi memakai penyusun yang sama dengan filter, dengan ekspresi seperti `days_between(start_date, today())`.' },
-            { kind: 'p', text: 'Aturan dipakai bersama: ubah aturan sekali dan setiap pipeline yang memakainya menerapkan versi baru pada eksekusi berikutnya. Perubahan dicatat di log audit.' },
+            { kind: 'p', text: 'Aturan berbunyi **JIKA** suatu kondisi **MAKA** lakukan sesuatu, **SELAIN ITU** lakukan hal lain. Aturan dipakai bersama: ubah aturan sekali dan setiap pipeline yang memakainya menerapkan versi baru pada eksekusi berikutnya. Langkah Filter, Validasi, Router, dan Aturan bisnis semuanya bisa memakainya.' },
+          ],
+        },
+        {
+          id: 'conditions',
+          title: 'Kondisi dan ekspresi',
+          blocks: [
+            { kind: 'p', text: 'Kondisi menggabungkan perbandingan field dengan **semua** / **salah satu** dan grup bersarang. Nilai bisa berupa nilai tetap, field lain, atau ekspresi seperti `days_between(start_date, today())`, `upper(name)`, atau `year(hire_date)`.' },
+          ],
+        },
+        {
+          id: 'actions',
+          title: 'Yang bisa dilakukan aturan',
+          blocks: [
+            {
+              kind: 'table',
+              head: ['Tindakan', 'Efek'],
+              rows: [
+                ['Sertakan / kecualikan', 'Pertahankan baris atau buang dari eksekusi ini.'],
+                ['Isi field / hitung', 'Tulis nilai atau ekspresi ke sebuah kolom.'],
+                ['Arahkan', 'Kirim baris ke cabang bernama pada langkah Router.'],
+                ['Beri tahu', 'Email admin dan steward, atau alamat yang Anda cantumkan (sekali per eksekusi).'],
+                ['Wajibkan persetujuan', 'Tahan baris di karantina sampai orang kedua menyetujuinya.'],
+                ['Picu pipeline', 'Antrekan pipeline lain setelah eksekusi ini.'],
+              ],
+            },
+          ],
+        },
+        {
+          id: 'test-rule',
+          title: 'Uji dan versikan aturan',
+          blocks: [
+            { kind: 'p', text: '**Penguji** di editor aturan menjalankan aturan pada baris dari dataset atau pada JSON yang Anda tempel, dan menunjukkan cabang yang diambil setiap baris. Setiap simpanan adalah versi; perubahan dicatat di log audit.' },
           ],
         },
       ],
     },
+    // ── 5 ───────────────────────────────────────────────────────────────────
     {
       id: 'monitoring',
       title: 'Pantau eksekusi',
-      summary: 'Eksekusi, jadwal, worker, peringatan, dan webhook.',
+      summary: 'Eksekusi, jadwal, worker latar belakang, peringatan, dan webhook.',
       screen: 'monitoring',
       sections: [
         {
@@ -271,91 +506,192 @@ export const helpId: HelpContent = {
           title: 'Eksekusi dan worker',
           blocks: [
             { kind: 'shot', screen: 'monitoring', caption: 'Pemantauan: kesehatan worker dan penjadwal, lalu setiap eksekusi.' },
+            { kind: 'p', text: 'Eksekusi berjalan di latar belakang, jadi menutup browser tidak pernah menghentikannya. Pemantauan menampilkan hasil hari ini, grafik tujuh hari, kesehatan setiap pipeline (pekerjaan yang macet ditandai), eksekusi latar belakang dengan progres langsung, dan eksekusi terbaru.' },
+          ],
+        },
+        {
+          id: 'read-run',
+          title: 'Membaca eksekusi',
+          blocks: [
+            { kind: 'p', text: 'Buka eksekusi untuk melihat pemicu, versi, durasi, baris dibaca, ditulis, dan ditahan per langkah dan per tujuan, serta lognya. Admin juga melihat detail teknis error.' },
+          ],
+        },
+        {
+          id: 'retry',
+          title: 'Batalkan, ulangi, dan lanjutkan',
+          blocks: [
             {
               kind: 'list',
               items: [
-                'Setiap eksekusi menampilkan pemicu, durasi, jumlah baris dibaca, ditulis, dan ditahan, serta langkah-langkahnya.',
-                '**Batalkan** pekerjaan yang antre atau berjalan; **Ulangi** eksekusi yang sudah selesai (dilanjutkan dari checkpoint terakhir).',
-                'Eksekusi yang gagal membuat notifikasi (lonceng) dan email ke orang yang perlu tahu; pipeline juga bisa memberi peringatan untuk baris tertahan.',
+                '**Batalkan** pekerjaan yang antre atau berjalan.',
+                '**Ulangi** eksekusi yang sudah selesai. Eksekusi dilanjutkan dari checkpoint terakhir alih-alih mulai dari awal.',
+                'Masalah sementara (batas waktu jaringan) diulang otomatis; masalah konfigurasi (kata sandi salah, tabel tidak ada) tidak, jadi perbaiki lalu jalankan lagi.',
+                'Watermark inkremental hanya bergeser setelah seluruh eksekusi berhasil, jadi eksekusi yang gagal tidak pernah melewatkan baris.',
               ],
             },
           ],
         },
+        {
+          id: 'alerts',
+          title: 'Peringatan dan notifikasi',
+          blocks: [
+            { kind: 'p', text: 'Eksekusi yang gagal membuat notifikasi di lonceng dan email ke orang yang perlu tahu; pipeline juga bisa memberi peringatan untuk baris tertahan (Pengaturan eksekusi). Peringatan tidak pernah menggagalkan eksekusi. Untuk sistem lain, gunakan webhook (lihat Data API dan webhook).' },
+          ],
+        },
       ],
     },
+    // ── 6 ───────────────────────────────────────────────────────────────────
     {
       id: 'quality',
       title: 'Kualitas data',
-      summary: 'Kotak masuk karantina: perbaiki, setujui, abaikan, dan kirim ulang baris tertahan.',
+      summary: 'Kotak masuk karantina: perbaiki, setujui, abaikan, dan kirim ulang baris tertahan; skor kualitas dari waktu ke waktu.',
       screen: 'quality',
       sections: [
         {
           id: 'inbox',
           title: 'Kotak masuk karantina',
           blocks: [
-            { kind: 'shot', screen: 'quality', caption: 'Baris tertahan dikelompokkan per pipeline dan pemeriksaan, dengan alasan masing-masing.' },
+            { kind: 'shot', screen: 'quality', caption: 'Baris tertahan dengan masalahnya, barisnya, dan langkah pipeline yang menahannya.' },
+            { kind: 'p', text: 'Setiap baris tertahan menampilkan masalahnya dalam kata-kata, barisnya (field yang gagal disorot), serta pipeline dan langkah yang menahannya. Saring berdasarkan **Perlu tindakan**, **Gagal pemeriksaan**, **Perlu persetujuan**, **Ditandai**, atau **Diperbaiki, belum dikirim ulang**, dan berdasarkan pipeline.' },
+          ],
+        },
+        {
+          id: 'why-held',
+          title: 'Mengapa baris ditahan',
+          blocks: [
+            {
+              kind: 'table',
+              head: ['Jenis', 'Arti'],
+              rows: [
+                ['Gagal pemeriksaan', 'Error validasi, atau produk KMPlus menolak catatan. Perbaiki nilainya.'],
+                ['Perlu persetujuan', 'Aturan bisnis meminta orang kedua mengonfirmasi baris. Setujui atau abaikan.'],
+                ['Ditandai', 'Peringatan yang perlu dilihat; baris tetap ditulis.'],
+              ],
+            },
+          ],
+        },
+        {
+          id: 'fix',
+          title: 'Perbaiki, setujui, abaikan, dan kirim ulang',
+          blocks: [
             {
               kind: 'steps',
               items: [
-                'Buka satu kelompok untuk melihat baris yang ditahan dan alasannya.',
-                '**Perbaiki** nilai langsung di tempat, **Setujui** baris yang menunggu persetujuan, atau **Abaikan** baris yang tidak boleh diteruskan.',
-                '**Kirim ulang**: Nexus memutar ulang baris yang sudah diperbaiki dari langkah yang menahannya, sehingga baris tetap melewati setiap pemeriksaan berikutnya.',
+                '**Perbaiki** baris: ubah nilai yang gagal, lalu **Simpan & kirim ulang** (atau perbaiki-dan-lanjut untuk menyelesaikan daftar). Beberapa baris dengan masalah yang sama bisa diperbaiki sekaligus.',
+                '**Setujui** baris yang menunggu persetujuan, atau **Abaikan** baris yang tidak boleh diteruskan (bisa dibatalkan).',
+                'Pengiriman ulang mengirim baris lewat pipeline **terbit** dari langkah yang menahannya, sehingga baris tetap melewati setiap pemeriksaan berikutnya.',
               ],
             },
-            { kind: 'p', text: 'Eksekusi penuh yang lebih baru menggantikan baris terbuka lama dari pipeline yang sama; perbaikan dan persetujuan terbawa ke baris yang identik. Skor kualitas per dataset dicatat setiap hari sehingga trennya terlihat.' },
+            { kind: 'p', text: 'Eksekusi penuh yang lebih baru menggantikan baris terbuka lama dari pipeline yang sama; perbaikan dan persetujuan Anda terbawa ke baris yang identik. Nilai tersamar tidak bisa diedit oleh peran yang melihatnya tersamar.' },
+          ],
+        },
+        {
+          id: 'scores',
+          title: 'Skor dan tren kualitas',
+          blocks: [
+            { kind: 'p', text: 'Setiap pipeline punya skor kualitas, dan setiap dataset mencatat kelengkapan, keunikan, dan validitasnya setiap hari, dengan tren 30 hari di katalog.' },
           ],
         },
       ],
     },
+    // ── 7 ───────────────────────────────────────────────────────────────────
     {
       id: 'catalog',
       title: 'Katalog dan lineage',
-      summary: 'Temukan dataset atau tabel sumber apa pun, dokumentasikan, dan lihat asalnya.',
+      summary: 'Temukan dataset atau tabel sumber apa pun, dokumentasikan, lihat asalnya, dan kueri sumber secara langsung.',
       screen: 'catalog',
       sections: [
         {
-          id: 'catalog-use',
-          title: 'Menggunakan katalog',
+          id: 'find',
+          title: 'Menemukan data',
           blocks: [
             { kind: 'shot', screen: 'catalog', caption: 'Katalog: dataset dan tabel sumber beserta pemilik, tag, dan dokumentasinya.' },
-            {
-              kind: 'list',
-              items: [
-                '**Cari dengan kata-kata biasa.** “Karyawan yang bergabung bulan lalu” menemukan tabel berdasarkan nama, dokumentasi, dan nama kolom (tidak pernah nilai baris).',
-                '**Lineage** menggambar pipeline mana yang membaca dan menulis setiap dataset, sampai ke tabel sumbernya.',
-                'Steward menambahkan pemilik, tag, dan deskripsi, serta memilih **langsung** (kueri ke sumber setiap kali) atau **cache** (pipeline terkelola menyimpan salinan) untuk tabel sumber.',
-              ],
-            },
+            { kind: 'p', text: 'Setiap dataset dan tabel sumber muncul otomatis. **Cari dengan kata-kata biasa**: “karyawan yang bergabung bulan lalu” menemukan tabel berdasarkan nama, dokumentasi, dan nama kolom, dalam bahasa Inggris atau Indonesia (tidak pernah berdasarkan nilai baris).' },
+          ],
+        },
+        {
+          id: 'document',
+          title: 'Mendokumentasikan dataset',
+          blocks: [
+            { kind: 'p', text: 'Steward menambahkan pemilik, steward, klasifikasi, tag, deskripsi, dan deskripsi kolom. Setiap item juga menampilkan kesegaran, riwayat kualitas, serta sampel yang tersamar dan tersaring barisnya. Dataset bisa diterbitkan sebagai entitas Unified Data Model (Employee, Organization, Position …) untuk Data API.' },
+          ],
+        },
+        {
+          id: 'lineage',
+          title: 'Lineage',
+          blocks: [
+            { kind: 'p', text: '**Grafik lineage** menggambar pipeline mana yang membaca dan menulis setiap dataset, mundur sampai tabel sumber dan maju sampai tujuan, sehingga Anda bisa melihat apa yang terdampak suatu perubahan.' },
+          ],
+        },
+        {
+          id: 'live',
+          title: 'Tabel sumber langsung atau cache',
+          blocks: [
+            { kind: 'p', text: 'Tabel sumber bisa dikueri **langsung** (hanya-baca, dengan batas baris dan batas waktu, filter didorong ke sumber) atau di-**cache**: Nexus menyimpan salinan lewat pipeline terkelola setiap 5 menit hingga harian, setelah pipeline lain, atau manual.' },
           ],
         },
       ],
     },
+    // ── 8 ───────────────────────────────────────────────────────────────────
     {
       id: 'governance',
       title: 'Tata kelola dan privasi',
-      summary: 'Klasifikasi, penyamaran, filter baris, retensi, dan penghapusan (UU PDP).',
+      summary: 'Klasifikasi, penyamaran, filter baris, retensi, penghapusan (UU PDP), dan jejak audit.',
       screen: 'governance',
       sections: [
         {
-          id: 'policies',
-          title: 'Kebijakan dataset',
+          id: 'controls',
+          title: 'Ringkasan kontrol',
           blocks: [
-            { kind: 'shot', screen: 'governance', caption: 'Tata kelola: kebijakan dataset dengan kolom yang diklasifikasikan dan disamarkan.' },
+            { kind: 'shot', screen: 'governance', caption: 'Tata kelola: ringkasan kontrol, lalu kebijakan dataset dengan kolom yang diklasifikasikan dan disamarkan.' },
+            { kind: 'p', text: 'Bagian atas layar Tata kelola memeriksa workspace sekilas: autentikasi dua faktor, kredensial terenkripsi, jejak audit, dataset dengan kebijakan, retensi, dan peran yang ditegakkan server. Apa pun yang perlu perhatian dinyatakan dengan tanda dan kata-kata.' },
+          ],
+        },
+        {
+          id: 'masking',
+          title: 'Klasifikasi dan penyamaran',
+          blocks: [
             {
               kind: 'list',
               items: [
-                '**Klasifikasikan** setiap kolom sebagai publik, internal, pribadi, atau sensitif. Nexus menyarankan kelas dan penyamaran untuk kolom SDM umum seperti NIK, NPWP, gaji, dan telepon.',
+                '**Klasifikasikan** setiap kolom sebagai publik, internal, pribadi, atau sensitif. Nexus menyarankan kelas dan penyamaran untuk kolom SDM umum seperti NIK, NPWP, gaji, dan telepon; saran baru berlaku setelah kebijakan disimpan.',
                 '**Samarkan** kolom untuk peran tanpa akses tak tersamar: sembunyikan nilainya, sisakan empat karakter terakhir (`••••0001`), atau ganti dengan pseudonim tetap (hash) agar hitungan dan penggabungan tetap cocok.',
-                '**Filter baris per peran** membatasi baris yang dilihat suatu peran, mis. viewer hanya unit bisnisnya.',
-                '**Retensi** menghapus baris yang lebih tua dari jangka waktu tertentu, diperiksa setiap jam.',
-                '**Hak penghapusan** menghapus catatan satu orang di seluruh dataset, dicatat di log audit.',
+                '**Pratinjau sebagai analis** menampilkan dataset seperti yang dilihat peran terbatas.',
               ],
             },
             { kind: 'note', tone: 'info', text: 'Penyamaran dan filter baris berlaku di mana pun data ditampilkan: pratinjau dataset, katalog, Analitik, jawaban AI, dan Data API. Admin dan data steward melihat nilai sebenarnya.' },
           ],
         },
+        {
+          id: 'row-filters',
+          title: 'Filter baris per peran',
+          blocks: [
+            { kind: 'p', text: 'Filter baris membatasi baris yang dilihat suatu peran, mis. viewer hanya melihat `business_unit = Retail`. Filter memakai sama dengan, tidak sama dengan, atau daftar nilai, dan berlaku di tempat yang sama dengan penyamaran.' },
+          ],
+        },
+        {
+          id: 'retention',
+          title: 'Retensi dan penghapusan (UU PDP)',
+          blocks: [
+            {
+              kind: 'list',
+              items: [
+                '**Retensi** menghapus baris yang lebih tua dari jangka waktu yang Anda tetapkan per dataset; diperiksa setiap jam.',
+                '**Hak penghapusan** (admin) menemukan catatan satu orang di setiap dataset berdasarkan kolom pencocok dan nilai persis (mis. `employee_id = E00123`), menampilkan jumlah baris yang cocok, lalu menghapusnya setelah Anda konfirmasi. Hapus juga orang itu dari sistem sumber, atau eksekusi berikutnya membawanya kembali. Penghapusan dicatat di log audit.',
+              ],
+            },
+          ],
+        },
+        {
+          id: 'audit',
+          title: 'Jejak audit',
+          blocks: [
+            { kind: 'p', text: '**Pengaturan → Log audit** menampilkan proses masuk, setiap perubahan (dengan nilai sebelum dan sesudah), dan setiap tampilan data asli, beserta orang, waktu, alamat IP, dan browser. Rahasia hanya dicatat sebagai “diubah”.' },
+          ],
+        },
       ],
     },
+    // ── 9 ───────────────────────────────────────────────────────────────────
     {
       id: 'analytics',
       title: 'Analitik',
@@ -364,63 +700,95 @@ export const helpId: HelpContent = {
       sections: [
         {
           id: 'dashboards',
-          title: 'Dasbor dan pertanyaan',
+          title: 'Dasbor',
           blocks: [
             { kind: 'shot', screen: 'analytics', caption: 'Analitik: dasbor yang dibangun dari dataset.' },
+            { kind: 'p', text: 'Dasbor adalah kumpulan widget: angka, grafik batang atau garis, atau tabel, masing-masing atas satu dataset. Setiap grafik punya tampilan tabel, dan setiap widget menunjukkan seberapa segar datanya.' },
+          ],
+        },
+        {
+          id: 'widget',
+          title: 'Membangun widget',
+          blocks: [
             {
-              kind: 'list',
+              kind: 'steps',
               items: [
-                'Dasbor adalah kumpulan widget: angka, grafik batang atau garis, atau tabel, masing-masing atas satu dataset dengan filter, pengelompokan (juga per hari, minggu, bulan, kuartal, atau tahun), dan ukuran (jumlah, jumlah unik, total, rata-rata, min, maks).',
-                '**Ajukan pertanyaan** dengan kata-kata (“jumlah karyawan per departemen tahun ini”) dan asisten menyusun draf widget yang bisa Anda simpan atau ubah.',
-                'Setiap grafik punya tampilan tabel. Kueri hanya-baca, berhenti setelah 15 detik, dan mengikuti penyamaran serta filter baris Anda.',
+                'Pilih dataset dan jenis widget.',
+                'Pilih **ukuran** (jumlah, jumlah unik, total, rata-rata, minimum, maksimum) dan **kelompokkan menurut**, dengan rentang waktu untuk tanggal (hari, minggu, bulan, kuartal, tahun).',
+                'Tambahkan filter, urutan, dan batas; pratinjau diperbarui seiring Anda bekerja. Simpan dasbor.',
               ],
             },
           ],
         },
+        {
+          id: 'ask',
+          title: 'Bertanya dengan kata-kata',
+          blocks: [
+            { kind: 'p', text: '**Ajukan pertanyaan** (“jumlah karyawan per departemen tahun ini”) dan asisten AI menyusun draf widget dari kolom dataset yang sebenarnya. Anda bisa menyimpan, mengubah, atau membuangnya.' },
+          ],
+        },
+        {
+          id: 'readers',
+          title: 'Yang dilihat pembaca',
+          blocks: [
+            { kind: 'p', text: 'Kueri hanya-baca dan berhenti setelah 15 detik. Setiap pembaca melihat dasbor lewat perannya sendiri: kolom tersamar tidak bisa dikelompokkan atau disaring, dan filter baris berlaku untuk setiap angka.' },
+          ],
+        },
       ],
     },
+    // ── 10 ──────────────────────────────────────────────────────────────────
     {
       id: 'api',
       title: 'Data API dan webhook',
-      summary: 'Baca dataset dari sistem lain dan dapatkan kabar saat sesuatu terjadi.',
+      summary: 'Baca dataset dari sistem lain, jalankan pipeline dari jarak jauh, dan dapatkan kabar saat sesuatu terjadi.',
       screen: 'settings',
       sections: [
         {
-          id: 'data-api',
-          title: 'Data API',
+          id: 'keys',
+          title: 'Kunci API dan cakupan',
           blocks: [
-            { kind: 'p', text: 'Buat kunci di **Pengaturan → Kunci API** dengan cakupan yang diperlukan (`datasets:read`, `domains:read`, `pipelines:run`, `runs:read`) dan sebuah peran; kunci membaca sebagai peran itu, dengan penyamaran dan filter barisnya. Kunci ditampilkan sekali; Nexus hanya menyimpan hash-nya.' },
-            { kind: 'code', text: 'curl -H "Authorization: Bearer nxk_…" https://<nexus-anda>/api/v1/datasets/employees?limit=100' },
-            { kind: 'p', text: 'Referensi lengkap ada di `/api/v1/openapi.json`. Respons membawa header batas laju; setiap pembacaan dicatat di log audit.' },
+            { kind: 'p', text: 'Buat kunci di **Pengaturan → Kunci API** dengan cakupan yang diperlukan, sebuah peran, dan masa berlaku opsional. Kunci membaca sebagai peran itu, dengan penyamaran dan filter barisnya. Kunci ditampilkan sekali; Nexus hanya menyimpan hash-nya, dan Anda bisa mencabutnya kapan saja.' },
+            {
+              kind: 'table',
+              head: ['Cakupan', 'Mengizinkan'],
+              rows: [
+                ['`datasets:read`', 'Membaca dataset dan tabel katalog langsung.'],
+                ['`domains:read`', 'Membaca entitas Unified Data Model (Employee, Organization …).'],
+                ['`pipelines:run`', 'Memulai eksekusi pipeline.'],
+                ['`runs:read`', 'Membaca status dan hasil eksekusi.'],
+              ],
+            },
+          ],
+        },
+        {
+          id: 'read',
+          title: 'Membaca data',
+          blocks: [
+            { kind: 'code', text: 'curl -H "Authorization: Bearer nxk_…" "https://<nexus-anda>/api/v1/datasets/employees?fields=nik,full_name&limit=100"' },
+            { kind: 'p', text: 'Respons dipaginasi dengan kursor, bisa disaring per field dan `updated_since`, serta membawa header batas laju. Setiap pembacaan dicatat di log audit. Referensi lengkap ada di `/api/v1/openapi.json`.' },
+          ],
+        },
+        {
+          id: 'remote-run',
+          title: 'Menjalankan pipeline dari sistem lain',
+          blocks: [
+            { kind: 'p', text: '`POST /api/v1/pipelines/{id}/runs` memulai eksekusi; `GET /api/v1/runs/{id}` mengikutinya. Pipeline juga bisa dimulai lewat URL webhook rahasianya sendiri, yang diatur di tab Jadwal pada editor.' },
           ],
         },
         {
           id: 'webhooks',
-          title: 'Webhook',
+          title: 'Webhook keluar',
           blocks: [
             { kind: 'p', text: '**Pengaturan → Webhook** mengirim peristiwa bertanda tangan (`run.succeeded`, `run.failed`, `dataset.updated`) ke endpoint HTTPS Anda. Verifikasi tanda tangan dengan rahasia penandatanganan; pengiriman yang gagal diulang.' },
           ],
         },
       ],
     },
-    {
-      id: 'kmplus',
-      title: 'Produk KMPlus',
-      summary: 'Mengirim data ke KMS, LMS, TMS, PMS, CMS, dan IMS.',
-      sections: [
-        {
-          id: 'ingest',
-          title: 'Ingest Contract',
-          blocks: [
-            { kind: 'p', text: 'Produk KMPlus adalah tujuan. Tambahkan produk sebagai sumber data (URL dan tokennya), lalu akhiri pipeline dengan langkah tujuan yang menulis ke sana. Nexus mengirim catatan lewat **Nexus Ingest Contract**; catatan yang ditolak produk ditahan di karantina pada langkah tujuan beserta alasan dari produk, sehingga bisa Anda perbaiki dan kirim ulang.' },
-          ],
-        },
-      ],
-    },
+    // ── 11 ──────────────────────────────────────────────────────────────────
     {
       id: 'admin',
       title: 'Kelola workspace',
-      summary: 'Anggota dan peran, masuk dan SSO, lingkungan, agent, AI, audit.',
+      summary: 'Peran, anggota dan undangan, masuk dan SSO, pengaturan, serta asisten AI.',
       screen: 'settings',
       sections: [
         {
@@ -431,8 +799,29 @@ export const helpId: HelpContent = {
           ],
         },
         {
+          id: 'members',
+          title: 'Anggota dan undangan',
+          blocks: [
+            { kind: 'p', text: '**Pengaturan → Anggota & peran**: undang orang lewat email (mereka menerima tautan), ubah peran, dan keluarkan anggota. Setiap orang mulai dengan workspace pribadi; admin terakhir tidak bisa meninggalkan workspace.' },
+          ],
+        },
+        {
+          id: 'sso',
+          title: 'Masuk, SSO, dan SCIM',
+          blocks: [
+            {
+              kind: 'list',
+              items: [
+                '**Single sign-on** dengan OIDC atau SAML 2.0 (Microsoft Entra ID, Google, Okta, dan lainnya). Verifikasi domain email Anda dengan catatan DNS TXT; orang di domain itu lalu bergabung ke workspace ini dengan peran bawaan saat pertama masuk.',
+                '**Wajibkan SSO** memblokir masuk dengan kata sandi untuk domain itu.',
+                '**SCIM** memungkinkan penyedia identitas Anda membuat akun dan menonaktifkannya saat SDM memberhentikan seseorang; grup yang dipetakan ke peran mengatur peran anggotanya.',
+              ],
+            },
+          ],
+        },
+        {
           id: 'settings-tabs',
-          title: 'Pengaturan',
+          title: 'Sekilas pengaturan',
           blocks: [
             { kind: 'shot', screen: 'settings', caption: 'Pengaturan, dengan satu tab per area.' },
             {
@@ -442,8 +831,8 @@ export const helpId: HelpContent = {
                 ['Umum', 'Nama workspace.'],
                 ['Anggota & peran', 'Undang orang, ubah peran, keluarkan anggota.'],
                 ['Akun Anda', 'Autentikasi dua faktor dan kode cadangan Anda sendiri.'],
-                ['Masuk, SSO & SCIM', 'Single sign-on (OIDC atau SAML: Entra ID, Google, Okta …) dengan domain terverifikasi, dan provisioning SCIM.'],
-                ['Persetujuan & lingkungan', 'Apakah penerbitan perlu orang kedua; hubungkan workspace dev, staging, dan prod; kunci produksi.'],
+                ['Masuk, SSO & SCIM', 'Single sign-on dengan domain terverifikasi, dan provisioning SCIM.'],
+                ['Persetujuan & lingkungan', 'Apakah penerbitan perlu orang kedua; Development, Staging, dan Production; penguncian.'],
                 ['Nexus Agent', 'Agent di jaringan Anda dan statusnya.'],
                 ['Asisten AI', 'Model open-source yang dipakai asisten: milik server, yang berjalan di dekat agent, atau nonaktif.'],
                 ['Kunci API · Webhook', 'Kunci Data API dan webhook keluar.'],
@@ -452,27 +841,47 @@ export const helpId: HelpContent = {
             },
           ],
         },
+        {
+          id: 'ai',
+          title: 'Asisten AI',
+          blocks: [
+            { kind: 'p', text: 'Asisten menyusun draf pipeline, menjelaskan eksekusi yang gagal, menyarankan konektor, mencari di katalog, dan menjawab pertanyaan di Analitik. Asisten **hanya memakai model open-source**, lewat model milik server atau model yang berjalan di dekat Nexus Agent Anda, sehingga prompt bisa tetap di dalam jaringan Anda. Admin memilih model atau menonaktifkannya; semua fitur lain tetap berjalan tanpanya.' },
+          ],
+        },
       ],
     },
+    // ── 12 ──────────────────────────────────────────────────────────────────
     {
       id: 'security',
       title: 'Keamanan',
-      summary: 'Cara Nexus melindungi akun, kredensial, dan data.',
+      summary: 'Cara Nexus melindungi akun, kredensial, jaringan, dan data.',
       sections: [
         {
-          id: 'security-facts',
-          title: 'Apa yang dilindungi, dan bagaimana',
+          id: 'accounts',
+          title: 'Akun dan autentikasi dua faktor',
           blocks: [
-            {
-              kind: 'list',
-              items: [
-                '**Setiap akun memakai autentikasi dua faktor** (aplikasi autentikator), kecuali masuk lewat SSO perusahaan Anda.',
-                '**Kredensial** dienkripsi dengan AES-256-GCM memakai kunci yang diturunkan untuk workspace Anda, dan tidak pernah dikembalikan ke browser atau ditulis ke log.',
-                '**Jaringan**: permintaan konektor dari cloud menolak alamat privat dan intranet; webhook dan penemuan SSO hanya menerima HTTPS publik.',
-                '**Audit**: proses masuk, setiap perubahan, dan setiap tampilan data asli dicatat beserta alamat IP dan browser.',
-                '**AI** hanya memakai model open-source. Prompt membawa nama kolom dan contoh dari kolom publik, tidak pernah data pribadi.',
-              ],
-            },
+            { kind: 'p', text: '**Setiap akun memakai autentikasi dua faktor** (aplikasi autentikator, dengan sepuluh kode cadangan), kecuali masuk lewat SSO perusahaan Anda. Ponsel hilang? Masuk dengan kode cadangan lalu atur ponsel baru di **Pengaturan → Akun Anda**; admin juga bisa mengatur ulangnya untuk Anda.' },
+          ],
+        },
+        {
+          id: 'credentials',
+          title: 'Kredensial dan enkripsi',
+          blocks: [
+            { kind: 'p', text: 'Kredensial dienkripsi dengan AES-256-GCM memakai kunci yang diturunkan untuk workspace Anda, tidak pernah dikembalikan ke browser, dan tidak pernah ditulis ke log. Jauhkan sama sekali dari Nexus dengan pengelola rahasia atau Nexus Agent.' },
+          ],
+        },
+        {
+          id: 'network',
+          title: 'Keamanan jaringan',
+          blocks: [
+            { kind: 'p', text: 'Permintaan konektor dari cloud menolak alamat privat dan intranet serta memeriksa setiap pengalihan; webhook dan penemuan SSO hanya menerima HTTPS publik. Agent hanya pernah terhubung keluar.' },
+          ],
+        },
+        {
+          id: 'ai-data',
+          title: 'AI dan data Anda',
+          blocks: [
+            { kind: 'p', text: 'Prompt hanya membawa nama tabel dan kolom serta contoh dari kolom publik; kolom pribadi dan tersamar tidak disertakan, dan pesan pemeriksaan disamarkan. Jawaban AI selalu berupa draf yang Anda tinjau. Pemakaian asisten diaudit tanpa teks prompt.' },
           ],
         },
       ],
@@ -482,6 +891,7 @@ export const helpId: HelpContent = {
     { id: 'basics', title: 'Dasar' },
     { id: 'connecting', title: 'Menghubungkan sistem' },
     { id: 'pipelines', title: 'Pipeline dan eksekusi' },
+    { id: 'environments', title: 'Lingkungan dan promosi' },
     { id: 'quality', title: 'Kualitas data' },
     { id: 'access', title: 'Akses, privasi, dan keamanan' },
     { id: 'ai', title: 'Asisten AI' },
@@ -502,8 +912,12 @@ export const helpId: HelpContent = {
     { id: 'run-failed', group: 'pipelines', q: 'Sebuah eksekusi gagal. Dari mana saya mulai?', a: 'Buka eksekusinya di **Pemantauan** untuk melihat langkah dan pesannya. Masalah konfigurasi (kata sandi salah, tabel tidak ada) tidak diulang; perbaiki lalu jalankan lagi. Masalah sementara diulang dari checkpoint terakhir. **Diagnosis dengan AI** di editor menjelaskannya.' },
     { id: 'incremental', group: 'pipelines', q: 'Apakah setiap eksekusi membaca seluruh tabel?', a: 'Tidak jika langkah sumber **inkremental**: Nexus mengingat nilai tertinggi kolom seperti `updated_at` dan hanya membaca baris yang lebih baru. Watermark hanya bergeser setelah seluruh eksekusi berhasil.' },
     { id: 'duplicates', group: 'pipelines', q: 'Bisakah eksekusi yang diulang membuat baris ganda?', a: 'Tidak. Penambahan ditulis per potongan dengan id eksekusi, sehingga potongan yang dilanjutkan menggantikan salinan sebelumnya; upsert mencocokkan kolom kunci Anda.' },
-    { id: 'chain', group: 'pipelines', q: 'Bagaimana menjalankan pipeline B setelah pipeline A?', a: 'Di jadwal B pilih **Setelah pipeline lain** dan pilih A. B diantrekan setiap kali A selesai dengan berhasil.' },
-    { id: 'deleted-employees', group: 'pipelines', q: 'Bagaimana karyawan yang keluar ditangani?', a: 'Dengan tujuan upsert dan **tandai baris yang hilang sebagai terhapus**, baris yang hilang dari sumber ditandai terhapus alih-alih dibuang. Pembacaan mengecualikannya; riwayatnya tetap ada.' },
+    { id: 'chain', group: 'pipelines', q: 'Bagaimana menjalankan pipeline B setelah pipeline A?', a: 'Di jadwal B pilih **Setelah pipeline lain** dan pilih A. B diantrekan setiap kali A selesai.' },
+    { id: 'deleted-employees', group: 'pipelines', q: 'Bagaimana karyawan yang keluar ditangani?', a: 'Dengan tujuan upsert dan **Tandai baris yang tidak ada lagi di sumber sebagai terhapus**, baris yang hilang dari sumber ditandai terhapus alih-alih dibuang. Pembacaan mengecualikannya; riwayatnya tetap ada.' },
+    { id: 'env-why', group: 'environments', q: 'Mengapa memakai Development, Staging, dan Production?', a: 'Agar pipeline bisa diubah tanpa membahayakan data produksi. Bangun dengan data uji di Development, periksa hasilnya dengan data mirip produksi di Staging, dan promosikan hanya yang berhasil ke Production, yang tidak bisa diedit langsung.' },
+    { id: 'env-sources', group: 'environments', q: 'Apakah pipeline yang dipromosikan membaca database Development di Production?', a: 'Tidak. Sumber data dicocokkan **berdasarkan nama**, dan setiap lingkungan punya sumber sendiri dengan kredensialnya sendiri. Beri sumber nama yang sama di setiap lingkungan; sumber yang belum ada memblokir promosi.' },
+    { id: 'env-schedule', group: 'environments', q: 'Saya sudah mempromosikan pipeline tetapi tidak berjalan di Production.', a: 'Pipeline yang baru dipromosikan dimulai dengan **jadwal nonaktif**; aktifkan di Production. Jika Production mewajibkan persetujuan, versinya juga menunggu orang kedua terlebih dahulu.' },
+    { id: 'env-edit-prod', group: 'environments', q: 'Mengapa saya tidak bisa mengedit pipeline di Production?', a: 'Production **terkunci**: pipeline di sana hanya berubah lewat promosi, sehingga yang berjalan sudah diuji lebih dulu. Lakukan perubahan di Development lalu promosikan. Admin bisa membuka kunci Production di Pengaturan bila benar-benar perlu.' },
     { id: 'held-why', group: 'quality', q: 'Mengapa baris ditahan alih-alih dimuat?', a: 'Langkah validasi atau aturan bisnis menemukan error (mis. NIK tidak valid) atau baris perlu persetujuan. Setiap baris tertahan menyebutkan pemeriksaan mana yang menahannya dan mengapa.' },
     { id: 'held-fix', group: 'quality', q: 'Jika saya memperbaiki baris tertahan, apakah baris itu melewati pemeriksaan sisanya?', a: 'Tidak. Baris yang diperbaiki diputar ulang dari langkah yang menahannya, sehingga tetap melewati setiap langkah berikutnya sebelum ditulis.' },
     { id: 'held-rerun', group: 'quality', q: 'Apa yang terjadi pada baris tertahan saat pipeline berjalan lagi?', a: 'Eksekusi penuh yang lebih baru menggantikan baris terbuka lama dari pipeline itu. Jika baris yang sama ditahan lagi, perbaikan atau persetujuan Anda sebelumnya terbawa.' },
@@ -556,6 +970,16 @@ export const helpId: HelpContent = {
       manager: 'Vault prod',
       connect: 'nilai dibaca saat terhubung, disimpan ≤ 60 dtk di memori',
       note: 'tidak disimpan · tidak dicatat di log · tidak dikirim ke browser',
+    },
+    environments: {
+      stages: [
+        { title: 'Development', body: 'Bangun dan uji dengan data uji', note: 'bisa diedit' },
+        { title: 'Staging', body: 'Periksa dengan data mirip produksi', note: 'bisa diedit' },
+        { title: 'Production', body: 'Data SDM asli dan produk KMPlus', note: 'terkunci: hanya berubah lewat promosi' },
+      ],
+      promote: 'Promosikan',
+      matches: 'sumber data dan aturan dicocokkan berdasarkan nama',
+      approval: 'persetujuan jika tujuan mewajibkannya',
     },
     roles: {
       permission: 'Izin',

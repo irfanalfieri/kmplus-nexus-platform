@@ -22,6 +22,7 @@ import { uploadFilePart } from '@/lib/actions/files'
 import { getBuilderOptions, runPipelineNow, savePipeline } from '@/lib/actions/pipelines'
 import { saveRule } from '@/lib/actions/rules'
 import { saveDashboard } from '@/lib/actions/analytics'
+import { getEnvironments, setupEnvironments } from '@/lib/actions/environments'
 import { processJobs } from '@/lib/pipelines/jobs'
 import { buildPipelineTemplate, type PipelineTemplateId } from '@/lib/pipelines/templates'
 import { cleanTableName, toSheet, uploadParts, type Cell } from '@/lib/files/parse'
@@ -43,6 +44,13 @@ async function main() {
   const existing = await db.select({ name: nexusDatasets.name }).from(nexusDatasets).where(eq(nexusDatasets.workspaceId, ctx.workspace.id))
   if (!existing.length) await seed()
   else console.log('Already seeded (pass --reset to start over).')
+
+  // Environments (GV-7): this workspace is Development; Staging and Production are created
+  // next to it (Production locked), so promotion can be shown.
+  if (!(await getEnvironments()).group.length) {
+    const { created } = await setupEnvironments({ environment: 'dev', create: ['staging', 'prod'] })
+    console.log(`Environments: ${created.map((c) => c.name).join(', ')}`)
+  }
 
   // A local session for the browser (signed like Better Auth's own cookie).
   const token = randomUUID().replace(/-/g, '')

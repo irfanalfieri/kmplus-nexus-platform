@@ -1,6 +1,6 @@
 /**
- * The in-app guide (Help & FAQ, /dashboard/help): chapters of blocks plus an
- * FAQ, written once per language in lib/help/content/{en,id}.ts with the same
+ * The in-app guide (Help & FAQ, /dashboard/help): numbered chapters, each with
+ * numbered sections of blocks (the guide), then the FAQ as its own part; written once per language in lib/help/content/{en,id}.ts with the same
  * ids (engine-tests compares them). Client-safe, no I/O.
  *
  * Inline text supports **bold**, *emphasis* and `code`; nothing else is interpreted.
@@ -9,7 +9,7 @@ import type { Section } from '@/lib/navigation'
 import type { Permission } from '@/lib/auth/permissions'
 import type { HelpScreen } from './screens'
 
-export type HelpDiagram = 'workflow' | 'architecture' | 'pipeline' | 'roles' | 'secrets'
+export type HelpDiagram = 'workflow' | 'architecture' | 'pipeline' | 'roles' | 'secrets' | 'environments'
 
 export type HelpBlock =
   | { kind: 'p'; text: string }
@@ -54,6 +54,8 @@ export interface HelpContent {
     architecture: { network: string; cloud: string; consumers: string; systems: string; agent: string; nexus: string; products: string; api: string; secrets: string; outbound: string; direct: string }
     pipeline: { steps: { title: string; body: string }[]; quarantine: string; replay: string }
     secrets: { source: string; reference: string; manager: string; connect: string; note: string }
+    /** Development → Staging → Production with Promote between them. */
+    environments: { stages: { title: string; body: string; note: string }[]; promote: string; matches: string; approval: string }
     /** One plain sentence per permission for the roles matrix. */
     roles: { permission: string; permissions: Record<Permission, string> }
   }

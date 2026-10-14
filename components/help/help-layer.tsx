@@ -2,7 +2,7 @@
 
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { ArrowRight, ChevronRight, Route, Search, SearchX } from 'lucide-react'
+import { ArrowRight, ChevronRight, MessageCircleQuestion, Route, Search, SearchX } from 'lucide-react'
 import { PageHeader } from '@/components/dashboard/page-header'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -18,15 +18,21 @@ import type { HelpBlock, HelpChapter, HelpContent, HelpFaq } from '@/lib/help/ty
 import { Diagram } from './diagrams'
 
 /**
- * Help & FAQ (/dashboard/help): the whole product guide on one page, in the
- * reader's language. Chapters follow the workflow; a sticky contents list
- * tracks where you are; search narrows chapters, sections and questions.
+ * Help & FAQ (/dashboard/help), in the reader's language, in two parts:
+ *   1. the product guide: numbered chapters in workflow order (1 Getting started,
+ *      2 Connect your systems …), each with numbered sections (1.1, 1.2 …);
+ *   2. the FAQ, set apart after the guide.
+ * The sticky contents list shows both parts and follows the reading position;
+ * search narrows chapters, sections and questions. Numbers stay stable while
+ * searching.
  */
 export default function HelpLayer({ content }: { content: HelpContent }) {
   const t = useT()
   const tour = useTour()
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(content.chapters[0]?.id ?? 'faq')
+
+  const numbers = useMemo(() => new Map(content.chapters.map((c, i) => [c.id, i + 1])), [content])
 
   // Search: a chapter stays when its title matches (all sections) or when any section matches.
   const view = useMemo(() => {
@@ -48,21 +54,37 @@ export default function HelpLayer({ content }: { content: HelpContent }) {
     return { chapters, faqs, sections }
   }, [content, query])
 
-  // Contents: highlight the chapter at the top of the reading area (main#main is the scroller).
+  const faqGroups = useMemo(() => content.faqGroups.filter((g) => view.faqs.some((f) => f.group === g.id)), [content.faqGroups, view.faqs])
+
+  // Reading position: the last chapter, section or FAQ topic whose top has passed the top of main.
   useEffect(() => {
     const root = document.getElementById('main')
-    const targets = [...view.chapters.map((c) => c.id), 'faq'].map((id) => document.getElementById(id)).filter((el): el is HTMLElement => !!el)
-    if (!root || !targets.length) return
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const top = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0]
-        if (top) setActive(top.target.id)
-      },
-      { root, rootMargin: '0px 0px -70% 0px' },
-    )
-    targets.forEach((el) => observer.observe(el))
-    return () => observer.disconnect()
-  }, [view.chapters])
+    if (!root) return
+    const ids = [
+      ...view.chapters.flatMap((c) => [c.id, ...c.sections.map((s) => sectionId(c.id, s.id))]),
+      ...(faqGroups.length ? ['faq', ...faqGroups.map((g) => `faq-group-${g.id}`)] : []),
+    ]
+    let frame = 0
+    const update = () => {
+      const line = root.getBoundingClientRect().top + 96
+      let current = ids[0]
+      for (const id of ids) {
+        const el = document.getElementById(id)
+        if (el && el.getBoundingClientRect().top <= line) current = id
+      }
+      if (current) setActive(current)
+    }
+    const onScroll = () => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(update)
+    }
+    update()
+    root.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      cancelAnimationFrame(frame)
+      root.removeEventListener('scroll', onScroll)
+    }
+  }, [view.chapters, faqGroups])
 
   // Arriving at #faq-… opens that question.
   useEffect(() => {
@@ -78,13 +100,15 @@ export default function HelpLayer({ content }: { content: HelpContent }) {
 
   const searching = query.trim().length > 0
   const nothing = searching && view.chapters.length === 0 && view.faqs.length === 0
+  const activeChapter = active.startsWith('faq') ? 'faq' : active.split('-')[0]
+  const sectionCount = content.chapters.reduce((n, c) => n + c.sections.length, 0)
 
   return (
     <div className="relative">
       <PageHeader
         title={t('pages.help.title')}
         description={t('pages.help.description')}
-        meta={`${t('tour.page.chapters', { count: content.chapters.length })} · ${t('tour.page.faqCount', { count: content.faqs.length })}`}
+        meta={`${t('tour.page.chapters', { count: content.chapters.length })} · ${t('tour.page.sections', { count: sectionCount })} · ${t('tour.page.faqCount', { count: content.faqs.length })}`}
         actions={
           <Button onClick={tour.start}>
             <Route aria-hidden /> {t('tour.page.startTour')}
@@ -92,7 +116,7 @@ export default function HelpLayer({ content }: { content: HelpContent }) {
         }
       />
 
-      <div className="grid gap-8 lg:grid-cols-[14rem_minmax(0,1fr)] xl:gap-12">
+      <div className="grid gap-8 lg:grid-cols-[15rem_minmax(0,1fr)] xl:gap-12">
         <aside className="lg:sticky lg:top-0 lg:max-h-[calc(100dvh-7rem)] lg:self-start lg:overflow-y-auto lg:pb-6">
           <div className="relative">
             <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
@@ -109,21 +133,53 @@ export default function HelpLayer({ content }: { content: HelpContent }) {
             {searching && !nothing ? t('tour.page.matches', { count: view.sections + view.faqs.length }) : ''}
           </p>
           <nav aria-label={t('tour.page.contents')} className="mt-3 hidden lg:block">
-            <p className="mb-1.5 font-mono text-[11px] font-medium tracking-[0.025em] text-muted-foreground uppercase">{t('tour.page.contents')}</p>
-            <ol className="space-y-px border-l border-border">
-              {view.chapters.map((c) => (
-                <TocItem key={c.id} id={c.id} label={c.title} active={active === c.id} />
-              ))}
-              {view.faqs.length > 0 && <TocItem id="faq" label={t('tour.page.faqTitle')} active={active === 'faq'} />}
-            </ol>
+            {view.chapters.length > 0 && (
+              <>
+                <p className="mb-1.5 font-mono text-[11px] font-medium tracking-[0.025em] text-muted-foreground uppercase">{t('tour.page.guidePart')}</p>
+                <ol className="border-l border-border">
+                  {view.chapters.map((c) => (
+                    <li key={c.id}>
+                      <TocLink href={`#${c.id}`} number={`${numbers.get(c.id)}`} label={c.title} current={active === c.id} within={activeChapter === c.id} />
+                      {(activeChapter === c.id || searching) && (
+                        <ol className="mb-1">
+                          {c.sections.map((s) => {
+                            const id = sectionId(c.id, s.id)
+                            return (
+                              <li key={s.id}>
+                                <TocLink href={`#${id}`} number={sectionNumber(content, c.id, s.id)} label={s.title} current={active === id} nested />
+                              </li>
+                            )
+                          })}
+                        </ol>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+              </>
+            )}
+            {faqGroups.length > 0 && (
+              <>
+                <p className="mt-6 mb-1.5 font-mono text-[11px] font-medium tracking-[0.025em] text-muted-foreground uppercase">{t('tour.page.faqPart')}</p>
+                <ol className="border-l border-border">
+                  {faqGroups.map((g) => {
+                    const id = `faq-group-${g.id}`
+                    return (
+                      <li key={g.id}>
+                        <TocLink href={`#${id}`} label={g.title} current={active === id} within={active === id} />
+                      </li>
+                    )
+                  })}
+                </ol>
+              </>
+            )}
           </nav>
         </aside>
 
         <div className="min-w-0 max-w-[56rem]">
           {!searching && (
-            <div className="mb-8 rounded-md border border-border bg-card p-5">
+            <div className="mb-10 rounded-md border border-border bg-card p-5">
               <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
-                <div className="min-w-0 flex-1">
+                <div className="min-w-0 flex-[1_1_16rem]">
                   <h2 className="text-base font-semibold">{t('tour.page.startTour')}</h2>
                   <p className="mt-0.5 text-sm text-muted-foreground">{t('tour.page.startTourBody')}</p>
                 </div>
@@ -131,16 +187,19 @@ export default function HelpLayer({ content }: { content: HelpContent }) {
                   {t('tour.guideMe')} <ArrowRight aria-hidden />
                 </Button>
               </div>
-              <ol className="mt-4 grid grid-cols-2 gap-x-6 gap-y-1.5 text-sm sm:grid-cols-3 lg:hidden">
-                {content.chapters.map((c) => (
-                  <li key={c.id}>
+              {/* Phones and tablets have no side contents list: the chapters as links. */}
+              <ol className="mt-4 grid gap-x-6 gap-y-1.5 border-t border-border pt-4 text-sm sm:grid-cols-2 lg:hidden">
+                {content.chapters.map((c, i) => (
+                  <li key={c.id} className="flex gap-2">
+                    <span className="w-5 shrink-0 text-right font-mono text-xs leading-5 text-muted-foreground tabular-nums">{i + 1}</span>
                     <a href={`#${c.id}`} className="text-info-text underline-offset-4 hover:underline">
                       {c.title}
                     </a>
                   </li>
                 ))}
-                <li>
-                  <a href="#faq" className="text-info-text underline-offset-4 hover:underline">
+                <li className="flex gap-2">
+                  <span className="w-5 shrink-0" />
+                  <a href="#faq" className="font-medium text-info-text underline-offset-4 hover:underline">
                     {t('tour.page.faqTitle')}
                   </a>
                 </li>
@@ -156,10 +215,12 @@ export default function HelpLayer({ content }: { content: HelpContent }) {
             </EmptyState>
           ) : (
             <>
-              {view.chapters.map((c, i) => (
-                <Chapter key={c.id} chapter={c} content={content} ruled={i > 0 || !searching} spaced={i > 0} />
-              ))}
-              {view.faqs.length > 0 && <Faq groups={content.faqGroups} faqs={view.faqs} open={searching} />}
+              <div className="space-y-16">
+                {view.chapters.map((c) => (
+                  <Chapter key={c.id} chapter={c} number={numbers.get(c.id)!} content={content} />
+                ))}
+              </div>
+              {faqGroups.length > 0 && <Faq groups={faqGroups} faqs={view.faqs} open={searching} afterGuide={view.chapters.length > 0} />}
             </>
           )}
         </div>
@@ -168,43 +229,75 @@ export default function HelpLayer({ content }: { content: HelpContent }) {
   )
 }
 
-function TocItem({ id, label, active }: { id: string; label: string; active: boolean }) {
+const sectionId = (chapter: string, section: string) => `${chapter}-${section}`
+
+function sectionNumber(content: HelpContent, chapter: string, section: string) {
+  const ci = content.chapters.findIndex((c) => c.id === chapter)
+  const si = content.chapters[ci]?.sections.findIndex((s) => s.id === section) ?? -1
+  return `${ci + 1}.${si + 1}`
+}
+
+function TocLink({ href, number, label, current, within, nested }: { href: string; number?: string; label: string; current: boolean; within?: boolean; nested?: boolean }) {
   return (
-    <li>
-      <a
-        href={`#${id}`}
-        aria-current={active ? 'location' : undefined}
-        className={cn(
-          '-ml-px block border-l-2 border-transparent py-1 pr-2 pl-3 text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring',
-          active && 'border-live font-medium text-foreground',
-        )}
-      >
-        {label}
-      </a>
-    </li>
+    <a
+      href={href}
+      aria-current={current ? 'location' : undefined}
+      className={cn(
+        '-ml-px flex gap-2 border-l-2 border-transparent py-1 pr-2 text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring',
+        nested ? 'pl-5 text-xs leading-5' : 'pl-3',
+        within && !nested && 'font-medium text-foreground',
+        current && 'border-live text-foreground',
+      )}
+    >
+      {number && <span className={cn('shrink-0 font-mono text-xs leading-5 tabular-nums', nested ? 'w-8' : 'w-4 text-right')}>{number}</span>}
+      <span className="min-w-0">{label}</span>
+    </a>
   )
 }
 
-function Chapter({ chapter, content, ruled, spaced }: { chapter: HelpChapter; content: HelpContent; ruled: boolean; spaced: boolean }) {
+function Chapter({ chapter, number, content }: { chapter: HelpChapter; number: number; content: HelpContent }) {
   const t = useT()
   return (
-    <section id={chapter.id} aria-labelledby={`${chapter.id}-title`} className={cn('scroll-mt-6', ruled && 'border-t border-border pt-10', spaced && 'mt-10')}>
-      <div className="flex flex-wrap items-start gap-x-6 gap-y-3">
-        <div className="min-w-0 flex-1">
-          <h2 id={`${chapter.id}-title`} className="text-xl leading-7 font-normal tracking-[-0.005em] text-balance">
-            {chapter.title}
-          </h2>
-          <p className="mt-1 max-w-3xl text-sm text-pretty text-muted-foreground">{chapter.summary}</p>
+    <section id={chapter.id} aria-labelledby={`${chapter.id}-title`} className="scroll-mt-6">
+      {/* The chapter's plate: number, title, what it covers, and its sections. */}
+      <div className="rounded-md border border-border bg-card">
+        <div className="flex flex-wrap items-start gap-x-5 gap-y-3 p-5">
+          <span aria-hidden className="flex size-10 shrink-0 items-center justify-center rounded-sm border-2 border-live font-mono text-base font-medium text-live-text tabular-nums">
+            {number}
+          </span>
+          <div className="min-w-0 flex-[1_1_18rem]">
+            <h2 id={`${chapter.id}-title`} className="text-xl leading-7 font-normal tracking-[-0.005em] text-balance">
+              <span className="sr-only">{t('tour.page.chapterNumber', { n: number })} </span>
+              {chapter.title}
+            </h2>
+            <p className="mt-1 max-w-3xl text-sm text-pretty text-muted-foreground">{chapter.summary}</p>
+          </div>
+          {chapter.screen && (
+            <Link href={sectionHref(chapter.screen)} className={buttonVariants({ variant: 'outline', size: 'sm' })}>
+              {t('tour.page.openScreen', { screen: t(`nav.${chapter.screen}`) })} <ChevronRight aria-hidden />
+            </Link>
+          )}
         </div>
-        {chapter.screen && (
-          <Link href={sectionHref(chapter.screen)} className={buttonVariants({ variant: 'outline', size: 'sm' })}>
-            {t('tour.page.openScreen', { screen: t(`nav.${chapter.screen}`) })} <ChevronRight aria-hidden />
-          </Link>
-        )}
+        <nav aria-label={t('tour.page.inChapter', { title: chapter.title })} className="border-t border-border px-5 py-3">
+          <ol className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
+            {chapter.sections.map((s) => (
+              <li key={s.id} className="flex gap-2.5">
+                <span className="w-8 shrink-0 font-mono text-xs leading-5 text-muted-foreground tabular-nums">{sectionNumber(content, chapter.id, s.id)}</span>
+                <a href={`#${sectionId(chapter.id, s.id)}`} className="min-w-0 text-info-text underline-offset-4 hover:underline">
+                  {s.title}
+                </a>
+              </li>
+            ))}
+          </ol>
+        </nav>
       </div>
+
       {chapter.sections.map((s) => (
-        <div key={s.id} id={`${chapter.id}-${s.id}`} className="mt-7 scroll-mt-6">
-          <h3 className="text-base font-semibold">{s.title}</h3>
+        <div key={s.id} id={sectionId(chapter.id, s.id)} className="mt-10 scroll-mt-6">
+          <h3 className="flex items-baseline gap-3 text-base font-semibold">
+            <span className="font-mono text-sm font-medium text-muted-foreground tabular-nums">{sectionNumber(content, chapter.id, s.id)}</span>
+            <span>{s.title}</span>
+          </h3>
           <div className="mt-3 space-y-4">
             {s.blocks.map((b, i) => (
               <Block key={i} block={b} content={content} />
@@ -327,22 +420,44 @@ function Block({ block, content }: { block: HelpBlock; content: HelpContent }) {
   }
 }
 
-function Faq({ groups, faqs, open }: { groups: HelpContent['faqGroups']; faqs: HelpFaq[]; open: boolean }) {
+function Faq({ groups, faqs, open, afterGuide }: { groups: HelpContent['faqGroups']; faqs: HelpFaq[]; open: boolean; afterGuide: boolean }) {
   const t = useT()
   return (
-    <section id="faq" aria-labelledby="faq-title" className="mt-10 scroll-mt-6 border-t border-border pt-10">
-      <h2 id="faq-title" className="text-xl leading-7 font-normal tracking-[-0.005em]">
-        {t('tour.page.faqTitle')}
-      </h2>
-      <p className="mt-1 font-mono text-xs text-muted-foreground tabular-nums">{t('tour.page.faqCount', { count: faqs.length })}</p>
-      {groups.map((g) => {
-        const items = faqs.filter((f) => f.group === g.id)
-        if (!items.length) return null
-        return (
-          <Fragment key={g.id}>
-            <h3 className="mt-7 text-base font-semibold">{g.title}</h3>
-            <div className="mt-3 max-w-3xl divide-y divide-border rounded-md border border-border bg-card">
-              {items.map((f) => (
+    <section id="faq" aria-labelledby="faq-title" className={cn('scroll-mt-6', afterGuide && 'mt-20 border-t-2 border-foreground/70 pt-12')}>
+      {/* The second part of the page, set apart from the guide by a heavy rule and its own plate. */}
+      <div className="rounded-md border border-border bg-card">
+        <div className="flex flex-wrap items-start gap-x-5 gap-y-3 p-5">
+          <span aria-hidden className="flex size-10 shrink-0 items-center justify-center rounded-sm border-2 border-info text-info-text">
+            <MessageCircleQuestion className="size-5" />
+          </span>
+          <div className="min-w-0 flex-[1_1_18rem]">
+            <h2 id="faq-title" className="text-xl leading-7 font-normal tracking-[-0.005em]">
+              {t('tour.page.faqTitle')}
+            </h2>
+            <p className="mt-1 max-w-3xl text-sm text-pretty text-muted-foreground">{t('tour.page.faqIntro')}</p>
+            <p className="mt-1.5 font-mono text-xs text-muted-foreground tabular-nums">{t('tour.page.faqCount', { count: faqs.length })}</p>
+          </div>
+        </div>
+        <nav aria-label={t('tour.page.faqTopics')} className="border-t border-border px-5 py-3">
+          <ul className="flex flex-wrap gap-2">
+            {groups.map((g) => (
+              <li key={g.id}>
+                <a href={`#faq-group-${g.id}`} className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'font-normal')}>
+                  {g.title}
+                  <span className="font-mono text-[11px] text-muted-foreground tabular-nums">{faqs.filter((f) => f.group === g.id).length}</span>
+                </a>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      </div>
+      {groups.map((g) => (
+        <div key={g.id} id={`faq-group-${g.id}`} className="mt-10 scroll-mt-6">
+          <h3 className="text-base font-semibold">{g.title}</h3>
+          <div className="mt-3 max-w-3xl divide-y divide-border rounded-md border border-border bg-card">
+            {faqs
+              .filter((f) => f.group === g.id)
+              .map((f) => (
                 <details key={f.id} id={`faq-${f.id}`} open={open || undefined} className="group scroll-mt-6">
                   <summary className="flex cursor-pointer list-none items-start gap-2.5 px-4 py-3 text-sm font-medium outline-none hover:bg-muted/50 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
                     <ChevronRight aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform duration-150 group-open:rotate-90" />
@@ -353,10 +468,9 @@ function Faq({ groups, faqs, open }: { groups: HelpContent['faqGroups']; faqs: H
                   </p>
                 </details>
               ))}
-            </div>
-          </Fragment>
-        )
-      })}
+          </div>
+        </div>
+      ))}
     </section>
   )
 }

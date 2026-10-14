@@ -1,6 +1,7 @@
 'use client'
 
-import { ArrowRight, KeyRound, Lock, RotateCcw } from 'lucide-react'
+import { Fragment } from 'react'
+import { ArrowDown, ArrowRight, KeyRound, Lock, RotateCcw } from 'lucide-react'
 import { useT } from '@/components/i18n/i18n-provider'
 import { Breaker, StateMark } from '@/components/ui/flow-line'
 import { cn } from '@/lib/utils'
@@ -24,6 +25,8 @@ export function Diagram({ diagram, labels }: { diagram: HelpDiagram; labels: Hel
       return <SecretsDiagram labels={labels.secrets} />
     case 'roles':
       return <RolesMatrix labels={labels.roles} />
+    case 'environments':
+      return <EnvironmentsDiagram labels={labels.environments} />
   }
 }
 
@@ -50,6 +53,23 @@ const VLine = ({ className, dashed, tone = 'live' }: { className?: string; dashe
     )}
   />
 )
+
+/**
+ * A directed connection: a horizontal line and arrowhead from md up, a vertical
+ * one below md (drawn, not rotated, so it takes its real space next to labels).
+ */
+function Connector({ dashed, back }: { dashed?: boolean; back?: boolean }) {
+  return (
+    <span aria-hidden className="flex flex-col items-center text-live md:flex-row">
+      {back && <ArrowRight className="-mr-1 hidden size-3.5 rotate-180 md:block" />}
+      {back && <ArrowDown className="-mb-1 size-3.5 rotate-180 md:hidden" />}
+      <Line dashed={dashed} className="hidden h-0.5 w-8 md:block" />
+      <VLine dashed={dashed} className="h-5 md:hidden" />
+      {!back && <ArrowRight className="-ml-1 hidden size-3.5 md:block" />}
+      {!back && <ArrowDown className="-mt-1 size-3.5 md:hidden" />}
+    </span>
+  )
+}
 
 const Bus = ({ className }: { className?: string }) => <span aria-hidden className={cn('block h-4 w-1.5 shrink-0 border-2 border-current text-live', className)} />
 
@@ -124,11 +144,8 @@ function Box({ children, className }: { children: React.ReactNode; className?: s
 /** Network → Agent ⇢ Nexus → consumers. Only outbound arrows leave the company network. */
 function ArchitectureDiagram({ labels }: { labels: HelpContent['diagrams']['architecture'] }) {
   const Arrow = ({ label }: { label?: string }) => (
-    <div className="flex items-center justify-center gap-1 py-1 md:flex-col md:px-1 md:py-0">
-      <div aria-hidden className="flex items-center text-live max-md:rotate-90">
-        <Line className="h-0.5 w-6 md:w-8" />
-        <ArrowRight className="-ml-1 size-3.5" />
-      </div>
+    <div className="flex flex-col items-center justify-center gap-1 py-1 md:px-1 md:py-0">
+      <Connector />
       {label && <span className="font-mono text-[11px] text-muted-foreground md:max-w-24 md:text-center">{label}</span>}
     </div>
   )
@@ -184,10 +201,7 @@ function SecretsDiagram({ labels }: { labels: HelpContent['diagrams']['secrets']
           <p className="mt-1 font-mono text-[11px] break-all text-muted-foreground">{labels.reference}</p>
         </Box>
         <div className="flex flex-col items-center gap-1 px-2">
-          <div aria-hidden className="flex items-center text-live max-md:rotate-90">
-            <ArrowRight className="-mr-1 size-3.5 rotate-180" />
-            <Line dashed className="h-0.5 w-10" />
-          </div>
+          <Connector dashed back />
           <span className="max-w-40 text-center font-mono text-[11px] text-muted-foreground">{labels.connect}</span>
         </div>
         <Box className="flex items-center gap-2 font-medium">
@@ -200,6 +214,38 @@ function SecretsDiagram({ labels }: { labels: HelpContent['diagrams']['secrets']
         {labels.note}
       </p>
     </div>
+  )
+}
+
+/**
+ * Development → Staging → Production: one workspace per stage, each with its own
+ * sources; Promote moves the published version one stage forward. Production is
+ * locked (open breaker + lock): it changes only by promotion.
+ */
+function EnvironmentsDiagram({ labels }: { labels: HelpContent['diagrams']['environments'] }) {
+  const last = labels.stages.length - 1
+  return (
+    <ol className="grid items-stretch gap-1 md:grid-cols-[1fr_auto_1fr_auto_1fr]">
+      {labels.stages.map((stage, i) => (
+        <Fragment key={stage.title}>
+          <li className={cn('flex min-w-0 flex-col rounded-sm border bg-background p-3', i === last ? 'border-live/60' : 'border-border')}>
+            <p className="flex items-center gap-2 text-sm font-semibold">
+              {i === last ? <Lock className="size-3.5 shrink-0 text-live-text" aria-hidden /> : <Breaker state="live" />}
+              {stage.title}
+            </p>
+            <p className="mt-1 text-xs text-pretty text-muted-foreground">{stage.body}</p>
+            <p className={cn('mt-auto pt-2 font-mono text-[11px]', i === last ? 'text-live-text' : 'text-muted-foreground')}>{stage.note}</p>
+          </li>
+          {i < last && (
+            <li className="flex flex-col items-center justify-center gap-1 px-2 py-1 md:py-0">
+              <span className="text-xs font-medium text-live-text">{labels.promote}</span>
+              <Connector />
+              <span className="max-w-32 text-center font-mono text-[11px] leading-4 text-muted-foreground">{i === last - 1 ? labels.approval : labels.matches}</span>
+            </li>
+          )}
+        </Fragment>
+      ))}
+    </ol>
   )
 }
 
