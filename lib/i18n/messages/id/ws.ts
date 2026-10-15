@@ -201,6 +201,8 @@ export const ws: Messages['ws'] = {
       INVITE: 'Undang',
       REVOKE_INVITE: 'Cabut undangan',
       ACCEPT_INVITE: 'Terima undangan',
+      SIGN_UP: 'Buat akun',
+      PASSWORD_RESET: 'Atur ulang kata sandi',
       VIEW_DATA: 'Lihat data',
       TEST_RUN: 'Uji coba eksekusi',
       LOGIN: 'Masuk',

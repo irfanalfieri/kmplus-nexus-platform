@@ -3,4 +3,4 @@
 import * as actions from '@/app/actions/workspaces'
 import { unwrapActions } from '@/lib/action-result'
 
-export const { getWorkspaceContext, switchWorkspace, createWorkspace, renameWorkspace, listMembers, changeMemberRole, resetMemberTwoFactor, removeMember, createInvite, listInvites, revokeInvite, describeInvite, acceptInvite } = unwrapActions(actions)
+export const { getWorkspaceContext, switchWorkspace, createWorkspace, renameWorkspace, listMembers, changeMemberRole, resetMemberTwoFactor, removeMember, createInvite, listInvites, revokeInvite, describeInvite, acceptInvite, createAccountFromInvite } = unwrapActions(actions)

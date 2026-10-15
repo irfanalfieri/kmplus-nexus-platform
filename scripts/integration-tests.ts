@@ -14,7 +14,7 @@ import { randomUUID } from 'node:crypto'
 import { and, eq, inArray, like } from 'drizzle-orm'
 import { db, pool } from '@/lib/db'
 import { agentTasks as agentTaskTable, agents as agentTable, apiKeys, apiRateLimits, auditLogs, businessRuleVersions, businessRules, catalogEntries, connectorInstalls, dashboards, dataSources, datasetPolicies, datasetQualitySnapshots, domainMappings, mappingTemplates, notifications, pipelineApprovals, scimGroups, scimTokens, scimUsers, ssoProvider, webhookDeliveries, webhooks, workspaceSso, executionLogs, nexusDatasets, pipelineJobs, pipelineRunRejects, pipelines, pipelineVersions, session, user, verification, workspaceInvites, workspaceMembers, workspaces } from '@/lib/db/schema'
-import { acceptInvite, changeMemberRole, createInvite, getWorkspaceContext, listMembers, resetMemberTwoFactor, switchWorkspace } from '@/lib/actions/workspaces'
+import { acceptInvite, changeMemberRole, createAccountFromInvite, createInvite, describeInvite, getWorkspaceContext, listMembers, resetMemberTwoFactor, switchWorkspace } from '@/lib/actions/workspaces'
 import { installConnector } from '@/lib/actions/connectors'
 import { createDataSource, deleteDataSource, getDataSources, getEditableCredentials, listSecretManagers, listSecretNames, renameDataSource, setDataSourceRole, testConnection, updateDataSourceCredentials } from '@/lib/actions/data-sources'
 import { startInfraMock } from './test/infra-mock'
@@ -149,6 +149,24 @@ async function main() {
       assert.equal(ctx.workspace.id, adminWs)
       assert.equal(ctx.role, 'viewer')
       await rejectsWith(() => acceptInvite(token), /invalid, expired, revoked or already used/)
+    })
+
+    await test('invite for someone without an account: the page offers sign-up; guard rails on creating it', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const newcomerEmail = `${RUN}-invitee@nexus.test`
+      const fresh = (await createInvite(newcomerEmail, 'analyst')).path.split('/').pop()!
+      const existing = (await createInvite(outsider.email, 'viewer')).path.split('/').pop()!
+      setTestUser(null)
+      const d = await describeInvite(fresh)
+      assert.equal(d?.hasAccount, false)
+      assert.equal(d?.ssoProvider, null)
+      assert.equal((await describeInvite(existing))?.hasAccount, true)
+      await rejectsWith(() => createAccountFromInvite({ token: fresh, name: 'New', password: 'Str0ng-pass-1', acceptedTerms: '2000-01-01' }), /Accept the Terms and Conditions/)
+      await rejectsWith(() => createAccountFromInvite({ token: 'x'.repeat(32), name: 'New', password: 'Str0ng-pass-1', acceptedTerms: TERMS_VERSION }), /invalid, expired, revoked or already used/)
+      await rejectsWith(() => createAccountFromInvite({ token: existing, name: 'Out', password: 'Str0ng-pass-1', acceptedTerms: TERMS_VERSION }), /already exists/)
+      await rejectsWith(() => createAccountFromInvite({ token: fresh, name: 'New', password: 'short', acceptedTerms: TERMS_VERSION }), /at least 8 characters/)
+      setTestUser(admin)
     })
 
     await test('fixture source table and data source (credentials never returned)', async () => {

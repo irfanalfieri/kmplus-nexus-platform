@@ -3,7 +3,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { z } from 'zod'
 import { and, asc, desc, eq, gt, isNull, like, sql } from 'drizzle-orm'
-import { cookies } from 'next/headers'
+import { cookies, headers } from 'next/headers'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/lib/db'
 import { session, twoFactor, user, verification, workspaceInvites, workspaceMembers, workspaces } from '@/lib/db/schema'
@@ -13,6 +13,11 @@ import { recordAudit, type AuditAction } from '@/lib/audit'
 import { appUrl, sendEmail, smtpConfigured } from '@/lib/email'
 import { inviteEmail, requestLocale, twoFactorResetEmail } from '@/lib/email-templates'
 import { guard } from '@/lib/server-action'
+import { auth } from '@/lib/auth'
+import { enforcedProviderFor } from '@/lib/auth/sso'
+import { TERMS_VERSION } from '@/lib/legal/terms'
+import { clientIp, recordTermsAcceptance } from '@/lib/legal/acceptance'
+import { getLocale } from '@/lib/i18n/server'
 
 const roleSchema = z.enum(ROLES)
 const idSchema = z.string().trim().min(1).max(100)
@@ -263,12 +268,50 @@ async function findValidInvite(token: string) {
   return invite ?? null
 }
 
-/** For the invite page: what the link is for (no secrets). */
+/**
+ * For the invite page: what the link is for (no secrets), and what the invited
+ * person needs next: an account to create, a sign-in, or their organization's SSO.
+ */
 async function describeInviteImpl(rawToken: string) {
   const token = z.string().min(10).max(200).parse(rawToken)
   const invite = await findValidInvite(token)
   if (!invite) return null
-  return { workspaceName: invite.workspaceName, email: invite.email, role: invite.role as Role }
+  const [existing] = await db.select({ id: user.id }).from(user).where(eq(sql`lower(${user.email})`, invite.email.toLowerCase())).limit(1)
+  return { workspaceName: invite.workspaceName, email: invite.email, role: invite.role as Role, hasAccount: Boolean(existing), ssoProvider: await enforcedProviderFor(invite.email) }
+}
+
+const inviteSignUpInput = z.object({
+  token: z.string().min(10).max(200),
+  name: nameSchema,
+  password: z.string().min(8, 'Use at least 8 characters.').max(128),
+  acceptedTerms: z.string().max(40),
+})
+
+/**
+ * Creates the account for an invited person who has none yet (/invite/<token>,
+ * signed out). The invite was emailed to that address, so opening its link
+ * proves the email: no separate verification email. They accept the Terms and
+ * Conditions here, then sign in, set up 2FA, and join the workspace.
+ */
+async function createAccountFromInviteImpl(rawInput: z.input<typeof inviteSignUpInput>) {
+  const input = inviteSignUpInput.parse(rawInput)
+  if (input.acceptedTerms !== TERMS_VERSION) throw new Error('Accept the Terms and Conditions to create an account.')
+  const invite = await findValidInvite(input.token)
+  if (!invite) throw new Error('This invite link is invalid, expired, revoked or already used.')
+  const email = invite.email.toLowerCase()
+  const sso = await enforcedProviderFor(email)
+  if (sso) throw new Error(`Your organization signs in with ${sso}. Use "Sign in with SSO".`)
+  const [existing] = await db.select({ id: user.id }).from(user).where(eq(sql`lower(${user.email})`, email)).limit(1)
+  if (existing) throw new Error(`An account already exists for ${email}. Sign in to accept the invite.`)
+
+  const ctx = await auth.$context
+  const created = await ctx.internalAdapter.createUser({ email, name: input.name, emailVerified: true })
+  if (!created) throw new Error('Could not create the account. Try again.')
+  await ctx.internalAdapter.linkAccount({ userId: created.id, providerId: 'credential', accountId: created.id, password: await ctx.password.hash(input.password) })
+  const h = await headers()
+  await recordTermsAcceptance({ userId: created.id, method: 'sign_up', locale: await getLocale(), ipAddress: clientIp(h), userAgent: h.get('user-agent') })
+  await recordAudit({ userId: created.id, workspaceId: invite.workspaceId }, { action: 'SIGN_UP', resource: 'account', resourceId: created.id, changes: { via: 'invite', inviteId: invite.id } })
+  return { email }
 }
 
 /** Accepts an invite. The signed-in account's email must match the invited email. */
@@ -345,4 +388,8 @@ export async function describeInvite(...args: Parameters<typeof describeInviteIm
 
 export async function acceptInvite(...args: Parameters<typeof acceptInviteImpl>) {
   return guard(() => acceptInviteImpl(...args))
+}
+
+export async function createAccountFromInvite(...args: Parameters<typeof createAccountFromInviteImpl>) {
+  return guard(() => createAccountFromInviteImpl(...args))
 }

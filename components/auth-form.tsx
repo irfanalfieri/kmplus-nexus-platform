@@ -37,11 +37,11 @@ export function AuthShell({ children, className }: { children: React.ReactNode; 
   )
 }
 
-export function AuthForm({ mode, next = '/dashboard', ssoError, passwordReset = false }: { mode: 'sign-in' | 'sign-up'; next?: string; ssoError?: string; passwordReset?: boolean }) {
+export function AuthForm({ mode, next = '/dashboard', ssoError, passwordReset = false, initialEmail = '' }: { mode: 'sign-in' | 'sign-up'; next?: string; ssoError?: string; passwordReset?: boolean; initialEmail?: string }) {
   const router = useRouter()
   const t = useT()
   const [name, setName] = useState('')
-  const [email, setEmail] = useState('')
+  const [email, setEmail] = useState(initialEmail)
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(ssoError ? t('auth.form.ssoFailed', { error: ssoError }) : null)
   const [useSso, setUseSso] = useState(Boolean(ssoError))

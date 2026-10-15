@@ -199,6 +199,8 @@ export const ws = {
       INVITE: 'Invite',
       REVOKE_INVITE: 'Revoke invite',
       ACCEPT_INVITE: 'Accept invite',
+      SIGN_UP: 'Create account',
+      PASSWORD_RESET: 'Reset password',
       VIEW_DATA: 'View data',
       TEST_RUN: 'Test run',
       LOGIN: 'Sign in',
