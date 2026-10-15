@@ -26,7 +26,7 @@ async function startInfra() {
   return () => undefined
 }
 
-type Case = { slug: ConnectorSlug; label: string; publicEndpoint?: boolean; credentials?: ConnectorCredentials; sampleTable?: string; skip?: string; setup?: () => Promise<() => void | Promise<void>>; infra?: boolean; secretPath?: string; expectValue?: string }
+type Case = { slug: ConnectorSlug; label: string; publicEndpoint?: boolean; credentials?: ConnectorCredentials; sampleTable?: string; skip?: string; setup?: () => Promise<() => void | Promise<void>>; infra?: boolean; secretPath?: string; expectValue?: string; /** A custom check instead of test → scan → sample (e.g. writes). */ run?: () => Promise<string> }
 type Outcome = { label: string; slug: string; status: 'PASS' | 'FAIL' | 'SKIP' | 'UNREACHABLE'; detail: string; ms: number }
 
 const env = process.env
@@ -176,6 +176,7 @@ const cases: Case[] = [
     ? { slug: 'file', label: 'File upload (temporary nexus_raw table)', setup: startFileFixture, sampleTable: 'employees' }
     : { slug: 'file', label: 'File upload', skip: 'run with --env-file=.env.local (uses the Nexus database)' },
   { slug: 'kmplus', label: 'KMPlus product (local mock of the Nexus Ingest Contract)', setup: startKmplus, sampleTable: 'employee' },
+  { slug: 'rest', label: 'REST write (local mock: per row, batch, refused items)', run: restWriteCheck },
   { slug: 'prometheus', label: 'Prometheus (local mock of the HTTP API)', setup: startInfra, infra: true, sampleTable: 'service_up' },
   { slug: 'elasticsearch', label: 'Elasticsearch (local mock: indices, mapping, scroll)', setup: startInfra, infra: true, sampleTable: 'logs-hr' },
   { slug: 'datadog', label: 'Datadog (local mock, checks API + app keys)', setup: startInfra, infra: true, sampleTable: 'hr_api_latency' },
@@ -202,6 +203,35 @@ async function startKmplus() {
   return () => kmplusMock?.stop()
 }
 
+// ── REST API destination: rows written to a local API that records what it receives ──
+async function restWriteCheck(): Promise<string> {
+  process.env.NEXUS_ALLOW_PRIVATE_URLS = 'true'
+  const { startRestWriteMock } = await import('./test/rest-write-mock')
+  const { writeRestApi } = await import('@/lib/connectors/rest/write')
+  const { apiDestinationSpec } = await import('@/lib/pipelines/definition')
+  const { autoBindBody, parseBodySample, setRowsArray } = await import('@/lib/pipelines/body-template')
+  const api = await startRestWriteMock('harness-token')
+  try {
+    const credentials = { ...restDefaults, baseUrl: api.baseUrl, authMethod: 'bearer', bearerToken: api.token }
+    const rows = [{ code: 'E1', email: 'e1@kmplus.test' }, { code: 'E2', email: '' }, { code: 'E3', email: 'e3@kmplus.test' }]
+    const single = apiDestinationSpec.parse({ dataSourceId: 'x', method: 'PUT', path: '/employees/{{code}}', body: { format: 'json', template: autoBindBody(parseBodySample('json', '{"employee":{"email":"x"}}'), ['email']).template } })
+    const one = await writeRestApi(credentials, single, rows, { runId: 'harness', chunk: 0 })
+    if (one.written !== 3) throw new Error(`per-row PUT wrote ${one.written}/3`)
+    const batch = apiDestinationSpec.parse({
+      dataSourceId: 'x', path: '/employees/batch', batchSize: 2, idempotencyKey: true,
+      body: { format: 'json', template: autoBindBody(setRowsArray(parseBodySample('json', '{"records":[{"code":"x","email":"x"}]}'), [0]), ['code', 'email']).template },
+      response: { rejectedPath: 'errors' },
+    })
+    const many = await writeRestApi(credentials, batch, rows, { runId: 'harness', chunk: 0 })
+    if (many.written !== 2 || many.rejected.length !== 1) throw new Error(`batch wrote ${many.written}, refused ${many.rejected.length} (expected 2 and 1)`)
+    const keys = api.received.filter((r) => r.path === '/employees/batch').map((r) => r.idempotencyKey)
+    if (keys.join() !== 'harness:0:0,harness:0:1') throw new Error(`unexpected idempotency keys ${keys.join()}`)
+    return `3 PUT /employees/{code} · 2 batch requests (2 + 1 rows) · 1 refused item → quarantine ("${many.rejected[0].error}")`
+  } finally {
+    await api.stop()
+  }
+}
+
 // ── File upload fixture: one uploaded "file" in nexus_raw, removed afterwards ──
 const FILE_KEY = `harness-${randomBytes(4).toString('hex')}`
 async function startFileFixture() {
@@ -218,6 +248,7 @@ async function runCase(c: Case): Promise<Outcome> {
   if (c.skip) return done('SKIP', c.skip)
   let teardown: (() => void | Promise<void>) | undefined
   try {
+    if (c.run) return done('PASS', await c.run())
     if (c.setup) teardown = await c.setup()
     const credentials =
       c.slug === 'talenta' ? { clientId: TALENTA_ID, clientSecret: TALENTA_SECRET, baseUrl: talentaBase, pageSize: '3' }

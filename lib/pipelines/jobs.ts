@@ -4,7 +4,8 @@ import { db, pool } from '@/lib/db'
 import { executionLogs, pipelineJobPairs, pipelineJobSeen, pipelineJobs, pipelineRunRejects, pipelines } from '@/lib/db/schema'
 import { newId } from '@/lib/auth/session'
 import { recordAudit } from '@/lib/audit'
-import { scheduleSchema, type DestinationStep, type PipelineDefinition, type SourceStep } from './definition'
+import { destinationTarget, scheduleSchema, type DestinationStep, type PipelineDefinition, type SourceStep } from './definition'
+import { apiChunkRows } from './body-template'
 import { checkDestination, newRunTotals, outputColumns, totalsStatus, transformChunk, upgradeTotals, type DestinationResult, type EngineResult, type Reject, type RunTotals } from './engine'
 import { dropDatasetTable, finalizeDatasetReplace, readSourceChunk, softDeleteDataSourceMissing, softDeleteDatasetMissing, stagingTableName, writeDataset, writeToDataSource, type ReadCache, type StoredDataSource } from './io'
 import { checkManagers, type Row } from './transforms'
@@ -287,7 +288,8 @@ async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promi
   }
   const totals = upgradeTotals(progress.totals ?? newRunTotals(def))
   progress.totals = totals
-  const chunkRows = def.settings.batchSize ?? CHUNK_ROWS
+  // An API destination sets the pace: its chunk must finish well inside one invocation (apiChunkRows).
+  const chunkRows = Math.min(def.settings.batchSize ?? CHUNK_ROWS, ...destinations.flatMap((d) => (d.kind === 'api' ? [apiChunkRows(d)] : [])))
 
   try {
     const sourceDs = await loadSource(scope.workspaceId, source.dataSourceId)
@@ -340,11 +342,23 @@ async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promi
           })
           written = res.written
         } else {
-          const res = await writeToDataSource({ source: target.ds!, table: dest.table, mode: dest.mode, keys: dest.keys, columns, rows, runId: job.id, chunk: progress.chunks })
+          const res = await writeToDataSource({
+            source: target.ds!,
+            table: destinationTarget(dest),
+            mode: dest.mode,
+            keys: dest.keys,
+            columns,
+            rows,
+            runId: job.id,
+            chunk: progress.chunks,
+            api: dest.kind === 'api' ? dest : undefined,
+            // A REST API answers at its own pace: stop in time for the checkpoint instead of being cut off.
+            deadline: deadline - 20_000,
+          })
           written = res.written
-          // Rows the destination refused (e.g. a KMPlus product's validation) go to the quarantine, replayable from this step.
+          // Rows the destination refused (a KMPlus product's validation, an API's 4xx) go to the quarantine, replayable from this step.
           for (const r of res.rejected ?? []) {
-            destRejects.push({ stepId: destId, row: r.row, errors: [`${dest.table}: ${r.error}`], severity: 'error', kind: 'invalid' })
+            destRejects.push({ stepId: destId, row: r.row, errors: (r.errors ?? [r.error]).map((e) => `${destinationTarget(dest)}: ${e}`), severity: 'error', kind: 'invalid' })
             totals.rejectedCount++
             const st = totals.steps.find((x) => x.id === destId)
             if (st) st.rejected++
@@ -402,11 +416,13 @@ async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promi
     }
 
     let sliceChunks = 0
+    // A slow chunk (e.g. a slow API) means the next one needs as much time.
+    let lastChunkMs = 0
     while (!progress.exhausted) {
       if (await isCancelling(job.id)) return finishJob(job, progress, def, { cancelled: true })
       if (Date.now() > timeoutAt) throw Object.assign(new Error(`The run passed its ${def.settings.timeoutMinutes}-minute timeout.`), { retryable: false })
       // Every slice makes progress (one chunk at least), then stops near the deadline.
-      if (sliceChunks >= maxChunks || (sliceChunks > 0 && Date.now() > deadline - CHUNK_HEADROOM_MS)) {
+      if (sliceChunks >= maxChunks || (sliceChunks > 0 && Date.now() > deadline - Math.max(CHUNK_HEADROOM_MS, lastChunkMs * 1.25))) {
         // Out of time: release the job; the next tick (or page poll) resumes it. Never overwrite a cancel request.
         log(progress, 'info', `Paused at row ${progress.offset.toLocaleString()} (function time limit); continues in the next invocation`)
         const released = await db
@@ -430,7 +446,8 @@ async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promi
       progress.chunks++
       sliceChunks++
       log(progress, 'info', `Chunk ${progress.chunks}: read ${read.rows.length.toLocaleString()} rows in ${readMs} ms; ${out.rejects.length} quarantined, ${out.flags.length} flagged`)
-      await checkpoint(job, progress, scope, [...out.rejects, ...out.flags, ...destRejects], sets, out.managerPairs, Date.now() - started)
+      lastChunkMs = Date.now() - started
+      await checkpoint(job, progress, scope, [...out.rejects, ...out.flags, ...destRejects], sets, out.managerPairs, lastChunkMs)
       destRejects = []
 
       // PD-10: error-rate threshold.
@@ -581,6 +598,8 @@ async function finishJob(job: Job, progress: JobProgress, def: PipelineDefinitio
         }
         if (columns.length) await upsertDatasetRecord(scope, job.pipelineId, dest.datasetName, tableName, columns, rowCount ?? 0)
         results.push({ id: dest.id, kind: 'dataset', target: `Dataset ${dest.datasetName}`, rowCount, written: totals.writtenByDest[dest.id] ?? 0 })
+      } else if (dest.kind === 'api') {
+        results.push({ id: dest.id, kind: 'datasource', target: destinationTarget(dest), written: totals.writtenByDest[dest.id] ?? 0 })
       } else {
         if (!error && !cancelled && dest.softDeleteMissing && !replay) {
           if (progress.capped) log(progress, 'warn', `${dest.table}: missing rows not marked deleted, the read stopped at the row cap`)
@@ -595,7 +614,7 @@ async function finishJob(job: Job, progress: JobProgress, def: PipelineDefinitio
         results.push({ id: dest.id, kind: 'datasource', target: dest.table, written: totals.writtenByDest[dest.id] ?? 0 })
       }
     } catch (err) {
-      error = `Finishing ${dest.kind === 'dataset' ? `dataset ${dest.datasetName}` : dest.table} failed: ${errorInfo(err).message}`
+      error = `Finishing ${dest.kind === 'dataset' ? `dataset ${dest.datasetName}` : destinationTarget(dest)} failed: ${errorInfo(err).message}`
       progress.errorStack = errorInfo(err).stack
     }
   }

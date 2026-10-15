@@ -205,6 +205,7 @@ export const ws: Messages['ws'] = {
       PASSWORD_RESET: 'Atur ulang kata sandi',
       VIEW_DATA: 'Lihat data',
       TEST_RUN: 'Uji coba eksekusi',
+      TEST_REQUEST: 'Uji permintaan API',
       LOGIN: 'Masuk',
       ENABLE_2FA: 'Aktifkan autentikasi dua faktor',
       DISABLE_2FA: 'Nonaktifkan autentikasi dua faktor',

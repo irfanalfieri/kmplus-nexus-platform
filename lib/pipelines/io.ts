@@ -10,12 +10,12 @@ import { createPgPool as externalPgPool } from '@/lib/connectors/drivers/postgre
 import { readFileChunk } from '@/lib/connectors/drivers/file'
 import { liveSqlServerQuery, readSqlServerChunk, readSqlServerRows } from '@/lib/connectors/drivers/sqlserver'
 import type { ConnectorCredentials } from '@/lib/connectors/types'
-import type { ColumnType } from './definition'
+import { isBatchBody, type ApiDestinationSpec, type ColumnType } from './definition'
 import type { Row } from './transforms'
 import { compareWatermarks, type OutputColumn } from './columns'
 import { rowFilterSql, type RowFilter } from '@/lib/governance/row-filters'
 import { agentOf, callAgent } from '@/lib/agent/server'
-import { WRITE_BATCH_ROWS } from '@/lib/agent/protocol'
+import { WRITE_BATCH_ROWS, wireRow } from '@/lib/agent/protocol'
 import { agentRestRequest } from '@/lib/connectors/rest/agent-request'
 
 /** Data source row as stored (credentials still encrypted). */
@@ -29,7 +29,8 @@ export interface StoredDataSource {
   credentials: unknown
 }
 
-export const WRITABLE_CONNECTORS = ['postgres', 'mysql', 'supabase', 'kmplus'] as const
+/** Connectors a pipeline can write to: tables (destination kind "datasource") or a REST API (kind "api"). */
+export const WRITABLE_CONNECTORS = ['postgres', 'mysql', 'supabase', 'kmplus', 'rest'] as const
 
 function credentialsOf(source: StoredDataSource): ConnectorCredentials {
   return Object.fromEntries(
@@ -451,10 +452,18 @@ export async function writeToDataSource(opts: {
   rows: Row[]
   runId?: string
   chunk?: number
-}): Promise<{ written: number; rejected?: { row: Row; error: string }[] }> {
+  /** REST API destination step: the request to send per row or batch. */
+  api?: ApiDestinationSpec
+  /** Epoch ms the write must finish by (API writes stop early and fail the chunk instead). */
+  deadline?: number
+}): Promise<{ written: number; rejected?: { row: Row; error: string; errors?: string[] }[] }> {
   const { source, table, rows } = opts
   if ((source.config as { role?: string } | null)?.role !== 'destination') {
     throw new NonRetryableError(`"${source.name}" was added as a source, so Nexus won't write to it. Add the database again with Data Sources → Add Destination and pick that one.`)
+  }
+  if (source.sourceType === 'rest' || opts.api) {
+    if (source.sourceType !== 'rest' || !opts.api) throw new NonRetryableError(`"${source.name}" is a REST API: write to it with an API request in the Destination step.`)
+    return writeApi(source, opts.api, rows, { runId: opts.runId, chunk: opts.chunk, deadline: opts.deadline })
   }
 
   const via = agentOf(source)
@@ -536,7 +545,33 @@ export async function writeToDataSource(opts: {
   if (source.sourceType === 'supabase') {
     throw new NonRetryableError(`To write into Supabase, add the Database URL to "${source.name}" (Data Sources → edit credentials).`)
   }
-  throw new NonRetryableError(`Writing to ${source.sourceType} isn't supported yet. Writable connectors: PostgreSQL, MySQL, Supabase (with Database URL), KMPlus products.`)
+  throw new NonRetryableError(`Writing to ${source.sourceType} isn't supported yet. Writable connectors: PostgreSQL, MySQL, Supabase (with Database URL), KMPlus products, REST APIs.`)
+}
+
+/** Rows to a REST API destination, directly or through the Nexus Agent next to an intranet API. */
+async function writeApi(source: StoredDataSource, api: ApiDestinationSpec, rows: Row[], opts: { runId?: string; chunk?: number; deadline?: number }) {
+  const via = agentOf(source)
+  if (!via) {
+    const { writeRestApi } = await import('@/lib/connectors/rest/write')
+    return writeRestApi(credentialsOf(source), api, rows, opts)
+  }
+  // Agent calls carry whole batches, so batch numbers (and idempotency keys) match a direct write.
+  const perCall = isBatchBody(api.body.template) ? Math.max(api.batchSize, Math.floor(WRITE_BATCH_ROWS / api.batchSize) * api.batchSize) : WRITE_BATCH_ROWS
+  let written = 0
+  const rejected: { row: Row; error: string; errors?: string[] }[] = []
+  for (let i = 0; i < rows.length; i += perCall) {
+    const part = rows.slice(i, i + perCall)
+    const budgetMs = opts.deadline ? Math.max(5_000, opts.deadline - Date.now()) : 170_000
+    const res = (await callAgent(
+      via.agentId,
+      'apiWrite',
+      { connection: via.connection, request: agentRequestOf(source), api, rows: part.map(wireRow), runId: opts.runId, chunk: opts.chunk, rowOffset: i, budgetMs: Math.min(budgetMs, 170_000) },
+      { timeoutMs: Math.min(budgetMs, 170_000) + 10_000, workspaceId: via.workspaceId }
+    )) as { written: number; rejected?: { rowIndex: number; error: string; errors?: string[] }[] }
+    written += res.written
+    for (const r of res.rejected ?? []) if (part[r.rowIndex]) rejected.push({ row: part[r.rowIndex], error: r.error, errors: r.errors })
+  }
+  return { written, rejected }
 }
 
 // ── Chunked reads (background worker) ────────────────────────────────────────

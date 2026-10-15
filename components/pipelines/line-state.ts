@@ -1,4 +1,4 @@
-import { DEFAULT_SCHEDULE, scheduleSchema, topoOrder, type PipelineDefinition } from '@/lib/pipelines/definition'
+import { DEFAULT_SCHEDULE, destinationTarget, scheduleSchema, topoOrder, type PipelineDefinition } from '@/lib/pipelines/definition'
 import type { listPipelines } from '@/lib/actions/pipelines'
 import type { Translate } from '@/lib/i18n/translate'
 import type { FlowState } from '@/components/ui/flow-line'
@@ -11,7 +11,7 @@ export function ends(def: PipelineDefinition | null, sourceName: (id: string) =>
   if (!def) return { from: t('pipelines.noSource'), table: '', to: t('pipelines.noDestination') }
   const order = topoOrder(def.nodes, def.edges) ?? def.nodes
   const src = order.find((n) => n.type === 'source')
-  const dests = order.flatMap((d) => (d.type !== 'destination' ? [] : d.kind === 'dataset' ? [d.datasetName] : [`${sourceName(d.dataSourceId)} · ${d.table}`]))
+  const dests = order.flatMap((d) => (d.type !== 'destination' ? [] : d.kind === 'dataset' ? [d.datasetName] : [`${sourceName(d.dataSourceId)} · ${destinationTarget(d)}`]))
   return {
     // The source bus names the system and table; the destination bus the dataset, product or table it feeds.
     from: src?.type === 'source' ? sourceName(src.dataSourceId) : t('pipelines.noSource'),

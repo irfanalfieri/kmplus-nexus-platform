@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { and, eq, isNull, lt, sql } from 'drizzle-orm'
 import { db, pool } from '@/lib/db'
 import { agentTasks, agents } from '@/lib/db/schema'
-import { AGENT_OFFLINE_AFTER_MS, MAX_TASKS_PER_POLL, MIN_AGENT_VERSION_FOR_REQUESTS, compareVersions, payloadSchemas, type AgentOp, type AgentPayload, type AgentTask } from './protocol'
+import { AGENT_OFFLINE_AFTER_MS, MAX_TASKS_PER_POLL, MIN_AGENT_VERSION_FOR_OP, MIN_AGENT_VERSION_FOR_REQUESTS, compareVersions, payloadSchemas, type AgentOp, type AgentPayload, type AgentTask } from './protocol'
 
 /**
  * Nexus side of the agent protocol (#13). Code that needs a customer system
@@ -79,6 +79,10 @@ export async function callAgent<O extends AgentOp>(
   if (!agent || agent.revokedAt) throw Object.assign(new AgentUnavailableError('The Nexus Agent for this data source was removed. Point the data source at another agent.'), { retryable: false })
   if ((parsed as { request?: unknown }).request && compareVersions(agent.version ?? '0', MIN_AGENT_VERSION_FOR_REQUESTS) < 0) {
     throw Object.assign(new Error(`Nexus Agent "${agent.name}" runs version ${agent.version ?? 'unknown'}; intranet API requests designed in Nexus need version ${MIN_AGENT_VERSION_FOR_REQUESTS} or later. Download the new agent in Settings → Nexus Agents and restart it.`), { retryable: false })
+  }
+  const minForOp = MIN_AGENT_VERSION_FOR_OP[op]
+  if (agent && minForOp && compareVersions(agent.version ?? '0', minForOp) < 0) {
+    throw Object.assign(new Error(`Nexus Agent "${agent.name}" runs version ${agent.version ?? 'unknown'}; sending pipeline rows to an intranet API needs version ${minForOp} or later. Download the new agent in Settings → Nexus Agents and restart it.`), { retryable: false })
   }
   if (!agent.lastSeenAt || Date.now() - agent.lastSeenAt.getTime() > AGENT_OFFLINE_AFTER_MS) {
     throw new AgentUnavailableError(`Nexus Agent "${agent.name}" is offline (last seen ${ago(agent.lastSeenAt)}). Start it on its host, then try again.`)

@@ -221,7 +221,176 @@ const datasourceDestination = z.object({
   softDeleteColumn: z.string().default(''),
 })
 
-const destinationNode = z.discriminatedUnion('kind', [datasetDestination, datasourceDestination])
+// ── REST API destination: the request body built from a pasted sample (lib/pipelines/body-template.ts) ──
+
+export const BODY_FORMATS = ['json', 'form', 'xml'] as const
+export type BodyFormat = (typeof BODY_FORMATS)[number]
+/** Type a leaf is sent as; "auto" keeps the column's own type. XML and form bodies send text either way. */
+export const BODY_VALUE_TYPES = ['auto', 'string', 'number', 'integer', 'boolean'] as const
+export type BodyValueType = (typeof BODY_VALUE_TYPES)[number]
+/** Run information a leaf can carry (e.g. a batch id the API uses to ignore repeats). */
+export const BODY_META = ['run_id', 'batch_id', 'row_count', 'now'] as const
+export type BodyMeta = (typeof BODY_META)[number]
+export const API_METHODS = ['POST', 'PUT', 'PATCH'] as const
+
+export const bodyBindingSchema = z.discriminatedUnion('kind', [
+  /** Not sent (the empty rule decides what the leaf becomes). */
+  z.object({ kind: z.literal('none') }),
+  z.object({ kind: z.literal('column'), column: z.string().min(1).max(200) }),
+  z.object({ kind: z.literal('constant'), value: z.string().max(2000) }),
+  z.object({ kind: z.literal('expr'), expr: exprSchema }),
+  z.object({ kind: z.literal('meta'), name: z.enum(BODY_META) }),
+])
+export type BodyBinding = z.infer<typeof bodyBindingSchema>
+
+/**
+ * A request body as a tree. Objects keep their key order; XML uses "@name" keys
+ * for attributes and "#text" for an element's text. An array's items are either
+ * one per row of the request ("rows": batch mode, at most one such array, not
+ * inside another array) or one item from the current row ("row"). Phase 2 adds
+ * items built by grouping rows by a key, as another `items` value.
+ */
+export type BodyNode =
+  | { t: 'object'; fields: { key: string; node: BodyNode }[] }
+  | { t: 'array'; items: 'rows' | 'row'; item: BodyNode }
+  | { t: 'value'; type: BodyValueType; binding: BodyBinding; required: boolean; empty: 'null' | 'omit' | 'empty' }
+export const bodyNodeSchema: z.ZodType<BodyNode, z.ZodTypeDef, unknown> = z.lazy(() =>
+  z.discriminatedUnion('t', [
+    z.object({ t: z.literal('object'), fields: z.array(z.object({ key: z.string().min(1).max(200), node: bodyNodeSchema })).max(300) }),
+    z.object({ t: z.literal('array'), items: z.enum(['rows', 'row']), item: bodyNodeSchema }),
+    z.object({
+      t: z.literal('value'),
+      type: z.enum(BODY_VALUE_TYPES).default('auto'),
+      binding: bodyBindingSchema.default({ kind: 'none' }),
+      /** An empty value quarantines the row instead of being sent. */
+      required: z.boolean().default(false),
+      /** What an empty value becomes: JSON null (an empty element / field), left out, or "". */
+      empty: z.enum(['null', 'omit', 'empty']).default('null'),
+    }),
+  ])
+)
+
+export const apiDestinationFields = {
+  dataSourceId: z.string().min(1, 'Choose a destination data source'),
+  method: z.enum(API_METHODS).default('POST'),
+  /** Under the data source's base URL; {{column}} takes the row's value (one request per row only). */
+  path: z.string().trim().max(500).regex(/^\//, 'The request path starts with /').default('/'),
+  body: z
+    .object({
+      format: z.enum(BODY_FORMATS).default('json'),
+      /** The example the user pasted, kept so the mapping can be rebuilt. */
+      sample: z.string().max(50_000).default(''),
+      template: bodyNodeSchema.default({ t: 'object', fields: [] }),
+    })
+    .default({}),
+  /** Batch mode: rows per request. */
+  batchSize: z.number().int().min(1).max(1000).default(100),
+  maxRequestsPerSecond: z.number().min(0.1).max(50).default(10),
+  concurrency: z.number().int().min(1).max(4).default(1),
+  timeoutSeconds: z.number().int().min(1).max(120).default(30),
+  /** Send a stable Idempotency-Key (run:chunk:batch) so the API can ignore a request it already applied. */
+  idempotencyKey: z.boolean().default(false),
+  idempotencyHeader: z.string().trim().max(100).regex(/^[A-Za-z0-9-]+$/, 'Letters, numbers and dashes').default('Idempotency-Key'),
+  /** Batch responses that list refused items: those rows go to the quarantine with the API's reason. */
+  response: z
+    .object({
+      rejectedPath: z.string().trim().max(200).default(''),
+      indexField: z.string().trim().max(100).default('index'),
+      /** 1 when the API counts items from 1. */
+      indexBase: z.union([z.literal(0), z.literal(1)]).default(0),
+      messageField: z.string().trim().max(100).default('message'),
+    })
+    .default({}),
+}
+export const apiDestinationSpec = z.object(apiDestinationFields)
+export type ApiDestinationSpec = z.infer<typeof apiDestinationSpec>
+
+const apiDestination = z.object({
+  id: z.string(),
+  type: z.literal('destination'),
+  position,
+  kind: z.literal('api'),
+  ...apiDestinationFields,
+  // The API decides what a request does (create, update …); these keep the generic destination checks simple.
+  mode: z.literal('append').default('append'),
+  keys: z.array(z.string()).max(0).default([]),
+  softDeleteMissing: z.literal(false).default(false),
+})
+
+const destinationNode = z.discriminatedUnion('kind', [datasetDestination, datasourceDestination, apiDestination])
+
+/** Every node of a body tree with its display path (`employee.name`, `contacts[].email`, `[].id`). */
+export function walkBody(node: BodyNode, visit: (n: BodyNode, path: string, inRows: boolean, depth: number) => void, path = '', inRows = false, depth = 0) {
+  visit(node, path, inRows, depth)
+  if (node.t === 'object') for (const f of node.fields) walkBody(f.node, visit, path ? `${path}.${f.key}` : f.key, inRows, depth + 1)
+  else if (node.t === 'array') walkBody(node.item, visit, `${path}[]`, inRows || node.items === 'rows', depth + 1)
+}
+
+export const PATH_PLACEHOLDER = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g
+const XML_NAME = /^[A-Za-z_][A-Za-z0-9_.:-]*$/
+
+const exprUsesFields = (e: Expr): boolean => (e.kind === 'field' ? true : e.kind === 'op' ? exprUsesFields(e.left) || exprUsesFields(e.right) : e.kind === 'fn' ? e.args.some(exprUsesFields) : false)
+
+/** True when the body sends several rows per request. */
+export function isBatchBody(template: BodyNode) {
+  let batch = false
+  walkBody(template, (n) => {
+    if (n.t === 'array' && n.items === 'rows') batch = true
+  })
+  return batch
+}
+
+/** Problems with an API destination that the schema alone can't express. English; shown as validation messages. */
+export function apiDestinationIssues(spec: Pick<ApiDestinationSpec, 'body' | 'path'>): string[] {
+  const issues: string[] = []
+  const { format, template } = spec.body
+  const batch = isBatchBody(template)
+  let rowsArrays = 0
+  let leaves = 0
+  let tooDeep = false
+  walkBody(template, (n, path, inRows, depth) => {
+    if (depth > 12) tooDeep = true
+    if (n.t === 'array') {
+      if (n.items === 'rows') {
+        rowsArrays++
+        if (inRows) issues.push(`${path}: a list of rows can't be inside another list of rows.`)
+      }
+      if (format === 'form') issues.push(`${path || 'body'}: form-encoded bodies can't hold lists.`)
+    }
+    if (n.t === 'object') {
+      const keys = new Set<string>()
+      for (const f of n.fields) {
+        if (keys.has(f.key)) issues.push(`${path || 'body'}: the key "${f.key}" appears twice.`)
+        keys.add(f.key)
+        if (format === 'xml') {
+          const name = f.key.startsWith('@') ? f.key.slice(1) : f.key
+          if (f.key !== '#text' && !XML_NAME.test(name)) issues.push(`"${f.key}" isn't a valid XML name.`)
+          if ((f.key.startsWith('@') || f.key === '#text') && f.node.t !== 'value') issues.push(`${path}.${f.key}: attributes and text hold a single value.`)
+        }
+        if (format === 'form' && f.node.t !== 'value') issues.push(`${path ? `${path}.` : ''}${f.key}: form-encoded bodies are flat (no nested objects).`)
+      }
+    }
+    if (n.t === 'value') {
+      leaves++
+      if (batch && !inRows && (n.binding.kind === 'column' || (n.binding.kind === 'expr' && exprUsesFields(n.binding.expr)))) {
+        issues.push(`${path || 'body'}: outside the list of rows, use a fixed value or run information, not a column.`)
+      }
+    }
+  })
+  if (tooDeep) issues.push('The body is nested too deeply (12 levels at most).')
+  if (leaves > 500) issues.push('The body has more than 500 values.')
+  if (rowsArrays > 1) issues.push('Only one list in the body can hold the rows.')
+  if (format === 'xml') {
+    if (template.t !== 'object' || template.fields.length !== 1 || template.fields[0].key.startsWith('@') || template.fields[0].key === '#text') {
+      issues.push('An XML body has exactly one root element.')
+    } else if (template.fields[0].node.t === 'array') issues.push("The XML root element can't repeat; put the repeating element inside it.")
+  }
+  if (format === 'form' && template.t !== 'object') issues.push('A form-encoded body is a list of fields.')
+  if (batch && new RegExp(PATH_PLACEHOLDER.source).test(spec.path)) {
+    issues.push('The path can only use {{column}} values when each request sends one row.')
+  }
+  return issues
+}
 
 export const nodeSchema = z.union([sourceNode, filterNode, mapNode, validateNode, rulesNode, routerNode, destinationNode])
 export type PipelineNode = z.infer<typeof nodeSchema>
@@ -329,6 +498,11 @@ export const definitionSchema = z.preprocess(
     }
     for (const d of destinations) {
       if (d.type !== 'destination') continue
+      if (d.kind === 'api') {
+        for (const message of apiDestinationIssues(d)) issue(`${stepTitle(d)}: ${message}`)
+        if (d.body.template.t === 'object' && !d.body.template.fields.length) issue(`${stepTitle(d)}: paste an example request body.`)
+        continue
+      }
       if (d.mode === 'upsert' && d.keys.length === 0) issue(`${stepTitle(d)}: upsert needs at least one key column.`)
       if (d.softDeleteMissing) {
         if (d.mode !== 'upsert') issue(`${stepTitle(d)}: "mark missing rows deleted" needs upsert mode.`)
@@ -374,8 +548,13 @@ export function stepTitle(n: PipelineNode): string {
     case 'router':
       return `Route (${n.branches.length + 1} branches)`
     case 'destination':
-      return n.kind === 'dataset' ? `Write dataset ${n.datasetName}` : `Write ${n.table}`
+      return n.kind === 'dataset' ? `Write dataset ${n.datasetName}` : n.kind === 'api' ? `Send ${n.method} ${n.path}` : `Write ${n.table}`
   }
+}
+
+/** What a data source destination writes to: its table, or "POST /employees" for an API. */
+export function destinationTarget(n: DestinationStep): string {
+  return n.kind === 'dataset' ? n.datasetName : n.kind === 'api' ? `${n.method} ${n.path}` : n.table
 }
 
 /** Distinct business rule ids a definition references. */

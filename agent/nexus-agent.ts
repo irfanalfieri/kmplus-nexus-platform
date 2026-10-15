@@ -12,7 +12,7 @@ import { publicEndpoint } from '@/lib/connectors/rest/agent-request'
  * local credentials, and posts the results. See agent/README.md.
  */
 
-export const AGENT_VERSION = '1.2.0'
+export const AGENT_VERSION = '1.3.0'
 
 const connectionSchema = z.object({
   name: z.string().trim().min(1).max(100),

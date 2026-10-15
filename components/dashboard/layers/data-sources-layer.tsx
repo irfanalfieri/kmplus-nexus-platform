@@ -473,7 +473,7 @@ function AddSourceDialog({
     setRestPreview(null)
     setHint(null)
     try {
-      const result = await testAndScanDataSource(type, values)
+      const result = await testAndScanDataSource(type, values, role)
       if ('preview' in result && result.preview) setRestPreview(result.preview as RestRequestPreview)
       if (!result.ok) {
         setError(result.message)
@@ -481,7 +481,7 @@ function AddSourceDialog({
         return
       }
       setScan(result.scan)
-      setMessage(isSecretManager(type) ? `${result.test.message} ${t('sources.secretsReady', { example: secretRef(name.trim() || 'Name', 'path/to/secret', 'field') })}` : t('sources.connectedFound', { count: result.scan.tables.length }))
+      setMessage(type === 'rest' && role === 'destination' ? t('sources.restDestinationReached') : isSecretManager(type) ? `${result.test.message} ${t('sources.secretsReady', { example: secretRef(name.trim() || 'Name', 'path/to/secret', 'field') })}` : t('sources.connectedFound', { count: result.scan.tables.length }))
       setTested(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : t('sources.testFailed'))

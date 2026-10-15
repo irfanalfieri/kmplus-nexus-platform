@@ -203,6 +203,7 @@ export const ws = {
       PASSWORD_RESET: 'Reset password',
       VIEW_DATA: 'View data',
       TEST_RUN: 'Test run',
+      TEST_REQUEST: 'Test API request',
       LOGIN: 'Sign in',
       ENABLE_2FA: 'Turn on two-factor',
       DISABLE_2FA: 'Turn off two-factor',

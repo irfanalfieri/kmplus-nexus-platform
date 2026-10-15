@@ -75,6 +75,27 @@ import { expandEnv, parseConfig } from '../agent/nexus-agent'
 import { payloadSchemas, wireRow } from '@/lib/agent/protocol'
 import { extractJson, LlmError } from '@/lib/ai/llm'
 import { AnswerError, checkAsk, checkMapping, checkRule, safeSamples } from '@/lib/ai/prompts'
+import {
+  API_MAX_ATTEMPTS,
+  apiChunkRows,
+  autoBindBody,
+  bodyArrays,
+  bodyColumns,
+  bodyLeaves,
+  BodySampleError,
+  classifyStatus,
+  extractRejectedItems,
+  parseBodySample,
+  renderPath,
+  renderRequests,
+  repeatElement,
+  retryAfterMs,
+  retryDelayMs,
+  setRowsArray,
+  shortApiMessage,
+  updateBodyNode,
+} from '@/lib/pipelines/body-template'
+import { apiDestinationIssues, apiDestinationSpec, type BodyNode } from '@/lib/pipelines/definition'
 
 let passed = 0
 async function test(name: string, fn: () => void | Promise<void>) {
@@ -1281,6 +1302,204 @@ async function main() {
       assert.match(out.text, /10[:.]30/, `${locale}: time shown in WIB`)
       assert.ok(out.text.includes('/forgot-password'))
       assert.notEqual(changed.subject, resetPasswordEmail({ name: 'x', url, locale }).subject)
+    }
+  })
+
+  // ── REST API destinations: body templates (lib/pipelines/body-template.ts) ──
+
+  const bindAll = (t: BodyNode, binds: Record<string, Partial<Extract<BodyNode, { t: 'value' }>>>) => {
+    let out = t
+    for (const leaf of bodyLeaves(t)) if (binds[leaf.path]) out = updateBodyNode(out, leaf.addr, (n) => ({ ...n, ...binds[leaf.path] }) as BodyNode)
+    return out
+  }
+  const apiSpec = (format: 'json' | 'form' | 'xml', template: BodyNode, extra: Record<string, unknown> = {}) =>
+    apiDestinationSpec.parse({ dataSourceId: 'ds', path: '/employees', body: { format, template }, ...extra })
+  const ctx0 = { runId: 'run1', chunk: 3, now: new Date('2026-10-15T01:02:03Z') }
+
+  await test('API body: a pasted JSON example becomes a tree of paths with types; a top-level list means one item per row', () => {
+    const t = parseBodySample('json', '{"employee":{"code":"E1","name":"Ani","age":31,"active":true,"salary":1.5},"contacts":[{"email":"a@b.id"},{"phone":"1"}],"note":null}')
+    assert.deepEqual(bodyLeaves(t).map((l) => `${l.path}:${l.node.type}`), [
+      'employee.code:string', 'employee.name:string', 'employee.age:integer', 'employee.active:boolean', 'employee.salary:number',
+      'contacts[].email:string', 'contacts[].phone:string', 'note:auto',
+    ])
+    assert.deepEqual(bodyArrays(t).map((a) => `${a.path}:${a.items}`), ['contacts[]:row'])
+    const batch = parseBodySample('json', '[{"id":1,"name":"x"}]')
+    assert.deepEqual(bodyArrays(batch).map((a) => `${a.path}:${a.items}`), ['[]:rows'])
+    assert.deepEqual(bodyLeaves(batch).map((l) => `${l.path}:${l.inRows}`), ['[].id:true', '[].name:true'])
+    for (const [text, code] of [['', 'empty'], ['{bad', 'json'], ['"x"', 'json']] as const) {
+      assert.throws(() => parseBodySample('json', text), (e: unknown) => e instanceof BodySampleError && e.code === code, text)
+    }
+  })
+
+  await test('API body: form and XML examples; DTDs and unknown entities refused', () => {
+    const form = parseBodySample('form', 'name=Ani+Putri&age=31\nemail=a%40b.id')
+    assert.deepEqual(bodyLeaves(form).map((l) => `${l.path}:${l.node.type}`), ['name:string', 'age:integer', 'email:string'])
+    assert.throws(() => parseBodySample('form', '{"a":{"b":1}}'), (e: unknown) => e instanceof BodySampleError && e.code === 'formNested')
+    const xml = parseBodySample('xml', `<?xml version="1.0"?>\n<!-- hr --><employees batch="1"><employee id="7"><name>Ani &amp; Co</name><age>31</age><tag>a</tag><tag>b</tag><note><![CDATA[x<y]]></note></employee></employees>`)
+    assert.deepEqual(bodyLeaves(xml).map((l) => l.path), ['employees.@batch', 'employees.employee.@id', 'employees.employee.name', 'employees.employee.age', 'employees.employee.tag[]', 'employees.employee.note'])
+    assert.deepEqual(bodyArrays(xml).map((a) => a.path), ['employees.employee.tag[]'])
+    const text = parseBodySample('xml', '<amount currency="IDR">100</amount>')
+    assert.deepEqual(bodyLeaves(text).map((l) => `${l.path}:${l.name}`), ['amount.@currency:currency', 'amount.#text:amount'])
+    assert.throws(() => parseBodySample('xml', '<!DOCTYPE x [<!ENTITY a "b">]><x>&a;</x>'), (e: unknown) => e instanceof BodySampleError && e.code === 'xmlDoctype')
+    assert.throws(() => parseBodySample('xml', '<x>&nbsp;</x>'), (e: unknown) => e instanceof BodySampleError && e.code === 'xml')
+    for (const bad of ['<a><b></a>', '<a></a><b/>', '<a x=1/>', 'text', '<a>']) assert.throws(() => parseBodySample('xml', bad), BodySampleError, bad)
+  })
+
+  await test('API body: auto-match binds leaves to columns by name, parent + name, and HR synonyms', () => {
+    const t = parseBodySample('json', '{"employee":{"code":"E1","nama":"x","email":"a"},"nik":"1","unknown_thing":1}')
+    const { template, bound } = autoBindBody(t, ['employee_code', 'full_name', 'email_address', 'national_id'])
+    const by = Object.fromEntries(bodyLeaves(template).map((l) => [l.path, l.node.binding.kind === 'column' ? l.node.binding.column : '-']))
+    assert.equal(by['employee.code'], 'employee_code')
+    assert.equal(by['employee.nama'], 'full_name')
+    assert.equal(by['employee.email'], 'email_address')
+    assert.equal(by['unknown_thing'], '-')
+    assert.equal(bound, Object.values(by).filter((v) => v !== '-').length)
+    // Batch mode: only leaves inside the list of rows are matched.
+    const b = autoBindBody(parseBodySample('json', '{"source":"x","records":[{"email":"a"}]}'), ['email', 'source'])
+    assert.equal(b.bound, 2, 'records is not the rows list yet')
+    const rows = autoBindBody(setRowsArray(parseBodySample('json', '{"source":"x","records":[{"email":"a"}]}'), [1]), ['email', 'source'])
+    assert.equal(rows.bound, 1)
+    assert.deepEqual(bodyColumns(rows.template, '/x/{{id}}').sort(), ['email', 'id'])
+  })
+
+  await test('API body: one request per row renders nested objects, constants, expressions, run information and types', () => {
+    let t = parseBodySample('json', '{"employee":{"code":"E1","name":"x","age":1,"active":true},"source":"s","batch":"b","tags":["a"],"meta":{"gone":"x"}}')
+    t = bindAll(t, {
+      'employee.code': { binding: { kind: 'column', column: 'employee_code' }, required: true },
+      'employee.name': { binding: { kind: 'expr', expr: { kind: 'fn', fn: 'upper', args: [{ kind: 'field', name: 'full_name' }] } } },
+      'employee.age': { binding: { kind: 'column', column: 'age' } },
+      'employee.active': { binding: { kind: 'column', column: 'status' } },
+      source: { binding: { kind: 'constant', value: 'nexus' } },
+      batch: { binding: { kind: 'meta', name: 'batch_id' } },
+      'tags[]': { binding: { kind: 'column', column: 'tag' } },
+      'meta.gone': { empty: 'omit' },
+    })
+    const spec = apiSpec('json', t, { path: '/employees/{{employee_code}}' })
+    const res = renderRequests(spec, [
+      { employee_code: 'E 1/2', full_name: 'ani', age: '31', status: 'yes', tag: 'x' },
+      { employee_code: '', full_name: 'b', age: 'old', status: 'maybe' },
+    ], ctx0)
+    assert.equal(res.requests.length, 1)
+    const r = res.requests[0]
+    assert.equal(r.path, '/employees/E%201%2F2')
+    assert.equal(r.batchId, 'run1:3:0')
+    assert.equal(r.contentType, 'application/json')
+    assert.deepEqual(JSON.parse(r.body), { employee: { code: 'E 1/2', name: 'ANI', age: 31, active: true }, source: 'nexus', batch: 'run1:3:0', tags: ['x'], meta: {} })
+    assert.equal(res.rejects.length, 1)
+    assert.equal(res.rejects[0].rowIndex, 1)
+    assert.deepEqual(res.rejects[0].errors, ['employee.code is required', 'employee.age: "old" is not an integer', 'employee.active: "maybe" is not a boolean', 'employee_code is required'])
+    // Missing columns: null by default, "" or left out on request.
+    const t2 = bindAll(parseBodySample('json', '{"a":"x","b":"x","c":"x"}'), { a: { binding: { kind: 'column', column: 'nope' } }, b: { binding: { kind: 'column', column: 'nope' }, empty: 'empty' }, c: { binding: { kind: 'column', column: 'nope' }, empty: 'omit' } })
+    assert.equal(renderRequests(apiSpec('json', t2), [{}], ctx0).requests[0].body, '{"a":null,"b":""}')
+    // Dates are sent as ISO text; an expression error rejects the row with its reason.
+    const t3 = bindAll(parseBodySample('json', '{"at":"x","n":1}'), { at: { binding: { kind: 'column', column: 'at' } }, n: { binding: { kind: 'expr', expr: { kind: 'op', op: '/', left: { kind: 'field', name: 'n' }, right: { kind: 'value', value: '0' } } } } })
+    const r3 = renderRequests(apiSpec('json', t3), [{ at: new Date('2026-01-02T03:04:05Z'), n: 4 }], ctx0)
+    assert.deepEqual(r3.rejects[0].errors, ['n: division by zero'])
+    assert.equal(JSON.parse(renderRequests(apiSpec('json', bindAll(t3, { n: { binding: { kind: 'none' } } })), [{ at: new Date('2026-01-02T03:04:05Z') }], ctx0).requests[0].body).at, '2026-01-02T03:04:05.000Z')
+  })
+
+  await test('API body: a list of rows sends N rows per request with stable batch ids across parts of a chunk', () => {
+    let t = parseBodySample('json', '{"batch_id":"x","count":1,"records":[{"code":"E1","name":"x"}]}')
+    t = setRowsArray(t, [2])
+    t = autoBindBody(t, ['code', 'name']).template
+    t = bindAll(t, { batch_id: { binding: { kind: 'meta', name: 'batch_id' } }, count: { binding: { kind: 'meta', name: 'row_count' } }, 'records[].code': { required: true } })
+    const spec = apiSpec('json', t, { batchSize: 2 })
+    const rows = [{ code: 'A', name: 'a' }, { code: '', name: 'b' }, { code: 'C', name: 'c' }, { code: 'D', name: 'd' }, { code: 'E', name: 'e' }]
+    const res = renderRequests(spec, rows, ctx0)
+    assert.deepEqual(res.requests.map((r) => r.rowIndexes), [[0], [2, 3], [4]])
+    assert.deepEqual(JSON.parse(res.requests[0].body), { batch_id: 'run1:3:0', count: 1, records: [{ code: 'A', name: 'a' }] })
+    assert.deepEqual(res.requests.map((r) => r.batchId), ['run1:3:0', 'run1:3:1', 'run1:3:2'])
+    assert.deepEqual(res.rejects, [{ rowIndex: 1, errors: ['records[].code is required'] }])
+    // The same rows written in two parts (agent calls) keep their batch numbers.
+    const second = renderRequests(spec, rows.slice(2), { ...ctx0, rowOffset: 2 })
+    assert.deepEqual(second.requests.map((r) => `${r.batchId}:${r.rowIndexes.join(',')}`), ['run1:3:1:0,1', 'run1:3:2:2'])
+    // A top-level list (batch) of plain items.
+    const top = autoBindBody(parseBodySample('json', '[{"code":1}]'), ['code']).template
+    assert.equal(renderRequests(apiSpec('json', top, { batchSize: 10 }), [{ code: 5 }, { code: '6' }], ctx0).requests[0].body, '[{"code":5},{"code":6}]')
+    assert.equal(apiChunkRows(apiSpec('json', top, { batchSize: 100, maxRequestsPerSecond: 10 })), 20_000)
+    assert.equal(apiChunkRows(apiSpec('json', parseBodySample('json', '{"a":1}'), { maxRequestsPerSecond: 10 })), 400)
+    assert.equal(apiChunkRows(apiSpec('json', parseBodySample('json', '{"a":1}'), { maxRequestsPerSecond: 0.1 })), 20)
+  })
+
+  await test('API body: form-encoded and XML bodies are escaped; nothing in a row changes the structure', () => {
+    const form = bindAll(parseBodySample('form', 'name=x&age=1&gone=x'), { name: { binding: { kind: 'column', column: 'name' } }, age: { binding: { kind: 'column', column: 'age' } }, gone: { empty: 'omit' } })
+    const fr = renderRequests(apiSpec('form', form), [{ name: 'A&b=c d', age: 7 }], ctx0).requests[0]
+    assert.equal(fr.contentType, 'application/x-www-form-urlencoded')
+    assert.equal(fr.body, 'name=A%26b%3Dc+d&age=7')
+    let xml = parseBodySample('xml', '<employees source="s"><employee id="1"><name>x</name><note>n</note></employee></employees>')
+    xml = repeatElement(xml, [0, 1])
+    xml = setRowsArray(xml, [0, 1])
+    xml = bindAll(autoBindBody(xml, ['id', 'name']).template, { 'employees.@source': { binding: { kind: 'constant', value: 'nexus "1"' } }, 'employees.employee[].note': { empty: 'null' } })
+    assert.deepEqual(apiDestinationIssues({ path: '/x', body: { format: 'xml', sample: '', template: xml } }), [])
+    const xr = renderRequests(apiSpec('xml', xml, { batchSize: 10 }), [{ id: 1, name: '</name><evil>&' }, { id: 2, name: 'B\u0001' }], ctx0).requests[0]
+    assert.equal(xr.contentType, 'application/xml')
+    assert.equal(xr.body, '<?xml version="1.0" encoding="UTF-8"?><employees source="nexus &quot;1&quot;"><employee id="1"><name>&lt;/name&gt;&lt;evil&gt;&amp;</name><note/></employee><employee id="2"><name>B</name><note/></employee></employees>')
+    // JSON: a row value is only ever a string.
+    const j = autoBindBody(parseBodySample('json', '{"name":"x"}'), ['name']).template
+    assert.deepEqual(JSON.parse(renderRequests(apiSpec('json', j), [{ name: '","admin":true,"x":"' }], ctx0).requests[0].body), { name: '","admin":true,"x":"' })
+  })
+
+  await test('API body: path values are encoded; "." and ".." refused; unknown names left for data source variables', () => {
+    assert.deepEqual(renderPath('/e/{{id}}/x', { id: 'a b?c#d' }), { path: '/e/a%20b%3Fc%23d/x' })
+    assert.deepEqual(renderPath('/e/{{ id }}', { id: 7 }), { path: '/e/7' })
+    assert.ok('error' in renderPath('/e/{{id}}', { id: '..' }))
+    assert.ok('error' in renderPath('/e/{{id}}', { id: null }))
+    assert.deepEqual(renderPath('/{{tenant}}/e/{{id}}', { id: 'x' }), { path: '/{{tenant}}/e/x' })
+  })
+
+  await test('API destination validation: one list of rows, no columns outside it, no row values in a batch path, XML root, flat forms', () => {
+    const batch = setRowsArray(parseBodySample('json', '{"src":"x","records":[{"a":1}],"more":[{"b":1}]}'), [1])
+    const bad = bindAll(batch, { src: { binding: { kind: 'column', column: 'a' } } })
+    const issues = apiDestinationIssues({ path: '/x/{{a}}', body: { format: 'json', sample: '', template: bad } })
+    assert.ok(issues.some((m) => m.includes('outside the list of rows')), issues.join('|'))
+    assert.ok(issues.some((m) => m.includes('one row')), issues.join('|'))
+    const two = setRowsArray(batch, [2])
+    assert.deepEqual(bodyArrays(two).map((a) => a.items), ['row', 'rows'], 'one rows list at a time')
+    const nested = parseBodySample('json', '[{"a":[{"b":1}]}]')
+    assert.ok(apiDestinationIssues({ path: '/x', body: { format: 'json', sample: '', template: updateBodyNode(nested, [0, 0], (n) => (n.t === 'array' ? { ...n, items: 'rows' } : n)) } }).some((m) => m.includes('inside another')))
+    const leaf = { t: 'value' as const, type: 'auto' as const, binding: { kind: 'none' as const }, required: false, empty: 'null' as const }
+    assert.ok(apiDestinationIssues({ path: '/x', body: { format: 'xml', sample: '', template: { t: 'object', fields: [{ key: 'a', node: leaf }, { key: 'b', node: leaf }] } } }).some((m) => m.includes('one root')))
+    assert.ok(apiDestinationIssues({ path: '/x', body: { format: 'xml', sample: '', template: { t: 'object', fields: [{ key: 'bad name', node: leaf }] } } }).some((m) => m.includes('valid XML name')))
+    assert.ok(apiDestinationIssues({ path: '/x', body: { format: 'form', sample: '', template: parseBodySample('json', '{"a":{"b":1}}') } }).some((m) => m.includes('flat')))
+    // A full pipeline: the API step is valid; older destination kinds are untouched.
+    const def = definitionSchema.safeParse({
+      nodes: [
+        { id: 'src', type: 'source', dataSourceId: 'x', table: 't' },
+        { id: 'api', type: 'destination', kind: 'api', dataSourceId: 'r', method: 'PUT', path: '/employees/{{code}}', body: { format: 'json', template: autoBindBody(parseBodySample('json', '{"code":"x"}'), ['code']).template } },
+      ],
+      edges: [{ id: 'e', from: 'src', to: 'api' }],
+    })
+    assert.ok(def.success, def.success ? '' : def.error.issues[0].message)
+    const node = def.data!.nodes[1]
+    assert.ok(node.type === 'destination' && node.kind === 'api' && node.batchSize === 100 && node.maxRequestsPerSecond === 10 && node.concurrency === 1 && node.timeoutSeconds === 30 && node.mode === 'append')
+    const empty = definitionSchema.safeParse({ nodes: [{ id: 'src', type: 'source', dataSourceId: 'x', table: 't' }, { id: 'api', type: 'destination', kind: 'api', dataSourceId: 'r' }], edges: [{ id: 'e', from: 'src', to: 'api' }] })
+    assert.ok(!empty.success && empty.error.issues.some((i) => i.message.includes('paste an example')))
+    assert.ok(!definitionSchema.safeParse({ nodes: [{ id: 'src', type: 'source', dataSourceId: 'x', table: 't' }, { id: 'api', type: 'destination', kind: 'api', dataSourceId: 'r', path: 'no-slash' }], edges: [{ id: 'e', from: 'src', to: 'api' }] }).success)
+  })
+
+  await test('API responses: rejected items by index, statuses, Retry-After, backoff, redacted messages', () => {
+    const cfg = { rejectedPath: 'result.errors', indexField: 'i', indexBase: 1 as const, messageField: 'detail.msg' }
+    assert.deepEqual(extractRejectedItems({ result: { errors: [{ i: 2, detail: { msg: 'bad email budi@kmplus.co.id' } }, { i: 9 }, { i: 2 }, { i: 'x' }] } }, cfg, 3), [{ index: 1, message: 'bad email [email]' }])
+    assert.deepEqual(extractRejectedItems({ failed: [0, 2, 5] }, { rejectedPath: 'failed', indexField: 'index', indexBase: 0, messageField: 'message' }, 3).map((r) => r.index), [0, 2])
+    assert.deepEqual(extractRejectedItems({ errors: 'none' }, { ...cfg, rejectedPath: 'errors' }, 3), [])
+    assert.deepEqual(extractRejectedItems({ errors: [{ i: 1 }] }, { ...cfg, rejectedPath: '' }, 3), [])
+    assert.deepEqual([200, 201, 204, 400, 404, 409, 422, 401, 403, 301, 408, 425, 429, 500, 503].map(classifyStatus), ['ok', 'ok', 'ok', 'reject', 'reject', 'reject', 'reject', 'signin', 'signin', 'redirect', 'retry', 'retry', 'retry', 'retry', 'retry'])
+    const now = Date.parse('2026-10-15T00:00:00Z')
+    assert.equal(retryAfterMs('3', now), 3000)
+    assert.equal(retryAfterMs('600', now), 60_000)
+    assert.equal(retryAfterMs('Thu, 15 Oct 2026 00:00:10 GMT', now), 10_000)
+    assert.equal(retryAfterMs('soon', now), null)
+    assert.equal(retryAfterMs(null, now), null)
+    assert.deepEqual([1, 2, 3, 10].map((a) => retryDelayMs(a, null)), [1000, 2000, 4000, 30_000])
+    assert.equal(retryDelayMs(1, 5000), 5000)
+    assert.equal(API_MAX_ATTEMPTS, 4)
+    assert.equal(shortApiMessage('{"error":"NIK 3171012345678901 already exists for +62 812-3456-7890"}'), 'NIK [number] already exists for [number]')
+    assert.equal(shortApiMessage('<html><body>Bad <b>gateway</b></body></html>'), 'Bad gateway')
+    assert.equal(shortApiMessage(''), 'no details')
+    assert.ok(shortApiMessage('x'.repeat(500)).length <= 160)
+    for (const msg of ['The API refused the request (HTTP 422): bad', 'The API rejected this item: dup', 'id "..." can\'t be used in the request path']) {
+      assert.notEqual(localizeCheck(msg, 'id'), msg, msg)
+      assert.notEqual(localizeCheck(`PUT /e/{{id}}: ${msg}`, 'id'), `PUT /e/{{id}}: ${msg}`)
     }
   })
 

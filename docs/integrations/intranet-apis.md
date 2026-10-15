@@ -54,6 +54,8 @@ What the agent guarantees (agent 1.2.0 or later):
 - Nexus stores only the request design (encrypted); the API token never leaves your network.
 - One connection serves many data sources (one per endpoint), and changing an endpoint doesn't need an agent restart.
 
+**Writing to an intranet API (agent 1.3.0 or later).** Set `"writable": true` on the `rest` connection and add it as a destination. A pipeline's Destination step designs the write request (method, path with `{{column}}` values, a body built from a pasted JSON / form / XML example); the agent renders and sends it with the same guarantees as above (its own base URL and sign-in, requests under the base URL, no redirects), honours the step's rate limit and Retry-After, and reports refused rows back to Nexus's quarantine. Nexus refuses to send writes to an older agent.
+
 An agent older than 1.2.0 can still serve an intranet API whose complete request is in its config (`resourcePath`, `dataPath`, paging fields next to `baseUrl`), but Nexus refuses to send it designed requests until it is updated.
 
 ---

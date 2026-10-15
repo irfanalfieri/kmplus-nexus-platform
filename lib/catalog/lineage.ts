@@ -1,5 +1,5 @@
 import { DOMAIN_BY_NAME } from '@/lib/domain/model'
-import type { PipelineDefinition } from '@/lib/pipelines/definition'
+import { destinationTarget, type PipelineDefinition } from '@/lib/pipelines/definition'
 import { datasetKey, sourceKey } from './definition'
 
 /**
@@ -56,8 +56,9 @@ export function buildLineage(focus: string, input: LineageInput, maxDepth = MAX_
           const key = datasetKey(n.datasetName)
           link(pid, add({ id: key, kind: 'dataset', label: n.datasetName, detail: 'Nexus dataset', catalogKey: key }) ?? key)
         } else if (n.dataSourceId) {
-          const id = `dest:${n.dataSourceId}:${n.table}`
-          link(pid, add({ id, kind: 'destination_table', label: n.table, detail: `written to ${sourceName(n.dataSourceId)}` }) ?? id)
+          const target = destinationTarget(n)
+          const id = `dest:${n.dataSourceId}:${target}`
+          link(pid, add({ id, kind: 'destination_table', label: target, detail: `${n.kind === 'api' ? 'sent to' : 'written to'} ${sourceName(n.dataSourceId)}` }) ?? id)
         }
       }
     }

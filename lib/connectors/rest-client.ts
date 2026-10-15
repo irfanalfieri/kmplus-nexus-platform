@@ -266,6 +266,46 @@ export async function buildRestRequest(config: RestConfig, paginationOverrides?:
   return { url, init, method, headers, bodyPreview: body?.slice(0, 2000) }
 }
 
+/**
+ * What every write to the API shares (pipeline destination steps): base URL,
+ * sign-in, the data source's headers and variables, network settings. The
+ * read request's path, parameters and body are not used; each write brings
+ * its own path and body. Sign-in happens once (one OAuth token per call).
+ */
+export async function buildRestWriteBase(config: RestConfig) {
+  const variables = parseVariablesJson(config.variablesJson)
+  const baseUrl = normalizeBaseUrl(applyVariables(config.baseUrl, variables))
+  if (!baseUrl) throw Object.assign(new Error('API base URL is required.'), { retryable: false })
+  const headers: Record<string, string> = {}
+  for (const pair of activePairs(parseKeyValueList(config.headersKv, parseJsonObject(config.customHeaders, 'headers')))) {
+    headers[applyVariables(pair.key, variables)] = applyVariables(pair.value, variables)
+  }
+  if (!Object.keys(headers).some((k) => k.toLowerCase() === 'accept')) headers.Accept = 'application/json, application/xml;q=0.9, */*;q=0.8'
+  for (const [name, value] of Object.entries(await buildAuthHeaders(config, variables))) setHeader(headers, name, value)
+  const authQuery: Record<string, string> = {}
+  if (config.authMethod === 'api_key' && config.apiKeyLocation === 'query') {
+    authQuery[applyVariables(config.apiKeyHeader, variables) || 'api_key'] = withPrefix(config.apiKeyPrefix, applyVariables(config.apiKeyValue, variables))
+  }
+  return {
+    /** Full URL of a path under the base URL; refuses a path that leaves it. */
+    url(path: string) {
+      const p = applyVariables(path, variables)
+      const url = new URL(`${baseUrl}${p.startsWith('/') ? p : `/${p}`}`)
+      for (const [key, value] of Object.entries(authQuery)) url.searchParams.set(key, value)
+      const out = url.toString()
+      const limit = config.restrictToBaseUrl || baseUrl
+      if (!isWithinBaseUrl(out, limit)) throw Object.assign(new Error(`The request leaves the API's base URL (${limit}). Change the path.`), { retryable: false })
+      return out
+    },
+    /** Sets a header, replacing any other spelling of the same name. */
+    header(target: Record<string, string>, name: string, value: string) {
+      setHeader(target, name, value)
+    },
+    headers,
+    network: networkOptions(config),
+  }
+}
+
 /** Client certificate, company CA and request signing for APIs published through a company gateway. */
 export function networkOptions(config: RestConfig): ConnectorFetchOptions {
   return {

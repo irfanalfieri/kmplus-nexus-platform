@@ -199,7 +199,7 @@ function describeNode(n: PipelineNode): string {
     case 'router':
       return n.branches.map((b) => b.label).join(', ')
     case 'destination':
-      return n.kind === 'dataset' ? `dataset ${n.datasetName} (${n.mode})` : `table ${n.table} (${n.mode})`
+      return n.kind === 'dataset' ? `dataset ${n.datasetName} (${n.mode})` : n.kind === 'api' ? `API request ${n.method} ${n.path}` : `table ${n.table} (${n.mode})`
   }
 }
 

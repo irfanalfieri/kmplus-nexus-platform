@@ -8,7 +8,7 @@ import { dataSources, executionLogs, pipelineRunRejects, pipelines } from '@/lib
 import { requireWorkspace, type WorkspaceContext } from '@/lib/auth/session'
 import { can } from '@/lib/auth/permissions'
 import { recordAudit } from '@/lib/audit'
-import { definitionSchema, stepTitle } from '@/lib/pipelines/definition'
+import { definitionSchema, destinationTarget, stepTitle } from '@/lib/pipelines/definition'
 import { REPLAY_MAX_ROWS, enqueueRun } from '@/lib/pipelines/jobs'
 import { startWorker } from '@/lib/pipelines/worker'
 import { applyMasks, masksFor } from '@/lib/governance/masking'
@@ -44,7 +44,7 @@ async function pipelineInfo(workspaceId: string) {
       steps: new Map(nodes.map((n) => [n.id, stepTitle(n)])),
       datasets: nodes.flatMap((n) => (n.type === 'destination' && n.kind === 'dataset' ? [n.datasetName] : [])),
       destinations: nodes.flatMap((n) =>
-        n.type !== 'destination' ? [] : n.kind === 'dataset' ? [`dataset ${n.datasetName}`] : [`${sourceName.get(n.dataSourceId) ?? 'missing source'} · ${n.table}`]
+        n.type !== 'destination' ? [] : n.kind === 'dataset' ? [`dataset ${n.datasetName}`] : [`${sourceName.get(n.dataSourceId) ?? 'missing source'} · ${destinationTarget(n)}`]
       ),
     })
   }

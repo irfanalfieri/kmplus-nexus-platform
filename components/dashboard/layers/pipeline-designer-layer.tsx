@@ -58,7 +58,7 @@ export default function PipelineDesignerLayer() {
   const toast = useToast()
   const [confirm, confirmEl] = useConfirm()
   const [items, setItems] = useState<PipelineRow[]>([])
-  const [options, setOptions] = useState<BuilderOptions>({ dataSources: [], datasets: [], rules: [], pipelines: [], mappingTemplates: [] })
+  const [options, setOptions] = useState<BuilderOptions>({ dataSources: [], datasets: [], rules: [], pipelines: [], mappingTemplates: [], classifiedColumns: {} })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState<{ id: string; tone: NoticeTone; text: string } | null>(null)

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { apiDestinationSpec } from '@/lib/pipelines/definition'
 
 /**
  * Nexus Agent protocol (#13). Shared by the Nexus server (lib/agent/server.ts,
@@ -16,6 +17,8 @@ import { z } from 'zod'
 export const AGENT_PROTOCOL = 1
 /** Oldest agent that accepts REST requests designed in Nexus (intranet APIs). */
 export const MIN_AGENT_VERSION_FOR_REQUESTS = '1.2.0'
+/** Operations newer than the first agents: older agents are refused before a task is queued. */
+export const MIN_AGENT_VERSION_FOR_OP: Partial<Record<AgentOp, string>> = { apiWrite: '1.3.0' }
 
 /** Compares dotted versions: negative when a < b. */
 export function compareVersions(a: string, b: string) {
@@ -37,7 +40,7 @@ export const AGENT_OFFLINE_AFTER_MS = 90_000
 /** Rows per write task (keeps request and response bodies small). */
 export const WRITE_BATCH_ROWS = 1000
 
-export const AGENT_OPS = ['test', 'scan', 'sample', 'readChunk', 'readRows', 'write', 'liveQuery', 'activeKeys', 'markDeleted', 'ai'] as const
+export const AGENT_OPS = ['test', 'scan', 'sample', 'readChunk', 'readRows', 'write', 'apiWrite', 'liveQuery', 'activeKeys', 'markDeleted', 'ai'] as const
 export type AgentOp = (typeof AGENT_OPS)[number]
 
 /** Connector types an agent can serve (file uploads live in Nexus itself). */
@@ -68,6 +71,19 @@ export const payloadSchemas = {
     runId: z.string().optional(),
     chunk: z.number().int().optional(),
   }),
+  /** Rows to an intranet REST API (agent 1.3.0+): the destination step's request, rendered and sent by the agent. */
+  apiWrite: z.object({
+    ...conn,
+    api: apiDestinationSpec,
+    rows: z.array(z.record(z.string(), z.unknown())).max(WRITE_BATCH_ROWS),
+    runId: z.string().optional(),
+    chunk: z.number().int().optional(),
+    rowOffset: z.number().int().min(0).default(0),
+    /** Time the agent may spend before it stops and reports (the worker's time limit). */
+    budgetMs: z.number().int().min(1000).max(600_000).default(170_000),
+    /** "Send test request" from the editor: one row, one attempt; the answer comes back (ApiTestResult). */
+    test: z.boolean().default(false),
+  }),
   liveQuery: z.object({ ...conn, table: z.string().min(1).max(300), limit: z.number().int().min(1).max(10_000), timeoutMs: z.number().int().min(100).max(120_000), filters: z.array(z.object({ column: z.string(), value: z.string() })).max(10) }),
   /** Mark missing rows deleted, step 1: keys of rows not marked yet (one page). */
   activeKeys: z.object({ ...conn, table: z.string().min(1).max(300), keys: z.array(z.string().min(1)).min(1).max(10), column: z.string().min(1).max(200), offset: z.number().int().min(0), limit: z.number().int().min(1).max(50_000) }),
@@ -81,7 +97,7 @@ export const payloadSchemas = {
   }),
 } satisfies Record<AgentOp, z.ZodTypeAny>
 
-export type AgentPayload<O extends AgentOp> = z.infer<(typeof payloadSchemas)[O]>
+export type AgentPayload<O extends AgentOp> = z.input<(typeof payloadSchemas)[O]>
 
 export interface AgentTask {
   id: string

@@ -3,4 +3,4 @@
 import * as actions from '@/app/actions/pipelines'
 import { unwrapActions } from '@/lib/action-result'
 
-export const { createWebhookTrigger, disableWebhookTrigger, publishPipeline, discardDraft, listPipelines, getBuilderOptions, listRuns, getRunRejects, listVersions, getDatasetPreview, savePipeline, setPipelineEnabled, deletePipeline, restoreVersion, runPipelineNow, cancelPipelineRun, retryPipelineRun, getRunStatus, testPipeline, resetSyncPosition } = unwrapActions(actions)
+export const { createWebhookTrigger, disableWebhookTrigger, publishPipeline, discardDraft, listPipelines, getBuilderOptions, listRuns, getRunRejects, listVersions, getDatasetPreview, savePipeline, setPipelineEnabled, deletePipeline, restoreVersion, runPipelineNow, cancelPipelineRun, retryPipelineRun, getRunStatus, testPipeline, resetSyncPosition, sendApiTestRequest } = unwrapActions(actions)

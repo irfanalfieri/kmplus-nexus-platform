@@ -247,6 +247,7 @@ export const en = {
     addTitleSource: 'Add a data source',
     addTitleDestination: 'Add a destination',
     addDescription: 'Pipelines read from sources and only write to destinations.',
+    restDestinationReached: 'Reached the API and signed in. Try a write with Send test request in a pipeline’s Destination step.',
     name: 'Name',
     namePlaceholder: 'e.g. SAP HCM production',
     connector: 'Connector',

@@ -1,4 +1,4 @@
-import type { PipelineDefinition } from './definition'
+import { destinationTarget, type PipelineDefinition } from './definition'
 
 /**
  * Publish approvals (GV-6). Client-safe and pure; covered by scripts/engine-tests.ts.
@@ -31,7 +31,7 @@ export function destructiveWrites(def: PipelineDefinition): string[] {
   const out: string[] = []
   for (const n of def.nodes) {
     if (n.type !== 'destination') continue
-    const target = n.kind === 'dataset' ? `dataset ${n.datasetName}` : `table ${n.table}`
+    const target = n.kind === 'dataset' ? `dataset ${n.datasetName}` : `${n.kind === 'api' ? 'API request' : 'table'} ${destinationTarget(n)}`
     if (n.kind === 'dataset' && n.mode === 'replace') out.push(`Replaces ${target} on every run`)
     if (n.softDeleteMissing) out.push(`Marks rows missing from the source as deleted in ${target}`)
   }

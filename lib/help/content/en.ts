@@ -237,10 +237,12 @@ export const helpEn: HelpContent = {
         },
         {
           id: 'destinations',
-          title: 'Destinations: KMPlus products and your databases',
+          title: 'Destinations: KMPlus products, your databases and REST APIs',
           blocks: [
             { kind: 'p', text: 'KMPlus products are destinations. Add the product as a data source (its URL and token), then end a pipeline with a destination step that writes to it. Nexus sends records through the **Nexus Ingest Contract**; records the product refuses are held in the quarantine at the destination step with the product’s reason, so you can fix and resend them.' },
             { kind: 'p', text: 'PostgreSQL, MySQL and Supabase sources added as destinations can receive rows too (append or upsert into an existing table).' },
+            { kind: 'p', text: '**REST APIs** can receive rows as well: add the API with **Data sources → Add destination → REST API** (base URL, sign-in, headers, variables and the Network tab, exactly as for reading). The request itself (method, path and body) is designed in the pipeline’s Destination step (see 3.6). An API inside your network is reached through a Nexus Agent 1.3.0 or later with `"writable": true` on its connection.' },
+            { kind: 'note', tone: 'info', text: 'A data source added as a destination whose type Nexus can’t write to yet stays visible in the Destination step, greyed out, so you know why it can’t be picked.' },
           ],
         },
       ],
@@ -352,6 +354,28 @@ export const helpEn: HelpContent = {
               ],
             },
             { kind: 'p', text: 'A pipeline can have several destinations, e.g. the employees dataset and a KMPlus product.' },
+            { kind: 'p', text: '**Sending rows to a REST API.** Pick a REST data source in the Destination step, then set the method (POST, PUT or PATCH) and the path. `{{column}}` in the path takes each row’s value, e.g. `PUT /employees/{{employee_id}}`.' },
+            {
+              kind: 'steps',
+              items: [
+                '**Edit body** and paste an example of the body the API expects, as JSON, form-encoded (`name=value&…`) or XML.',
+                '**Read example** turns it into a list of values (`employee.name`, `contacts[].email`, …) and matches them to columns by name and HR synonyms. Set each value to a column, a fixed value, a calculation or run information (run id, batch id, rows in the request, time sent); mark values as required and choose what an empty value becomes.',
+                'To send several rows in one request, choose the list that holds the rows under **Rows per request** (a top-level list is chosen for you; in XML, choose the element to repeat). Otherwise each row is its own request.',
+                'Run **Test on sample**, then **Preview request** (a dry run that sends nothing) or **Send test request**, which sends the first row to the real API and shows the request, with sign-in masked, and the answer.',
+              ],
+            },
+            {
+              kind: 'table',
+              head: ['The API answers', 'What Nexus does'],
+              rows: [
+                ['2xx', 'Written. If the answer lists refused items (set the list path under **Refused items in a 2xx answer**), only those rows go to Data quality with the API’s message.'],
+                ['Another 4xx', 'Those rows go to Data quality with the status and a short reason (emails and long numbers blanked). Fix them and replay from the destination step.'],
+                ['408, 429, 5xx or no answer', 'Retried up to 4 times with backoff, honouring Retry-After; then the run retries from its last checkpoint.'],
+                ['401 or 403, a redirect, or 404 for every request', 'The run stops: sign-in, base URL or path need fixing.'],
+              ],
+            },
+            { kind: 'note', tone: 'warning', text: 'An API can’t give the exactly-once guarantee datasets have. When a run is retried, rows already sent can be sent again: POST then creates duplicates. Prefer PUT or PATCH to a path with the record’s key, or turn on **Send an idempotency key** (a stable run:chunk:batch key) if the API supports it. Rows per request, max requests per second (10 by default), parallel requests (1–4) and the timeout are set on the step; Nexus keeps chunks small enough to finish at that pace.' },
+            { kind: 'p', text: 'The step warns when the body sends columns classified personal or sensitive in Governance. Request bodies are never written to logs.' },
           ],
         },
         {

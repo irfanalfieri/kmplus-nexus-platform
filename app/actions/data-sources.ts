@@ -120,11 +120,13 @@ async function testConnectionImpl(rawId: string) {
   const { testSource, scanSource } = await import('@/lib/agent/sources')
   await assertConnectorInstalled(source.sourceType)
   const credentials = await resolveSecretRefs(ctx.workspaceId, asStrings(decryptCredentials(source.id, source.credentials)))
+  // A REST API used as a destination (not through an agent): reaching it and signing in is the test.
+  const restDestination = source.sourceType === 'rest' && (source.config as { role?: string } | null)?.role === 'destination' && !agentLink(source.config)
   // Agent-backed sources are tested by the agent, with its local credentials.
-  const test = await testSource(source, credentials)
+  const test = restDestination ? await (await import('@/lib/connectors/rest/write')).testRestDestination(credentials) : await testSource(source, credentials)
   if (!test.ok) throw new Error(test.message)
 
-  const scan = await scanSource(source, credentials)
+  const scan = restDestination ? { tables: [], scannedAt: new Date().toISOString(), method: 'rest-destination' } : await scanSource(source, credentials)
   await db
     .update(dataSources)
     .set({ status: 'connected', lastConnected: new Date(), updatedAt: new Date(), config: { ...(source.config as Record<string, unknown>), schemaScan: scan } })

@@ -237,10 +237,12 @@ export const helpId: HelpContent = {
         },
         {
           id: 'destinations',
-          title: 'Tujuan: produk KMPlus dan database Anda',
+          title: 'Tujuan: produk KMPlus, database Anda, dan REST API',
           blocks: [
             { kind: 'p', text: 'Produk KMPlus adalah tujuan. Tambahkan produk sebagai sumber data (URL dan tokennya), lalu akhiri pipeline dengan langkah tujuan yang menulis ke sana. Nexus mengirim catatan lewat **Nexus Ingest Contract**; catatan yang ditolak produk ditahan di karantina pada langkah tujuan beserta alasan dari produk, sehingga bisa Anda perbaiki dan kirim ulang.' },
             { kind: 'p', text: 'Sumber PostgreSQL, MySQL, dan Supabase yang ditambahkan sebagai tujuan juga bisa menerima baris (tambah atau upsert ke tabel yang sudah ada).' },
+            { kind: 'p', text: '**REST API** juga bisa menerima baris: tambahkan API melalui **Sumber data → Tambah tujuan → REST API** (URL dasar, proses masuk, header, variabel, dan tab Jaringan, sama seperti untuk membaca). Permintaannya sendiri (metode, path, dan body) dirancang di langkah Tujuan pipeline (lihat 3.6). API di dalam jaringan Anda dijangkau melalui Nexus Agent 1.3.0 atau lebih baru dengan `"writable": true` pada koneksinya.' },
+            { kind: 'note', tone: 'info', text: 'Sumber data yang ditambahkan sebagai tujuan tetapi jenisnya belum dapat ditulisi Nexus tetap terlihat di langkah Tujuan, berwarna redup, agar Anda tahu mengapa tidak dapat dipilih.' },
           ],
         },
       ],
@@ -352,6 +354,28 @@ export const helpId: HelpContent = {
               ],
             },
             { kind: 'p', text: 'Satu pipeline bisa punya beberapa tujuan, mis. dataset employees dan sebuah produk KMPlus.' },
+            { kind: 'p', text: '**Mengirim baris ke REST API.** Pilih sumber data REST di langkah Tujuan, lalu atur metode (POST, PUT, atau PATCH) dan path. `{{column}}` di path diisi nilai setiap baris, mis. `PUT /employees/{{employee_id}}`.' },
+            {
+              kind: 'steps',
+              items: [
+                '**Sunting body** lalu tempel contoh body yang diharapkan API, dalam JSON, form-encoded (`nama=nilai&…`), atau XML.',
+                '**Baca contoh** mengubahnya menjadi daftar nilai (`employee.name`, `contacts[].email`, …) dan mencocokkannya dengan kolom berdasarkan nama dan sinonim HR. Isi setiap nilai dengan kolom, nilai tetap, perhitungan, atau informasi eksekusi (id eksekusi, id batch, jumlah baris dalam permintaan, waktu kirim); tandai nilai yang wajib dan pilih apa yang terjadi pada nilai kosong.',
+                'Untuk mengirim beberapa baris dalam satu permintaan, pilih daftar yang memuat baris di **Baris per permintaan** (daftar tingkat atas dipilih otomatis; di XML, pilih elemen yang diulang). Jika tidak, setiap baris menjadi satu permintaan.',
+                'Jalankan **Uji pada sampel**, lalu **Pratinjau permintaan** (uji kering, tidak mengirim apa pun) atau **Kirim permintaan uji**, yang mengirim baris pertama ke API sungguhan dan menampilkan permintaan, dengan proses masuk disamarkan, serta jawabannya.',
+              ],
+            },
+            {
+              kind: 'table',
+              head: ['Jawaban API', 'Yang dilakukan Nexus'],
+              rows: [
+                ['2xx', 'Tertulis. Jika jawaban mencantumkan item yang ditolak (atur path daftarnya di **Item yang ditolak dalam jawaban 2xx**), hanya baris tersebut yang masuk ke Kualitas data dengan pesan dari API.'],
+                ['4xx lainnya', 'Baris tersebut masuk ke Kualitas data dengan status dan alasan singkat (email dan angka panjang disamarkan). Perbaiki lalu putar ulang dari langkah tujuan.'],
+                ['408, 429, 5xx, atau tidak ada jawaban', 'Diulang hingga 4 kali dengan jeda yang makin panjang, mematuhi Retry-After; setelah itu eksekusi diulang dari checkpoint terakhir.'],
+                ['401 atau 403, pengalihan, atau 404 untuk setiap permintaan', 'Eksekusi berhenti: proses masuk, URL dasar, atau path perlu diperbaiki.'],
+              ],
+            },
+            { kind: 'note', tone: 'warning', text: 'API tidak dapat memberi jaminan tepat-sekali seperti dataset. Saat eksekusi diulang, baris yang sudah terkirim dapat terkirim lagi: POST lalu menimbulkan duplikat. Utamakan PUT atau PATCH ke path dengan kunci record, atau aktifkan **Kirim kunci idempotensi** (kunci tetap eksekusi:chunk:batch) jika API mendukungnya. Baris per permintaan, maks. permintaan per detik (bawaan 10), permintaan paralel (1–4), dan batas waktu diatur di langkah ini; Nexus menjaga chunk cukup kecil agar selesai pada kecepatan tersebut.' },
+            { kind: 'p', text: 'Langkah ini memberi peringatan jika body mengirim kolom yang diklasifikasikan pribadi atau sensitif di Tata kelola. Body permintaan tidak pernah dicatat di log.' },
           ],
         },
         {

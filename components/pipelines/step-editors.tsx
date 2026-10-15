@@ -33,6 +33,8 @@ import { saveMappingTemplate } from '@/lib/actions/templates'
 import type { getBuilderOptions } from '@/lib/actions/pipelines'
 import { AiMappingButton } from '@/components/ai/ai-mapping'
 import { useT } from '@/components/i18n/i18n-provider'
+import { getConnectorDefinition } from '@/lib/connectors/catalog'
+import { ApiDestinationFields, newApiDestination } from './api-destination-editor'
 import type { steps as stepsMessages } from '@/lib/i18n/messages/en/steps'
 
 export type BuilderOptions = Awaited<ReturnType<typeof getBuilderOptions>>
@@ -56,7 +58,7 @@ export function NativeSelect({
 }
 
 /** A visible label wrapped around its control, so the control is named by the words on screen. */
-function Field({ label, children, className }: { label: React.ReactNode; children: React.ReactNode; className?: string }) {
+export function Field({ label, children, className }: { label: React.ReactNode; children: React.ReactNode; className?: string }) {
   return (
     <label className={cn('grid gap-1', className)}>
       <span className="text-xs font-medium text-muted-foreground">{label}</span>
@@ -656,13 +658,36 @@ export function RouterEditor({ step, columns, options, onChange }: { step: Route
 
 // ── Destination ──────────────────────────────────────────────────────────────
 
-const WRITABLE = new Set(['postgres', 'mysql', 'supabase', 'kmplus'])
+/** Data sources a pipeline can write to: tables (kind "datasource") or a REST API (kind "api"). Mirrors WRITABLE_CONNECTORS in lib/pipelines/io.ts. */
+const WRITABLE = new Set(['postgres', 'mysql', 'supabase', 'kmplus', 'rest'])
 
-export function DestinationEditor({ step, options, columns, onChange }: { step: DestinationStep; options: BuilderOptions; columns: Column[]; onChange: (s: DestinationStep) => void }) {
+export function DestinationEditor({
+  step,
+  options,
+  columns,
+  sampleRow,
+  pipelineId,
+  onChange,
+}: {
+  step: DestinationStep
+  options: BuilderOptions
+  columns: Column[]
+  /** First row reaching this step in the last test run (API test requests). */
+  sampleRow?: Record<string, unknown>
+  pipelineId?: string
+  onChange: (s: DestinationStep) => void
+}) {
   const t = useT()
   const writable = options.dataSources.filter((d) => WRITABLE.has(d.sourceType))
-  const target = step.kind === 'datasource' ? options.dataSources.find((d) => d.id === step.dataSourceId) : undefined
+  // Added as destinations but of a type Nexus has no writer for: listed, not selectable.
+  const unwritable = options.dataSources.filter((d) => d.role === 'destination' && !WRITABLE.has(d.sourceType))
+  const target = step.kind !== 'dataset' ? options.dataSources.find((d) => d.id === step.dataSourceId) : undefined
   const targetColumns = target?.tables.find((tb) => tb.name === (step.kind === 'datasource' ? step.table : ''))?.columns ?? []
+  const chooseSource = (id: string) => {
+    const ds = options.dataSources.find((d) => d.id === id)
+    if (ds?.sourceType === 'rest') onChange(step.kind === 'api' ? { ...step, dataSourceId: id } : newApiDestination({ id: step.id, position: step.position }, id))
+    else onChange({ id: step.id, type: 'destination', position: step.position, kind: 'datasource', dataSourceId: id, table: '', mode: 'append', keys: [], softDeleteMissing: false, softDeleteColumn: '' })
+  }
   const toggleKey = (k: string) => onChange({ ...step, keys: step.keys.includes(k) ? step.keys.filter((x) => x !== k) : [...step.keys, k] } as DestinationStep)
   const base = { id: step.id, type: 'destination' as const, position: step.position, keys: [], softDeleteMissing: false }
 
@@ -672,7 +697,7 @@ export function DestinationEditor({ step, options, columns, onChange }: { step: 
         <Button size="sm" aria-pressed={step.kind === 'dataset'} variant={step.kind === 'dataset' ? 'default' : 'outline'} onClick={() => onChange({ ...base, kind: 'dataset', datasetName: '', mode: 'replace' })}>
           {t('steps.destination.dataset')}
         </Button>
-        <Button size="sm" aria-pressed={step.kind === 'datasource'} variant={step.kind === 'datasource' ? 'default' : 'outline'} onClick={() => onChange({ ...base, kind: 'datasource', dataSourceId: '', table: '', mode: 'append', softDeleteColumn: '' })}>
+        <Button size="sm" aria-pressed={step.kind !== 'dataset'} variant={step.kind !== 'dataset' ? 'default' : 'outline'} onClick={() => step.kind === 'dataset' && onChange({ ...base, kind: 'datasource', dataSourceId: '', table: '', mode: 'append', softDeleteColumn: '' })}>
           {t('steps.destination.database')}
         </Button>
       </div>
@@ -698,15 +723,30 @@ export function DestinationEditor({ step, options, columns, onChange }: { step: 
       ) : (
         <div className="grid gap-3">
           <Field label={t('steps.destination.destinationDb')}>
-            <NativeSelect value={step.dataSourceId} onChange={(v) => onChange({ ...step, dataSourceId: v, table: '' })}>
+            <NativeSelect value={step.dataSourceId} onChange={chooseSource}>
               <option value="">{t('steps.destination.choose')}</option>
               {writable.map((d) => (
                 <option key={d.id} value={d.id}>
                   {d.name} ({d.sourceType}){d.role !== 'destination' ? t('steps.destination.notDestination') : ''}
                 </option>
               ))}
+              {unwritable.map((d) => (
+                <option key={d.id} value={d.id} disabled>
+                  {t('steps.destination.cantWrite', { name: d.name, type: getConnectorDefinition(d.sourceType)?.name ?? d.sourceType })}
+                </option>
+              ))}
             </NativeSelect>
           </Field>
+          {!writable.length && <p className="text-xs text-muted-foreground">{t('steps.destination.noWritable')}</p>}
+          {target && target.role !== 'destination' && (
+            <Notice tone="warning" className="text-xs">
+              {t('steps.destination.addedAsSource', { name: target.name })}
+            </Notice>
+          )}
+          {step.kind === 'api' ? (
+            <ApiDestinationFields step={step} options={options} columns={columns} sampleRow={sampleRow} pipelineId={pipelineId} onChange={onChange} />
+          ) : (
+          <>
           <Field label={t('steps.destination.tableExisting')}>
             {target && target.tables.length ? (
               <NativeSelect value={step.table} onChange={(v) => onChange({ ...step, table: v })}>
@@ -727,11 +767,7 @@ export function DestinationEditor({ step, options, columns, onChange }: { step: 
               <option value="upsert">{t('steps.destination.dbUpsert')}</option>
             </NativeSelect>
           </Field>
-          {!writable.length && <p className="text-xs text-muted-foreground">{t('steps.destination.noWritable')}</p>}
-          {target && target.role !== 'destination' && (
-            <Notice tone="warning" className="text-xs">
-              {t('steps.destination.addedAsSource', { name: target.name })}
-            </Notice>
+          </>
           )}
         </div>
       )}

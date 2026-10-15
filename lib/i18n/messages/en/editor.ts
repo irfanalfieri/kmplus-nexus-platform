@@ -31,6 +31,7 @@ export const editor = {
     router: 'Route ({count} branches)',
     destinationDataset: 'Write dataset {name}',
     destinationTable: 'Write {name}',
+    destinationApi: 'Send {name}',
   },
   canvas: {
     otherwise: 'otherwise',

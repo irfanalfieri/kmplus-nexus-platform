@@ -9,8 +9,14 @@ import { revalidatePath } from 'next/cache'
 import { newId, requireWorkspace, type WorkspaceContext } from '@/lib/auth/session'
 import { recordAudit, type AuditAction } from '@/lib/audit'
 import { db } from '@/lib/db'
-import { businessRules, dataSources, executionLogs, mappingTemplates, nexusDatasets, pipelineApprovals, pipelineRunRejects, pipelineVersions, pipelines } from '@/lib/db/schema'
-import { definitionSchema, scheduleSchema, type MapStep } from '@/lib/pipelines/definition'
+import { businessRules, dataSources, datasetPolicies, executionLogs, mappingTemplates, nexusDatasets, pipelineApprovals, pipelineRunRejects, pipelineVersions, pipelines } from '@/lib/db/schema'
+import { apiDestinationSpec, definitionSchema, scheduleSchema, type MapStep } from '@/lib/pipelines/definition'
+import { decryptCredentials } from '@/lib/security/credentials'
+import { withResolvedSecrets } from '@/lib/secrets/resolve'
+import { agentOf, callAgent } from '@/lib/agent/server'
+import { agentRestRequest } from '@/lib/connectors/rest/agent-request'
+import type { ApiTestResult } from '@/lib/connectors/rest/write'
+import type { ColumnPolicy } from '@/lib/governance/definition'
 import { currentWatermark, testRunDefinition } from '@/lib/pipelines/runner'
 import { assertPipelinesEditable, computeNextRun, getOwnedPipeline, publishOrRequest, savePipelineAs, type saveInput } from '@/lib/pipelines/publish'
 import { cancelRun, enqueueRun } from '@/lib/pipelines/jobs'
@@ -99,7 +105,7 @@ async function listPipelinesImpl() {
 /** Everything the builder needs to populate pickers (no credentials). */
 async function getBuilderOptionsImpl() {
   const ctx = await requireWorkspace()
-  const [sources, datasets, rules, pipelineRows, templates] = await Promise.all([
+  const [sources, datasets, rules, pipelineRows, templates, policies] = await Promise.all([
     db
       .select({ id: dataSources.id, name: dataSources.name, sourceType: dataSources.sourceType, status: dataSources.status, config: dataSources.config })
       .from(dataSources)
@@ -117,6 +123,7 @@ async function getBuilderOptionsImpl() {
       .orderBy(businessRules.name),
     db.select({ id: pipelines.id, name: pipelines.name, version: pipelines.version }).from(pipelines).where(eq(pipelines.workspaceId, ctx.workspaceId)).orderBy(pipelines.name),
     db.select().from(mappingTemplates).where(eq(mappingTemplates.workspaceId, ctx.workspaceId)).orderBy(mappingTemplates.name),
+    db.select({ columns: datasetPolicies.columns }).from(datasetPolicies).where(eq(datasetPolicies.workspaceId, ctx.workspaceId)),
   ])
   return {
     // Secrets managers only supply credentials: never a pipeline source or destination.
@@ -136,6 +143,10 @@ async function getBuilderOptionsImpl() {
     }),
     datasets: datasets.map((d) => ({ ...d, columns: d.columns as { name: string; type: string }[] })),
     pipelines: pipelineRows.map((p) => ({ id: p.id, name: p.name, published: (p.version ?? 0) > 0 })),
+    // Column names a steward classified personal or sensitive in any dataset policy (the API body warns before sending them).
+    classifiedColumns: Object.fromEntries(
+      policies.flatMap((p) => Object.entries((p.columns ?? {}) as Record<string, ColumnPolicy>).filter(([, c]) => c.classification === 'personal' || c.classification === 'sensitive').map(([name, c]) => [name, c.classification]))
+    ) as Record<string, 'personal' | 'sensitive'>,
     mappingTemplates: templates.map((m) => ({ id: m.id, name: m.name, description: m.description ?? '', fields: m.fields as MapStep['fields'], keepUnmapped: m.keepUnmapped })),
     rules: rules.map((r) => {
       const body = (r.body ?? {}) as { then?: { type: string; field?: string }[]; otherwise?: { type: string; field?: string }[] }
@@ -410,6 +421,47 @@ async function testPipelineImpl(definition: unknown, rawPipelineId?: string) {
   }
 }
 
+const apiTestInput = z.object({
+  pipelineId: idSchema.optional(),
+  step: apiDestinationSpec,
+  /** One row from the editor's test run (already masked for the person's role). */
+  row: z.record(z.string().max(200), z.unknown()).refine((r) => Object.keys(r).length <= 500 && JSON.stringify(r).length <= 200_000),
+})
+
+/**
+ * "Send test request" (API destination step): renders the row and sends it to
+ * the real API once. Returns the request with sign-in masked and the answer.
+ * Audited without body values.
+ */
+async function sendApiTestRequestImpl(raw: z.input<typeof apiTestInput>): Promise<ApiTestResult> {
+  const ctx = await requireWorkspace('pipelines:edit')
+  const input = apiTestInput.parse(raw)
+  if (input.pipelineId) await getOwned(ctx, input.pipelineId)
+  const [ds] = await db
+    .select({ id: dataSources.id, workspaceId: dataSources.workspaceId, name: dataSources.name, sourceType: dataSources.sourceType, config: dataSources.config, credentials: dataSources.credentials })
+    .from(dataSources)
+    .where(and(eq(dataSources.id, input.step.dataSourceId), eq(dataSources.workspaceId, ctx.workspaceId)))
+    .limit(1)
+  if (!ds || ds.sourceType !== 'rest' || (ds.config as { role?: string } | null)?.role !== 'destination') throw new Error('Choose a REST data source added as a destination.')
+  const source = await withResolvedSecrets(ds)
+  const credentials = Object.fromEntries(Object.entries(decryptCredentials(source.id, source.credentials)).map(([k, v]) => [k, v == null ? '' : String(v)]))
+  const via = agentOf(source)
+  let result: ApiTestResult
+  if (via) {
+    result = (await callAgent(
+      via.agentId,
+      'apiWrite',
+      { connection: via.connection, request: agentRestRequest('rest', credentials), api: input.step, rows: [JSON.parse(JSON.stringify(input.row))], rowOffset: 0, budgetMs: 60_000, test: true },
+      { timeoutMs: 75_000, workspaceId: via.workspaceId }
+    )) as ApiTestResult
+  } else {
+    const { sendRestTestRequest } = await import('@/lib/connectors/rest/write')
+    result = await sendRestTestRequest(credentials, input.step, input.row)
+  }
+  await audit(ctx, 'TEST_REQUEST', input.pipelineId ?? 'unsaved', { dataSource: ds.name, method: input.step.method, path: input.step.path, status: result.response?.status ?? null, outcome: result.outcome })
+  return result
+}
+
 /** Forget the incremental sync position so the next run reads everything again. */
 async function resetSyncPositionImpl(rawId: string) {
   const ctx = await requireWorkspace('pipelines:edit')
@@ -483,6 +535,10 @@ export async function getRunStatus(...args: Parameters<typeof getRunStatusImpl>)
 
 export async function testPipeline(...args: Parameters<typeof testPipelineImpl>) {
   return guard(() => testPipelineImpl(...args))
+}
+
+export async function sendApiTestRequest(...args: Parameters<typeof sendApiTestRequestImpl>) {
+  return guard(() => sendApiTestRequestImpl(...args))
 }
 
 export async function resetSyncPosition(...args: Parameters<typeof resetSyncPositionImpl>) {

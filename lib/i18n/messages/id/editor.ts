@@ -31,6 +31,7 @@ export const editor: Messages['editor'] = {
     router: 'Rute ({count} cabang)',
     destinationDataset: 'Tulis dataset {name}',
     destinationTable: 'Tulis {name}',
+    destinationApi: 'Kirim {name}',
   },
   canvas: {
     otherwise: 'selain itu',

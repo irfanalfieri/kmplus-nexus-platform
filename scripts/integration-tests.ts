@@ -20,7 +20,9 @@ import { createDataSource, deleteDataSource, getDataSources, getEditableCredenti
 import { startInfraMock } from './test/infra-mock'
 import { writeDataset } from '@/lib/pipelines/io'
 import { startKmplusMock } from './test/kmplus-mock'
-import { cancelPipelineRun, createWebhookTrigger, discardDraft, getBuilderOptions, getDatasetPreview, getRunStatus, listPipelines, listRuns, publishPipeline, retryPipelineRun, runPipelineNow, savePipeline } from '@/lib/actions/pipelines'
+import { startRestWriteMock } from './test/rest-write-mock'
+import { autoBindBody, bodyLeaves, parseBodySample, setRowsArray, updateBodyNode } from '@/lib/pipelines/body-template'
+import { cancelPipelineRun, createWebhookTrigger, discardDraft, getBuilderOptions, getDatasetPreview, getRunStatus, listPipelines, listRuns, publishPipeline, retryPipelineRun, runPipelineNow, savePipeline, sendApiTestRequest } from '@/lib/actions/pipelines'
 import { createSamlProvider, createSsoProvider, deleteSsoProvider, listSsoProviders, setSamlIdp, updateSsoProvider, verifySsoDomain } from '@/lib/actions/sso'
 import { approveRequest, listApprovals, rejectRequest } from '@/lib/actions/approvals'
 import { listPromotionStatus, previewPromotion, promotePipeline, setApprovalPolicy, setupEnvironments, unlinkEnvironment } from '@/lib/actions/environments'
@@ -891,6 +893,168 @@ async function main() {
     })
 
 
+    await test('REST API destination: one request per row; refused rows quarantined, fixed and replayed; 401 stops the run', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      process.env.NEXUS_ALLOW_PRIVATE_URLS = 'true'
+      const api = await startRestWriteMock('hr-token')
+      try {
+        await installConnector('rest')
+        const destId = await createDataSource({ name: `${RUN} HR API`, type: 'rest', sourceType: 'rest', config: { role: 'destination' }, credentials: { baseUrl: api.baseUrl, authMethod: 'bearer', bearerToken: api.token } })
+        const options = await getBuilderOptions()
+        assert.equal(options.dataSources.find((d) => d.id === destId)?.role, 'destination', 'listed for the Destination step')
+        const template = autoBindBody(parseBodySample('json', '{"employee":{"code":"E1","email":"a@b.id","source":"x"}}'), ['code', 'email']).template
+        const body = { format: 'json', sample: '', template: updateBodyNode(template, bodyLeaves(template).find((l) => l.path === 'employee.source')!.addr, (n) => (n.t === 'value' ? { ...n, binding: { kind: 'constant', value: 'nexus' } } : n)) }
+        const definition = (dataSourceId: string, retries = 0) => ({
+          schemaVersion: 2,
+          nodes: [
+            { id: 's', type: 'source', position: { x: 0, y: 0 }, dataSourceId: sourceId, table: 'employees', maxRows: 10 },
+            { id: 'm', type: 'map', position: { x: 1, y: 0 }, keepUnmapped: false, fields: [
+              { from: 'code', to: 'code', type: 'text', transforms: [] },
+              // Employee 5 has no email: the API answers 422 for it.
+              { from: 'email', to: 'email', type: 'text', transforms: [{ fn: 'conditional', args: ['ends_with', '5@kmplus.test', '', '{value}'] }] },
+            ] },
+            { id: 'd', type: 'destination', position: { x: 2, y: 0 }, kind: 'api', dataSourceId, method: 'POST', path: '/employees', body },
+          ],
+          edges: [{ id: 'e1', from: 's', to: 'm' }, { id: 'e2', from: 'm', to: 'd' }],
+          settings: { retries },
+        })
+        const saved = await savePipeline({ publish: true, name: `${RUN} to HR API`, definition: definition(destId), schedule: { type: 'manual' } as never })
+        const run = await runPipelineNow(saved.id)
+        takeAfterCallbacks()
+        await processJobs({})
+        const done = await getRunStatus(run.runId)
+        assert.equal(done.status, 'partial', done.errorMessage ?? '')
+        assert.equal(done.recordsSuccess, 9)
+        assert.equal(done.recordsError, 1)
+        assert.equal(api.employees.size, 9)
+        const posts = api.received.filter((r) => r.path === '/employees')
+        assert.equal(posts.length, 10, 'one request per row')
+        assert.deepEqual(JSON.parse(posts[0].body), { employee: { code: 'E00001', email: 'emp1@kmplus.test', source: 'nexus' } })
+        assert.ok(posts.every((r) => r.contentType === 'application/json' && r.idempotencyKey === null))
+        const inbox = await listQuarantine({ pipelineId: saved.id })
+        assert.equal(inbox.total, 1)
+        assert.equal(inbox.rows[0].messages[0], 'POST /employees: The API refused the request (HTTP 422): email is required (employee E00005, contact [email])', 'short, redacted reason')
+        // Fix the row and replay it to the API.
+        await fixRow({ id: inbox.rows[0].id, row: { ...inbox.rows[0].row, email: 'fixed5@kmplus.test' } })
+        const [replay] = await replayRows([inbox.rows[0].id])
+        takeAfterCallbacks()
+        await processJobs({})
+        assert.equal((await getRunStatus(replay.runId)).recordsSuccess, 1)
+        assert.equal(api.employees.get('E00005')?.email, 'fixed5@kmplus.test')
+
+        // The editor's test request: sign-in masked in what comes back, audited without values.
+        const tested = await sendApiTestRequest({ pipelineId: saved.id, step: definition(destId).nodes[2] as never, row: { code: 'T1', email: 't1@kmplus.test' } })
+        assert.equal(tested.outcome, 'written')
+        assert.equal(tested.response?.status, 201)
+        assert.equal(tested.request.headers.Authorization, 'Bearer ••••')
+        assert.ok(!JSON.stringify(tested).includes('hr-token'), 'the token never reaches the browser')
+        const refused = await sendApiTestRequest({ pipelineId: saved.id, step: definition(destId).nodes[2] as never, row: { code: 'T2', email: '' } })
+        assert.equal(refused.outcome, 'rejected')
+        assert.match(refused.message, /HTTP 422/)
+        const { rows: audits } = await listAuditLogs({ action: 'TEST_REQUEST' })
+        assert.ok(audits.length >= 2 && !JSON.stringify(audits).includes('t1@kmplus.test'), 'audited without body values')
+
+        // A wrong token stops the run at the first request: no retries, nothing quarantined.
+        const badId = await createDataSource({ name: `${RUN} HR API bad token`, type: 'rest', sourceType: 'rest', config: { role: 'destination' }, credentials: { baseUrl: api.baseUrl, authMethod: 'bearer', bearerToken: 'wrong' } })
+        const bad = await savePipeline({ publish: true, name: `${RUN} to HR API (bad token)`, definition: definition(badId, 2), schedule: { type: 'manual' } as never })
+        const before = api.received.length
+        const badRun = await runPipelineNow(bad.id)
+        takeAfterCallbacks()
+        await processJobs({})
+        const failed = await getRunStatus(badRun.runId)
+        assert.equal(failed.status, 'failed')
+        assert.match(failed.errorMessage ?? '', /refused Nexus's sign-in \(HTTP 401\)/)
+        assert.equal(api.received.length - before, 1, 'stopped at the first request, not retried')
+        // A REST data source added as a source is never written to.
+        const srcRest = await createDataSource({ name: `${RUN} HR API as source`, type: 'rest', sourceType: 'rest', config: { role: 'source' }, credentials: { baseUrl: api.baseUrl, authMethod: 'bearer', bearerToken: api.token } })
+        const asSource = await savePipeline({ publish: true, name: `${RUN} to a source`, definition: definition(srcRest), schedule: { type: 'manual' } as never })
+        const srcRun = await runPipelineNow(asSource.id)
+        takeAfterCallbacks()
+        await processJobs({})
+        assert.match((await getRunStatus(srcRun.runId)).errorMessage ?? '', /was added as a source/)
+      } finally {
+        await api.stop()
+      }
+    })
+
+    await test('REST API destination: batch mode, refused items by index, 5xx retried with Retry-After, idempotency keys stable when a chunk is retried', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      process.env.NEXUS_ALLOW_PRIVATE_URLS = 'true'
+      const api = await startRestWriteMock('batch-token')
+      try {
+        const destId = await createDataSource({ name: `${RUN} HR batch API`, type: 'rest', sourceType: 'rest', config: { role: 'destination' }, credentials: { baseUrl: api.baseUrl, authMethod: 'bearer', bearerToken: api.token } })
+        let template = setRowsArray(parseBodySample('json', '{"batch_id":"x","records":[{"code":"E1","email":"a@b.id"}]}'), [1])
+        template = autoBindBody(template, ['code', 'email']).template
+        template = updateBodyNode(template, [0], (n) => (n.t === 'value' ? { ...n, binding: { kind: 'meta', name: 'batch_id' } } : n))
+        const saved = await savePipeline({
+          publish: true,
+          name: `${RUN} to HR batch API`,
+          definition: {
+            schemaVersion: 2,
+            nodes: [
+              { id: 's', type: 'source', position: { x: 0, y: 0 }, dataSourceId: sourceId, table: 'employees', maxRows: 10 },
+              { id: 'm', type: 'map', position: { x: 1, y: 0 }, keepUnmapped: false, fields: [
+                { from: 'code', to: 'code', type: 'text', transforms: [] },
+                { from: 'email', to: 'email', type: 'text', transforms: [{ fn: 'conditional', args: ['ends_with', '5@kmplus.test', '', '{value}'] }] },
+              ] },
+              {
+                id: 'd', type: 'destination', position: { x: 2, y: 0 }, kind: 'api', dataSourceId: destId, method: 'POST', path: '/employees/batch',
+                body: { format: 'json', template }, batchSize: 4, idempotencyKey: true,
+                response: { rejectedPath: 'errors', indexField: 'index', messageField: 'message' },
+              },
+            ],
+            edges: [{ id: 'e1', from: 's', to: 'm' }, { id: 'e2', from: 'm', to: 'd' }],
+            settings: { retries: 1, retryDelaySeconds: 5 },
+          },
+          schedule: { type: 'manual' } as never,
+        })
+        // The first batch meets two 503s (Retry-After: 0) before it goes through.
+        api.failNext(2, 503, '0')
+        const run = await runPipelineNow(saved.id)
+        takeAfterCallbacks()
+        await processJobs({})
+        const done = await getRunStatus(run.runId)
+        assert.equal(done.status, 'partial', done.errorMessage ?? '')
+        assert.equal(done.recordsSuccess, 9)
+        const batches = api.received.filter((r) => r.path === '/employees/batch')
+        assert.equal(batches.length, 5, '3 batches (4 + 4 + 2 rows) + 2 retries')
+        assert.deepEqual(batches.map((b) => b.idempotencyKey), [`${run.runId}:0:0`, `${run.runId}:0:0`, `${run.runId}:0:0`, `${run.runId}:0:1`, `${run.runId}:0:2`], 'a retried request keeps its key')
+        assert.deepEqual(JSON.parse(batches[2].body).records.map((r: { code: string }) => r.code), ['E00001', 'E00002', 'E00003', 'E00004'])
+        assert.equal(JSON.parse(batches[2].body).batch_id, `${run.runId}:0:0`)
+        const inbox = await listQuarantine({ pipelineId: saved.id })
+        assert.equal(inbox.total, 1)
+        assert.equal(inbox.rows[0].messages[0], 'POST /employees/batch: The API rejected this item: email is required for E00005')
+        await fixRow({ id: inbox.rows[0].id, row: { ...inbox.rows[0].row, email: 'fixed5@kmplus.test' } })
+        const [replay] = await replayRows([inbox.rows[0].id])
+        takeAfterCallbacks()
+        await processJobs({})
+        assert.equal((await getRunStatus(replay.runId)).recordsSuccess, 1)
+        assert.equal(api.employees.size, 10)
+
+        // A chunk that keeps failing is retried from its checkpoint: the batches sent before the failure go again with the same keys.
+        api.reset()
+        api.failNext(4, 500, '0', 1)
+        const second = await runPipelineNow(saved.id)
+        takeAfterCallbacks()
+        await processJobs({})
+        const [waiting] = await db.select().from(pipelineJobs).where(eq(pipelineJobs.id, second.runId))
+        assert.equal(waiting.status, 'queued', 'the run waits to retry')
+        assert.match(JSON.stringify(waiting.progress), /The API answered HTTP 500 after 4 attempts/)
+        await db.update(pipelineJobs).set({ availableAt: new Date() }).where(eq(pipelineJobs.id, second.runId))
+        await processJobs({})
+        const retried = await getRunStatus(second.runId)
+        assert.equal(retried.status, 'partial', retried.errorMessage ?? '')
+        const keys = api.received.map((r) => r.idempotencyKey)
+        const k = (b: number) => `${second.runId}:0:${b}`
+        assert.deepEqual(keys, [k(0), k(1), k(1), k(1), k(1), k(0), k(1), k(2)], 'batch 0 is sent again with the same key after the retry')
+        assert.equal(api.employees.size, 9)
+      } finally {
+        await api.stop()
+      }
+    })
+
     await test('TD-24: a full run supersedes older quarantine (fixes carry over); replays into a replace dataset replace by key', async () => {
       setTestUser(admin)
       await switchWorkspace(adminWs)
@@ -1272,6 +1436,7 @@ async function main() {
       await pool.query(`INSERT INTO "${FIXTURE_SCHEMA}".agent_out (id, email) VALUES (99, 'gone@kmplus.test')`)
       const agentLlm = await startLlmMock()
       const intranet = await startIntranetApi('intranet-token')
+      const hrOut = await startRestWriteMock('intranet-write-token')
       const config = parseConfig({
         url: 'http://localhost:3000',
         token,
@@ -1280,9 +1445,11 @@ async function main() {
           { name: 'HR', type: 'postgres', writable: true, credentials: { connectionString: '${AGENT_TEST_DB}', schema: FIXTURE_SCHEMA } },
           // An intranet API: the agent's config holds the address and the token; Nexus designs the request.
           { name: 'HR API', type: 'rest', credentials: { baseUrl: `${intranet.baseUrl}/hr`, authMethod: 'bearer', bearerToken: '${INTRANET_TOKEN}' } },
+          // An intranet API pipelines write to: rows are rendered and sent by the agent, with its own token.
+          { name: 'HR API out', type: 'rest', writable: true, credentials: { baseUrl: hrOut.baseUrl, authMethod: 'bearer', bearerToken: '${INTRANET_WRITE_TOKEN}' } },
         ],
         ai: { baseUrl: agentLlm.baseUrl, model: 'llama3.1:8b' },
-      }, { AGENT_TEST_DB: process.env.DATABASE_URL, INTRANET_TOKEN: 'intranet-token' })
+      }, { AGENT_TEST_DB: process.env.DATABASE_URL, INTRANET_TOKEN: 'intranet-token', INTRANET_WRITE_TOKEN: 'intranet-write-token' })
       const stop = new AbortController()
       const logs: string[] = []
       const running = runAgent(config, { fetchImpl: agentFetch, signal: stop.signal, log: (l) => logs.push(l) })
@@ -1297,7 +1464,7 @@ async function main() {
         for (let i = 0; i < 50 && !(await listAgents()).agents.find((a) => a.name === 'Office agent')?.online; i++) await new Promise((r) => setTimeout(r, 100))
         const listed = (await listAgents()).agents.find((a) => a.name === 'Office agent')!
         assert.equal(listed.online, true)
-        assert.deepEqual(listed.connections.map((c) => [c.name, c.type, c.writable]), [['HR', 'postgres', true], ['HR API', 'rest', false]])
+        assert.deepEqual(listed.connections.map((c) => [c.name, c.type, c.writable]), [['HR', 'postgres', true], ['HR API', 'rest', false], ['HR API out', 'rest', true]])
         assert.equal(listed.connections[1].endpoint, `${intranet.baseUrl}/hr`, 'the agent shows where the API is, without credentials')
         const [stored] = await db.select().from(agentTable).where(eq(agentTable.id, listed.id))
         assert.ok(!JSON.stringify(stored.connections).includes('postgres://'), 'Nexus never receives the credentials')
@@ -1373,6 +1540,35 @@ async function main() {
         assert.ok(!logs.join('\n').includes('@kmplus.test'), 'the agent never logs data')
         assert.equal((await db.select().from(agentTaskTable).where(eq(agentTaskTable.agentId, listed.id))).length, 0, 'results are not kept')
 
+        // An intranet REST API as a destination: the agent renders and sends the requests (agent 1.3.0+).
+        const apiOut = await addAgentDataSource({ agentId: listed.id, connection: 'HR API out', role: 'destination', name: 'HR API out' })
+        const outTemplate = autoBindBody(parseBodySample('json', '{"employee":{"email":"a@b.id"}}'), ['email']).template
+        const apiStep = { id: 'a', type: 'destination', position: { x: 300, y: 300 }, kind: 'api', dataSourceId: apiOut.id, method: 'PUT', path: '/employees/{{id}}', body: { format: 'json', template: outTemplate }, idempotencyKey: true }
+        const toApi = await savePipeline({
+          publish: true,
+          name: `${RUN} to intranet API`,
+          definition: { schemaVersion: 2, nodes: [{ id: 's', type: 'source', position: { x: 0, y: 0 }, dataSourceId: src.id, table: 'people' }, apiStep], edges: [{ id: 'e1', from: 's', to: 'a' }], settings: { retries: 0 } },
+          schedule: { type: 'manual' } as never,
+        })
+        const apiRun = await runPipelineNow(toApi.id)
+        takeAfterCallbacks()
+        await processJobs({})
+        const apiStatus = await getRunStatus(apiRun.runId)
+        alive('the API destination run')
+        assert.equal(apiStatus.status, 'success', apiStatus.errorMessage ?? '')
+        assert.deepEqual(hrOut.received.map((r) => `${r.method} ${r.path} ${r.idempotencyKey}`), [1, 2, 3].map((id, i) => `PUT /employees/${id} ${apiRun.runId}:0:${i}`))
+        assert.equal(hrOut.employees.size, 3)
+        assert.ok(logs.some((l) => /^apiWrite HR API out/.test(l)), 'the agent sent the rows')
+        const viaAgentTest = await sendApiTestRequest({ pipelineId: toApi.id, step: apiStep as never, row: { id: 7, email: 'seven@kmplus.test' } })
+        assert.equal(viaAgentTest.outcome, 'written')
+        assert.equal(viaAgentTest.request.headers.Authorization, 'Bearer ••••', 'the agent masks its own token too')
+        assert.ok(!JSON.stringify(viaAgentTest).includes('intranet-write-token'))
+        // An agent older than 1.3.0 is refused before anything is queued.
+        await db.update(agentTable).set({ version: '1.2.0' }).where(eq(agentTable.id, listed.id))
+        await rejectsWith(() => sendApiTestRequest({ pipelineId: toApi.id, step: apiStep as never, row: { id: 8, email: 'x@kmplus.test' } }), /needs version 1\.3\.0 or later/)
+        await db.update(agentTable).set({ version: '1.3.0' }).where(eq(agentTable.id, listed.id))
+        alive('the API destination')
+
         // The AI assistant can use the model next to the agent: prompts stay in the customer's network.
         await setAiProvider({ provider: 'agent', agentId: listed.id })
         const viaAgent = await getAiSettings()
@@ -1398,6 +1594,7 @@ async function main() {
         stop.abort()
         await outcome
         await agentLlm.stop()
+        await hrOut.stop()
         await intranet.stop()
       }
       // An agent that stopped polling is reported offline.

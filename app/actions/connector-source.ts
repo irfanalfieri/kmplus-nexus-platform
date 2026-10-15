@@ -185,7 +185,9 @@ async function getConnectorNetworkInfoImpl() {
 
 async function testAndScanDataSourceImpl(
   rawSlug: string,
-  rawCredentials: ConnectorCredentials
+  rawCredentials: ConnectorCredentials,
+  /** A REST API added as a destination is tested for reaching it and signing in, not for a readable GET. */
+  rawRole?: 'source' | 'destination'
 ) {
   const workspaceId = await workspaceFor('sources:manage')
   const slug = parseSlug(rawSlug)
@@ -193,6 +195,12 @@ async function testAndScanDataSourceImpl(
   const credentials = await resolveSecretRefs(workspaceId, userCredentials(slug, rawCredentials))
   await assertConnectorInstalled(slug)
 
+  if (slug === 'rest' && rawRole === 'destination') {
+    const { testRestDestination } = await import('@/lib/connectors/rest/write')
+    const reached = await testRestDestination(credentials)
+    if (!reached.ok) return { ok: false as const, message: reached.message, preview: undefined }
+    return { ok: true as const, test: reached, scan: { tables: [], scannedAt: new Date().toISOString(), method: 'rest-destination' }, preview: undefined }
+  }
   const test = await testConnectorConnection(slug, credentials)
   if (!test.ok) {
     return {

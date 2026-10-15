@@ -244,6 +244,7 @@ export const id: Messages = {
     addTitleSource: 'Tambah sumber data',
     addTitleDestination: 'Tambah tujuan',
     addDescription: 'Pipeline membaca dari sumber dan hanya menulis ke tujuan.',
+    restDestinationReached: 'API berhasil dijangkau dan proses masuk diterima. Coba penulisan dengan Kirim permintaan uji di langkah Tujuan pipeline.',
     name: 'Nama',
     namePlaceholder: 'mis. SAP HCM produksi',
     connector: 'Konektor',

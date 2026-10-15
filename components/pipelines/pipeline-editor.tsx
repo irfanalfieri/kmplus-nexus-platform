@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useId, useMemo, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
   Background,
   Controls,
@@ -126,7 +126,7 @@ function stepLabel(n: PipelineNode, t: Translate): string {
     case 'router':
       return t('editor.stepTitle.router', { count: n.branches.length + 1 })
     case 'destination':
-      return n.kind === 'dataset' ? t('editor.stepTitle.destinationDataset', { name: n.datasetName }) : t('editor.stepTitle.destinationTable', { name: n.table })
+      return n.kind === 'dataset' ? t('editor.stepTitle.destinationDataset', { name: n.datasetName }) : n.kind === 'api' ? t('editor.stepTitle.destinationApi', { name: `${n.method} ${n.path}` }) : t('editor.stepTitle.destinationTable', { name: n.table })
   }
 }
 const ADDABLE: Exclude<NodeType, 'source'>[] = ['filter', 'map', 'validate', 'rules', 'router', 'destination']
@@ -437,6 +437,27 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
   const [linkBranch, setLinkBranch] = useState('')
   const selectedStat = selected ? statFor(selected.id) : undefined
 
+  // The canvas shares the height with the panel below it: fit the steps again when its size changes.
+  // A callback ref, because the editor mounts inside a dialog portal after the first effects run.
+  const flowRef = useRef<{ fitView: (o?: { padding?: number }) => unknown } | null>(null)
+  // A short canvas has no room for the minimap: it would sit on top of the steps.
+  const [roomy, setRoomy] = useState(true)
+  const observerRef = useRef<ResizeObserver | null>(null)
+  const canvasRef = useCallback((el: HTMLDivElement | null) => {
+    observerRef.current?.disconnect()
+    observerRef.current = null
+    if (!el || typeof ResizeObserver === 'undefined') return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const observer = new ResizeObserver(() => {
+      setRoomy(el.clientHeight >= 420)
+      clearTimeout(timer)
+      timer = setTimeout(() => void flowRef.current?.fitView({ padding: 0.3 }), 120)
+    })
+    observer.observe(el)
+    observerRef.current = observer
+  }, [])
+  useEffect(() => () => observerRef.current?.disconnect(), [])
+
   return (
     <Modal
       onClose={onClose}
@@ -498,7 +519,7 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
         </div>
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[160px_1fr_380px]">
+      <div className="grid min-h-0 flex-1 grid-cols-1 lg:min-h-60 lg:basis-0 lg:grid-cols-[160px_1fr_380px] lg:overflow-hidden">
         <aside className="flex gap-1 overflow-x-auto border-b border-border p-2 lg:flex-col lg:border-r lg:border-b-0" aria-label={t('editor.modal.addStep')}>
           <h3 className="hidden px-1 pb-1 text-xs font-medium text-muted-foreground lg:block">{t('editor.modal.addAfter')}</h3>
           {ADDABLE.map((type) => {
@@ -511,8 +532,9 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
           })}
         </aside>
 
-        <div className="relative min-h-[360px]" role="region" aria-label={t('editor.modal.canvas')}>
+        <div ref={canvasRef} className="relative min-h-[360px] lg:min-h-0" role="region" aria-label={t('editor.modal.canvas')}>
           <ReactFlow
+            onInit={(instance) => (flowRef.current = instance)}
             nodes={flowNodes}
             edges={flowEdges}
             nodeTypes={nodeTypes}
@@ -533,7 +555,7 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
           >
             <Background gap={20} />
             <Controls showInteractive={false} />
-            <MiniMap pannable zoomable className="!hidden md:!block" />
+            {roomy && <MiniMap pannable zoomable className="!hidden md:!block" />}
           </ReactFlow>
         </div>
 
@@ -567,7 +589,7 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
               {selected.type === 'validate' && <ValidateEditor step={selected} columns={columns.get(selected.id) ?? []} options={options} onChange={setNode} />}
               {selected.type === 'rules' && <RulesEditor step={selected} options={options} onChange={setNode} />}
               {selected.type === 'router' && <RouterEditor step={selected} columns={columns.get(selected.id) ?? []} options={options} onChange={setNode} />}
-              {selected.type === 'destination' && <DestinationEditor step={selected} options={options} columns={columns.get(selected.id) ?? []} onChange={setNode} />}
+              {selected.type === 'destination' && <DestinationEditor step={selected} options={options} columns={columns.get(selected.id) ?? []} sampleRow={selectedStat?.sample?.[0] as Record<string, unknown> | undefined} pipelineId={draft.id} onChange={setNode} />}
 
               {selectedStat?.error && <Notice tone="danger">{selectedStat.error}</Notice>}
               {!!selectedStat?.sample?.length && (
@@ -655,7 +677,7 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
           </ul>
         </Notice>
       )}
-      <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)} className="max-h-[38vh] shrink-0 flex-col gap-0 overflow-y-auto border-t border-border">
+      <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)} className="relative z-10 max-h-[38vh] min-h-28 shrink flex-col gap-0 overflow-y-auto border-t border-border bg-card">
         <TabsList variant="line" className="px-3 pt-2" aria-label={t('editor.modal.tabs')}>
           <TabsTrigger value="test">{t('editor.modal.tabTest')}</TabsTrigger>
           <TabsTrigger value="settings">{t('editor.modal.tabSettings')}</TabsTrigger>

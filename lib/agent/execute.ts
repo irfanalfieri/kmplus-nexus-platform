@@ -112,6 +112,18 @@ async function run(op: AgentOp, raw: unknown, env: AgentEnvironment): Promise<un
       const res = await writeToDataSource({ source: sourceFor(c), table: p.table, mode: p.mode, keys: p.keys, columns: p.columns as OutputColumn[], rows: p.rows, runId: p.runId, chunk: p.chunk })
       return { written: res.written, rejected: (res.rejected ?? []).map((r) => ({ row: wireRow(r.row), error: r.error })) }
     }
+    case 'apiWrite': {
+      const p = payloadSchemas.apiWrite.parse(raw)
+      const c = connection(env, p.connection)
+      if (c.type !== 'rest') throw new NonRetryableError(`Connection "${c.name}" is ${c.type}, not a REST API.`)
+      if (!c.writable) throw new NonRetryableError(`Connection "${c.name}" is read-only on this agent. Set "writable": true in the agent's config to allow writes.`)
+      const { writeRestApi, sendRestTestRequest } = await import('@/lib/connectors/rest/write')
+      if (p.test) return sendRestTestRequest(credentialsFor(c, p.request), p.api, p.rows[0] ?? {})
+      // Same rendering and sending as Nexus; the agent's base URL and sign-in always win and requests stay under the base URL.
+      const res = await writeRestApi(credentialsFor(c, p.request), p.api, p.rows, { runId: p.runId, chunk: p.chunk, rowOffset: p.rowOffset, deadline: Date.now() + p.budgetMs - 5_000 })
+      const index = new Map(p.rows.map((r, i) => [r, i]))
+      return { written: res.written, rejected: res.rejected.map((r) => ({ rowIndex: index.get(r.row) ?? -1, error: r.error, errors: r.errors })) }
+    }
     case 'liveQuery': {
       const p = payloadSchemas.liveQuery.parse(raw)
       const c = connection(env, p.connection)
