@@ -33,6 +33,35 @@ export function verifyEmail(opts: { name: string; url: string; locale: Locale })
   }
 }
 
+/** "Forgot password?": a one-time link (1 hour) to choose a new password. */
+export function resetPasswordEmail(opts: { name: string; url: string; locale: Locale }): Draft {
+  const t = createTranslator(opts.locale)
+  return {
+    locale: opts.locale,
+    subject: t('email.reset.subject'),
+    preheader: t('email.reset.preheader'),
+    heading: t('email.reset.heading'),
+    lines: [t('email.reset.greeting', { name: opts.name }), t('email.reset.body'), t('email.reset.twoFactor')],
+    action: { label: t('email.reset.action'), url: opts.url },
+    note: `${t('email.reset.expires')} ${t('email.reset.ignore')}`,
+  }
+}
+
+/** After a reset: tells the account owner, so a reset they didn't make doesn't go unnoticed. */
+export function passwordChangedEmail(opts: { name: string; changedAt: Date; locale: Locale }): Draft {
+  const t = createTranslator(opts.locale)
+  const when = new Intl.DateTimeFormat(LOCALE_INFO[opts.locale].intl, { dateStyle: 'long', timeStyle: 'short', timeZone: 'Asia/Jakarta' }).format(opts.changedAt)
+  return {
+    locale: opts.locale,
+    subject: t('email.passwordChanged.subject'),
+    preheader: t('email.passwordChanged.preheader'),
+    heading: t('email.passwordChanged.heading'),
+    lines: [t('email.passwordChanged.greeting', { name: opts.name }), t('email.passwordChanged.body', { when }), t('email.passwordChanged.notYou')],
+    action: { label: t('email.passwordChanged.action'), url: `${appUrl()}/forgot-password` },
+    note: t('email.passwordChanged.note'),
+  }
+}
+
 export function inviteEmail(opts: { inviter: string; workspace: string; role: string; email: string; url: string; locale: Locale }): Draft {
   const t = createTranslator(opts.locale)
   return {

@@ -37,7 +37,7 @@ export function AuthShell({ children, className }: { children: React.ReactNode; 
   )
 }
 
-export function AuthForm({ mode, next = '/dashboard', ssoError }: { mode: 'sign-in' | 'sign-up'; next?: string; ssoError?: string }) {
+export function AuthForm({ mode, next = '/dashboard', ssoError, passwordReset = false }: { mode: 'sign-in' | 'sign-up'; next?: string; ssoError?: string; passwordReset?: boolean }) {
   const router = useRouter()
   const t = useT()
   const [name, setName] = useState('')
@@ -138,6 +138,12 @@ export function AuthForm({ mode, next = '/dashboard', ssoError }: { mode: 'sign-
         <p className="mt-1 text-sm text-muted-foreground">{isSignUp ? t('auth.form.signUpSubtitle') : t('auth.form.signInSubtitle')}</p>
       </div>
 
+      {passwordReset && !error && (
+        <Notice tone="success" className="mb-4">
+          {t('auth.reset.done')}
+        </Notice>
+      )}
+
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
         {isSignUp && (
           <div className="flex flex-col gap-2">
@@ -151,7 +157,17 @@ export function AuthForm({ mode, next = '/dashboard', ssoError }: { mode: 'sign-
         </div>
         {!useSso && (
           <div className="flex flex-col gap-2">
-            <Label htmlFor="password">{t('auth.form.password')}</Label>
+            <div className="flex items-baseline justify-between gap-3">
+              <Label htmlFor="password">{t('auth.form.password')}</Label>
+              {!isSignUp && (
+                <Link
+                  href={`/forgot-password${email ? `?email=${encodeURIComponent(email)}` : ''}`}
+                  className="text-xs font-medium text-info-text underline-offset-4 outline-none hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+                >
+                  {t('auth.form.forgot')}
+                </Link>
+              )}
+            </div>
             <Input
               id="password"
               type="password"

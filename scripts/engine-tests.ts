@@ -32,7 +32,7 @@ import { localizeServerError } from '@/lib/i18n/server-errors'
 import { checkCatalogAnswer, checkConnectorAnswer, detectConnectors, rankCatalog, scrubPasted } from '@/lib/ai/discovery'
 import { serverErrorTemplates } from './test/server-error-sources'
 import { localizeStepTitle } from '@/components/pipelines/step-title'
-import { alertEmail, inviteEmail } from '@/lib/email-templates'
+import { alertEmail, inviteEmail, passwordChangedEmail, resetPasswordEmail } from '@/lib/email-templates'
 import { BUILTIN_MAPPING_TEMPLATES, PIPELINE_TEMPLATES, applyMappingTemplate, buildPipelineTemplate, mapToEntity } from '@/lib/pipelines/templates'
 import { buildLineage } from '@/lib/catalog/lineage'
 import { signPayload } from '@/lib/webhooks/deliver'
@@ -1267,6 +1267,21 @@ async function main() {
     assert.equal(new Set(TERMS.en.sections.map((s) => s.id)).size, TERMS.en.sections.length)
     TERMS.en.sections.forEach((s, i) => assert.ok(s.title.startsWith(`${i + 1}. `), s.title))
     for (const d of Object.values(TERMS)) for (const s of d.sections) for (const text of [...s.body, ...(s.items ?? [])]) assert.equal((text.match(/\*\*/g) ?? []).length % 2, 0, `unbalanced ** in ${s.id}`)
+  })
+
+  await test('password reset emails: one-time link, 2FA reminder, change notice in WIB, both languages', () => {
+    const url = 'https://nexus.example.com/api/auth/reset-password/abc123?callbackURL=%2Freset-password'
+    for (const locale of ['en', 'id'] as const) {
+      const reset = render({ to: 'a@b.test', ...resetPasswordEmail({ name: 'Dewi', url, locale }) })
+      assert.ok(reset.html.includes(url.replace(/&/g, '&amp;')) && reset.text.includes(url), `${locale}: link in both parts`)
+      assert.ok(reset.text.includes(locale === 'en' ? 'authenticator code' : 'kode autentikator'))
+      assert.ok(reset.text.includes(locale === 'en' ? '1 hour' : '1 jam'))
+      const changed = passwordChangedEmail({ name: 'Dewi', changedAt: new Date('2026-10-15T03:30:00Z'), locale })
+      const out = render({ to: 'a@b.test', ...changed })
+      assert.match(out.text, /10[:.]30/, `${locale}: time shown in WIB`)
+      assert.ok(out.text.includes('/forgot-password'))
+      assert.notEqual(changed.subject, resetPasswordEmail({ name: 'x', url, locale }).subject)
+    }
   })
 
   console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`)

@@ -10,7 +10,7 @@ import { pool } from '@/lib/db'
 import { TERMS_VERSION } from '@/lib/legal/terms'
 import { clientIp, recordTermsAcceptance } from '@/lib/legal/acceptance'
 import { emailEnabled, sendEmail } from '@/lib/email'
-import { requestLocale, verifyEmail } from '@/lib/email-templates'
+import { passwordChangedEmail, requestLocale, resetPasswordEmail, verifyEmail } from '@/lib/email-templates'
 
 export const APP_NAME = 'KMPlus Nexus'
 
@@ -153,6 +153,34 @@ export const auth = betterAuth({
     autoSignIn: true,
     // Off only in production without SMTP, where the email could never arrive.
     requireEmailVerification: emailEnabled(),
+    // "Forgot password?" (/forgot-password → email → /reset-password). The answer never says
+    // whether the email has an account; Better Auth limits requests to 3 a minute per IP.
+    resetPasswordTokenExpiresIn: 60 * 60,
+    revokeSessionsOnPasswordReset: true,
+    sendResetPassword: async ({ user, url }) => {
+      try {
+        await sendEmail({ to: user.email, ...resetPasswordEmail({ name: user.name || user.email, url, locale: await requestLocale() }) })
+      } catch (err) {
+        // Not shown to the person (that would reveal the account exists); visible in the logs.
+        console.error('[auth] reset password email failed:', err instanceof Error ? err.message : err)
+      }
+    },
+    onPasswordReset: async ({ user }, request) => {
+      const ip = clientIp(request?.headers)
+      try {
+        await pool.query(
+          'insert into audit_logs ("id", "userId", "workspaceId", "action", "resource", "resourceId", "changes", "ipAddress", "userAgent") values ($1, $2, null, $3, $4, $2, $5, $6, $7)',
+          [`audit_${randomUUID()}`, user.id, 'PASSWORD_RESET', 'account', JSON.stringify({ signedOutEverywhere: true }), ip, request?.headers.get('user-agent')?.slice(0, 300) ?? null],
+        )
+      } catch (err) {
+        console.error('[auth] audit insert failed:', err instanceof Error ? err.message : err)
+      }
+      try {
+        await sendEmail({ to: user.email, ...passwordChangedEmail({ name: user.name || user.email, changedAt: new Date(), locale: await requestLocale() }) })
+      } catch (err) {
+        console.error('[auth] password changed email failed:', err instanceof Error ? err.message : err)
+      }
+    },
   },
   emailVerification: {
     sendOnSignUp: true,
