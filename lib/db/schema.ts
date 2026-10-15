@@ -14,6 +14,24 @@ export const user = pgTable('user', {
   updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
 })
 
+/**
+ * Who accepted which version of the Terms and Conditions, when, and from where
+ * (lib/legal). A new version needs a new acceptance; rows are never updated.
+ */
+export const termsAcceptances = pgTable('terms_acceptances', {
+  id: text('id').primaryKey(),
+  userId: text('userId').notNull(),
+  /** TERMS_VERSION accepted, e.g. "2026-10-15". */
+  version: text('version').notNull(),
+  /** "sign_up" (checkbox on the sign-up form) or "prompt" (the approval screen). */
+  method: text('method').notNull(),
+  /** Language the terms were shown in (en / id). */
+  locale: text('locale'),
+  ipAddress: text('ipAddress'),
+  userAgent: text('userAgent'),
+  acceptedAt: timestamp('acceptedAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex('terms_acceptances_user_version_idx').on(t.userId, t.version)])
+
 export const session = pgTable('session', {
   id: text('id').primaryKey(),
   userId: text('userId').notNull(),

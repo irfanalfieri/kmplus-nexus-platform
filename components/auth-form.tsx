@@ -12,6 +12,7 @@ import { Label } from '@/components/ui/label'
 import { Notice } from '@/components/ui/notice'
 import { KmLogo } from '@/components/brand/km-logo'
 import { useT } from '@/components/i18n/i18n-provider'
+import { TERMS_VERSION } from '@/lib/legal/terms'
 
 /**
  * The frame of every sign-in screen: the board, the KM+ wordmark with "Nexus"
@@ -46,6 +47,7 @@ export function AuthForm({ mode, next = '/dashboard', ssoError }: { mode: 'sign-
   const [useSso, setUseSso] = useState(Boolean(ssoError))
   const [loading, setLoading] = useState(false)
   const [sentTo, setSentTo] = useState<string | null>(null)
+  const [agreed, setAgreed] = useState(false)
 
   const isSignUp = mode === 'sign-up'
 
@@ -70,8 +72,13 @@ export function AuthForm({ mode, next = '/dashboard', ssoError }: { mode: 'sign-
 
     const setupPath = `/setup-2fa?next=${encodeURIComponent(next)}`
     if (isSignUp) {
-      // The verification link signs the user in and continues to 2FA setup.
-      const { data, error } = await authClient.signUp.email({ email, password, name, callbackURL: setupPath })
+      if (!agreed) {
+        setLoading(false)
+        return setError(t('legal.signUpRequired'))
+      }
+      // The verification link signs the user in and continues to 2FA setup. The server
+      // refuses a sign-up without the current terms version and records the acceptance.
+      const { data, error } = await authClient.signUp.email({ email, password, name, callbackURL: setupPath, acceptedTerms: TERMS_VERSION } as Parameters<typeof authClient.signUp.email>[0])
       setLoading(false)
       if (error) return setError(error.message ?? t('common.somethingWrong'))
       if (data?.token) {
@@ -155,6 +162,32 @@ export function AuthForm({ mode, next = '/dashboard', ssoError }: { mode: 'sign-
               autoComplete={isSignUp ? 'new-password' : 'current-password'}
             />
           </div>
+        )}
+
+        {isSignUp && (
+          <label className="flex cursor-pointer items-start gap-2.5 text-sm">
+            <input
+              type="checkbox"
+              required
+              checked={agreed}
+              onChange={(e) => setAgreed(e.target.checked)}
+              className="mt-0.5 size-4 shrink-0 accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            />
+            <span className="text-pretty text-muted-foreground">
+              {t('legal.signUpAgree', { link: '\u0000' })
+                .split('\u0000')
+                .flatMap((part, i) =>
+                  i === 0
+                    ? [part]
+                    : [
+                        <a key="terms" href="/terms" target="_blank" rel="noopener" className="font-medium text-info-text underline-offset-4 hover:underline">
+                          {t('legal.termsLink')}
+                        </a>,
+                        part,
+                      ],
+                )}
+            </span>
+          </label>
         )}
 
         {error && <Notice tone="danger">{error}</Notice>}

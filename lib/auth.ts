@@ -7,6 +7,8 @@ import { Kysely, PostgresDialect } from 'kysely'
 import { auditSsoLogin, emailAllowedForProvider, enforcedProviderFor, provisionSsoUser } from '@/lib/auth/sso'
 import { SsoConfigPlugin } from '@/lib/auth/sso-config-plugin'
 import { pool } from '@/lib/db'
+import { TERMS_VERSION } from '@/lib/legal/terms'
+import { clientIp, recordTermsAcceptance } from '@/lib/legal/acceptance'
 import { emailEnabled, sendEmail } from '@/lib/email'
 import { requestLocale, verifyEmail } from '@/lib/email-templates'
 
@@ -41,6 +43,44 @@ const enforceSso = () =>
             if (typeof email !== 'string') return
             const label = await enforcedProviderFor(email)
             if (label) throw new APIError('FORBIDDEN', { message: `Your organization signs in with ${label}. Use "Sign in with SSO".` })
+          }),
+        },
+      ],
+    },
+  }) satisfies BetterAuthPlugin
+
+/**
+ * The sign-up form sends the Terms and Conditions version the person agreed to
+ * (acceptedTerms). Without the current version the account isn't created; with
+ * it, the acceptance is recorded for the new user. Accounts made any other way
+ * (SSO, SCIM, invites) accept on the /accept-terms screen at first sign-in.
+ */
+const requireTermsOnSignUp = () =>
+  ({
+    id: 'nexus-terms-on-sign-up',
+    hooks: {
+      before: [
+        {
+          matcher: (ctx) => ctx.path === '/sign-up/email',
+          handler: createAuthMiddleware(async (ctx) => {
+            const accepted = (ctx.body as { acceptedTerms?: unknown } | undefined)?.acceptedTerms
+            if (accepted !== TERMS_VERSION) throw new APIError('BAD_REQUEST', { message: 'Accept the Terms and Conditions to create an account.' })
+          }),
+        },
+      ],
+      after: [
+        {
+          matcher: (ctx) => ctx.path === '/sign-up/email',
+          handler: createAuthMiddleware(async (ctx) => {
+            const userId = (ctx.context.returned as { user?: { id?: unknown } } | undefined)?.user?.id
+            if (typeof userId !== 'string') return
+            const lang = /(?:^|;\s*)nexus_lang=(\w+)/.exec(ctx.headers?.get('cookie') ?? '')?.[1]
+            try {
+              await recordTermsAcceptance({ userId, method: 'sign_up', locale: lang === 'id' ? 'id' : 'en', ipAddress: clientIp(ctx.headers), userAgent: ctx.headers?.get('user-agent') })
+            } catch (err) {
+              // The approval screen asks again at first sign-in if this didn't save.
+              console.error('[auth] terms acceptance insert failed:', err instanceof Error ? err.message : err)
+            }
           }),
         },
       ],
@@ -140,6 +180,7 @@ export const auth = betterAuth({
       provisionUser: async ({ user, provider }) => provisionSsoUser(provider.providerId, user),
     }),
     enforceSso(),
+    requireTermsOnSignUp(),
   ],
   disabledPaths: SSO_ADMIN_PATHS,
   databaseHooks: {

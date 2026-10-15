@@ -1,0 +1,27 @@
+/** English text around the Terms and Conditions (the terms themselves are in lib/legal); id/legal.ts mirrors it. */
+export const legal = {
+  version: 'Version {version} · effective {date}',
+  acceptTitle: 'Terms and Conditions',
+  acceptFirst: 'Before you start, please read and accept the Terms and Conditions of KMPlus Nexus.',
+  acceptUpdated: 'The Terms and Conditions have changed since you last accepted them (version {previous}). Please read and accept the new version to continue.',
+  scrollHint: 'Scroll to read all {count} sections.',
+  agree: 'I have read and agree to the Terms and Conditions',
+  accept: 'Accept and continue',
+  accepting: 'Saving…',
+  decline: 'Decline and sign out',
+  declineHint: 'You can’t use Nexus without accepting. Signing out keeps your account; you can accept later.',
+  openFull: 'Open in a new tab',
+  failed: 'Could not save your acceptance',
+  signUpAgree: 'I have read and agree to the {link}',
+  termsLink: 'Terms and Conditions',
+  signUpRequired: 'Accept the Terms and Conditions to create your account.',
+  otherLanguage: 'Baca dalam Bahasa Indonesia',
+  prevails: 'If the English and Bahasa Indonesia versions differ, the Bahasa Indonesia version prevails.',
+  backHome: 'Back to Nexus',
+  contents: 'Contents',
+  account: {
+    title: 'Terms and Conditions',
+    accepted: 'You accepted version {version} on {date}.',
+    read: 'Read the terms',
+  },
+}

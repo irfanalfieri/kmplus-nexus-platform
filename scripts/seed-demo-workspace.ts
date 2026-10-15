@@ -27,6 +27,7 @@ import { processJobs } from '@/lib/pipelines/jobs'
 import { buildPipelineTemplate, type PipelineTemplateId } from '@/lib/pipelines/templates'
 import { cleanTableName, toSheet, uploadParts, type Cell } from '@/lib/files/parse'
 import { setTestUser, takeAfterCallbacks } from './test/stubs'
+import { recordTermsAcceptance } from '@/lib/legal/acceptance'
 
 const DEMO = { id: 'demo_user_nexus', email: 'dewi.lestari@kmplus-demo.co.id', name: 'Dewi Lestari', twoFactorEnabled: true }
 
@@ -36,6 +37,8 @@ async function main() {
 
   if (process.argv.includes('--reset')) await reset()
   await db.insert(user).values({ id: DEMO.id, email: DEMO.email, name: DEMO.name, emailVerified: true, twoFactorEnabled: true }).onConflictDoNothing()
+  // The demo person has accepted the current Terms and Conditions (no approval screen in reviews).
+  await recordTermsAcceptance({ userId: DEMO.id, method: 'sign_up' })
   setTestUser(DEMO)
   const ctx = await getWorkspaceContext()
   await renameWorkspace('PT KMPlus Indonesia')

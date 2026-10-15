@@ -6,6 +6,7 @@ import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { workspaceMembers, workspaces } from '@/lib/db/schema'
 import { can, deniedMessage, isRole, type Permission, type Role } from './permissions'
+import { hasAcceptedCurrentTerms } from '@/lib/legal/acceptance'
 
 export const ACTIVE_WORKSPACE_COOKIE = 'nexus_ws'
 
@@ -18,22 +19,28 @@ export function newId(prefix: string) {
 const secondFactorDone = (session: { user: { twoFactorEnabled?: boolean | null }; session: { authMethod?: string | null } }) =>
   Boolean(session.user.twoFactorEnabled) || session.session.authMethod === 'sso'
 
-/** Signed-in user with 2FA set up (or signed in through SSO), or throws. Two-factor authentication is mandatory (TD-2). */
+/**
+ * Signed-in user who accepted the current Terms and Conditions and has 2FA set
+ * up (or signed in through SSO), or throws. Two-factor authentication is mandatory (TD-2).
+ */
 async function requireSession() {
   const session = await auth.api.getSession({ headers: await headers() })
   if (!session?.user) throw new Error('Unauthorized')
+  if (!(await hasAcceptedCurrentTerms(session.user.id))) throw new Error('Accept the Terms and Conditions first (reload the page).')
   if (!secondFactorDone(session)) throw new Error('Set up two-factor authentication first (reload the page).')
   return session.user
 }
 
 /**
- * For server pages: the signed-in user, or a redirect to sign-in (no session)
- * or to 2FA setup (no 2FA yet). nextPath is where to come back to afterwards.
+ * For server pages: the signed-in user, or a redirect to sign-in (no session),
+ * to the Terms and Conditions (current version not accepted yet) or to 2FA
+ * setup (no 2FA yet). nextPath is where to come back to afterwards.
  */
 export async function requirePageUser(nextPath: string) {
   const session = await auth.api.getSession({ headers: await headers() })
   const next = encodeURIComponent(nextPath)
   if (!session?.user) redirect(`/sign-in?next=${next}`)
+  if (!(await hasAcceptedCurrentTerms(session.user.id))) redirect(`/accept-terms?next=${next}`)
   if (!secondFactorDone(session)) redirect(`/setup-2fa?next=${next}`)
   return session.user
 }

@@ -10,6 +10,7 @@ import { overview } from './id/overview'
 import { email } from './id/email'
 import { assist } from './id/assist'
 import { tour } from './id/tour'
+import { legal } from './id/legal'
 
 /** Bahasa Indonesia. Same shape as en.ts; data and identifiers stay untranslated. */
 export const id: Messages = {
@@ -464,4 +465,5 @@ export const id: Messages = {
   email,
   assist,
   tour,
+  legal,
 }

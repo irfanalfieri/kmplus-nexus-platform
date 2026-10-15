@@ -14,6 +14,7 @@ import { overview } from './en/overview'
 import { email } from './en/email'
 import { assist } from './en/assist'
 import { tour } from './en/tour'
+import { legal } from './en/legal'
 
 export const en = {
   common: {
@@ -467,6 +468,7 @@ export const en = {
   email,
   assist,
   tour,
+  legal,
 } as const
 
 type Widen<T> = T extends string ? string : { [K in keyof T]: Widen<T[K]> }

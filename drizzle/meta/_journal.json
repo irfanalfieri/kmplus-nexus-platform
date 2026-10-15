@@ -148,6 +148,13 @@
       "when": 1791793535684,
       "tag": "0020_agents_ai",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1792043492876,
+      "tag": "0021_terms_acceptances",
+      "breakpoints": true
     }
   ]
 }

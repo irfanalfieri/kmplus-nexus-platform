@@ -25,9 +25,6 @@ export default async function Page() {
           <KmLogo className="h-9" priority />
           <span className="text-base font-semibold tracking-tight">Nexus</span>
         </span>
-        <Link href="/sign-in" className={buttonVariants({ variant: 'ghost' })}>
-          {t('auth.landing.signIn')}
-        </Link>
       </header>
 
       <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col justify-center gap-10 px-4 pt-6 pb-16 sm:px-6">

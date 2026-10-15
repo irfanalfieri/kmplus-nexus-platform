@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { Check, Copy, Download, KeyRound, Loader2, ShieldAlert, ShieldCheck, Smartphone } from 'lucide-react'
+import { Check, Copy, Download, ExternalLink, KeyRound, Loader2, ShieldAlert, ShieldCheck, Smartphone } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -10,7 +10,7 @@ import { Notice } from '@/components/ui/notice'
 import { SettingsPanel } from '@/components/workspace/settings-panel'
 import { authClient } from '@/lib/auth-client'
 import { getAccountSecurity } from '@/lib/actions/account'
-import { useT } from '@/components/i18n/i18n-provider'
+import { usePrefs, useT } from '@/components/i18n/i18n-provider'
 
 type Security = Awaited<ReturnType<typeof getAccountSecurity>>
 type Mode = 'idle' | 'regenerate' | 'reenroll'
@@ -18,6 +18,7 @@ type Mode = 'idle' | 'regenerate' | 'reenroll'
 /** Settings → Your account security: 2FA status, new backup codes, move 2FA to a new phone (TD-19). */
 export function AccountSecurity() {
   const t = useT()
+  const { formatDateTime } = usePrefs()
   const [info, setInfo] = useState<Security | null>(null)
   const [mode, setMode] = useState<Mode>('idle')
   const [password, setPassword] = useState('')
@@ -182,6 +183,18 @@ export function AccountSecurity() {
                   {t('ws.common.done')}
                 </Button>
               </div>
+            </div>
+          )}
+
+          {info.terms && (
+            <div className="border-t border-border pt-4 text-sm">
+              <h3 className="font-semibold">{t('legal.account.title')}</h3>
+              <p className="mt-1 text-muted-foreground">
+                {t('legal.account.accepted', { version: info.terms.version, date: formatDateTime(info.terms.acceptedAt) })}{' '}
+                <a href="/terms" target="_blank" rel="noopener" className="inline-flex items-center gap-1 font-medium text-info-text underline-offset-4 hover:underline">
+                  {t('legal.account.read')} <ExternalLink className="size-3" aria-hidden />
+                </a>
+              </p>
             </div>
           )}
         </div>

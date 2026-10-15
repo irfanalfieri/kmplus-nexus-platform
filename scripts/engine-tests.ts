@@ -46,6 +46,7 @@ import { compareVersions } from '@/lib/agent/protocol'
 import { CONNECTOR_CATALOG } from '@/lib/connectors/catalog'
 import { readdirSync, readFileSync as readGuideFile } from 'node:fs'
 import { HELP_CONTENT } from '@/lib/help'
+import { TERMS, TERMS_VERSION } from '@/lib/legal/terms'
 import { HELP_SCREENS } from '@/lib/help/screens'
 import { matchesQuery } from '@/lib/help/search'
 import { TOUR_STAGES, TOUR_STEPS } from '@/lib/tour/steps'
@@ -1256,6 +1257,16 @@ async function main() {
     assert.equal(redactRestRequest({ method: 'GET', url: 'https://x.example.com/', headers: { auth: 'eyJ.token' } }, { authMethod: 'custom_header', apiKeyHeader: '', apiKeyLocation: 'header', customHeaderName: 'auth' }).headers.auth, '••••')
     const failed = await previewRestRequest(parseRestConfig({ baseUrl: '', resourcePath: '/' }))
     assert.equal(failed.ok, false)
+  })
+
+  await test('Terms and Conditions: both languages have the same numbered sections; the version is a date', () => {
+    assert.match(TERMS_VERSION, /^\d{4}-\d{2}-\d{2}$/)
+    assert.ok(!Number.isNaN(Date.parse(TERMS_VERSION)))
+    const shape = (d: (typeof TERMS)['en']) => d.sections.map((s) => `${s.id}:${s.body.length}:${s.items?.length ?? 0}:${s.title.split('.')[0]}`)
+    assert.deepEqual(shape(TERMS.id), shape(TERMS.en))
+    assert.equal(new Set(TERMS.en.sections.map((s) => s.id)).size, TERMS.en.sections.length)
+    TERMS.en.sections.forEach((s, i) => assert.ok(s.title.startsWith(`${i + 1}. `), s.title))
+    for (const d of Object.values(TERMS)) for (const s of d.sections) for (const text of [...s.body, ...(s.items ?? [])]) assert.equal((text.match(/\*\*/g) ?? []).length % 2, 0, `unbalanced ** in ${s.id}`)
   })
 
   console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`)

@@ -32,6 +32,9 @@ import { getDataSourceTableSample, previewRestConnection } from '@/lib/actions/c
 import { parseConfig, runAgent } from '../agent/nexus-agent'
 import { applyDiagnosisFix, askData, diagnoseRun, draftPipeline, draftRule, getAiSettings, setAiProvider, suggestConnector, suggestMapping } from '@/lib/actions/ai'
 import { cookies } from 'next/headers'
+import { acceptTerms } from '@/lib/actions/legal'
+import { TERMS_VERSION } from '@/lib/legal/terms'
+import { hasAcceptedCurrentTerms, recordTermsAcceptance } from '@/lib/legal/acceptance'
 import { startLlmMock } from './test/llm-mock'
 import { startIntranetApi } from './test/intranet-api-mock'
 import { decryptCredentials } from '@/lib/security/credentials'
@@ -96,6 +99,7 @@ async function main() {
   const viewer = newUser('viewer')
   const outsider = newUser('outsider')
   await db.insert(user).values([admin, viewer, outsider].map((u) => ({ id: u.id, email: u.email, name: u.name, emailVerified: true, twoFactorEnabled: true })))
+  for (const u of [admin, viewer, outsider]) await recordTermsAcceptance({ userId: u.id, method: 'sign_up' })
 
   let adminWs = ''
   let sourceId = ''
@@ -113,6 +117,23 @@ async function main() {
     await test('accounts without 2FA are rejected by every action', async () => {
       setTestUser({ ...outsider, twoFactorEnabled: false })
       await rejectsWith(() => getWorkspaceContext(), /two-factor/)
+    })
+
+    await test('Terms and Conditions: actions need the current version accepted; acceptance is recorded once', async () => {
+      const newcomer = newUser('newcomer')
+      await db.insert(user).values({ id: newcomer.id, email: newcomer.email, name: newcomer.name, emailVerified: true, twoFactorEnabled: true })
+      setTestUser(newcomer)
+      await rejectsWith(() => getWorkspaceContext(), /Terms and Conditions/)
+      await rejectsWith(() => acceptTerms('2000-01-01'), /updated while this page was open/)
+      await acceptTerms(TERMS_VERSION)
+      await acceptTerms(TERMS_VERSION)
+      assert.equal(await hasAcceptedCurrentTerms(newcomer.id), true)
+      const { rows } = await pool.query('select "method", "version" from terms_acceptances where "userId" = $1', [newcomer.id])
+      assert.deepEqual(rows, [{ method: 'prompt', version: TERMS_VERSION }])
+      assert.equal((await getWorkspaceContext()).role, 'admin')
+      // A stand-in user id (sign-up for an email already taken) records nothing.
+      await recordTermsAcceptance({ userId: `${RUN}_does_not_exist`, method: 'sign_up' })
+      assert.equal((await pool.query('select 1 from terms_acceptances where "userId" = $1', [`${RUN}_does_not_exist`])).rows.length, 0)
     })
 
     await test('invite is bound to its email; accepted invite grants the role', async () => {
@@ -904,6 +925,7 @@ async function main() {
     const approver = newUser('approver')
     await test('GV-6: publishing waits for a second person; requesters cannot approve their own', async () => {
       await db.insert(user).values({ id: approver.id, email: approver.email, name: approver.name, emailVerified: true, twoFactorEnabled: true })
+      await recordTermsAcceptance({ userId: approver.id, method: 'sign_up' })
       setTestUser(admin)
       await switchWorkspace(adminWs)
       const others = await db.select({ userId: workspaceMembers.userId }).from(workspaceMembers).where(and(eq(workspaceMembers.workspaceId, adminWs), inArray(workspaceMembers.role, ['admin', 'steward'])))
@@ -1541,6 +1563,7 @@ async function cleanup(userIds: string[]) {
   }
   await db.delete(auditLogs).where(inArray(auditLogs.userId, userIds))
   await db.delete(workspaces).where(inArray(workspaces.id, ws))
+  await pool.query('delete from terms_acceptances where "userId" like $1', [`${RUN}_%`])
   await db.delete(user).where(like(user.id, `${RUN}_%`))
   await pool.query(`DROP SCHEMA IF EXISTS "${FIXTURE_SCHEMA}" CASCADE`)
 }
