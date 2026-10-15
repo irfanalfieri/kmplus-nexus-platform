@@ -123,20 +123,29 @@ export function parseConnectionPaste(raw: string): Partial<ParsedRestConnection>
   return null
 }
 
-/** Clean credentials that already have auth/token embedded in baseUrl (legacy bad saves). */
+/** A JWT anywhere in a string (not global: safe to reuse with .test). */
+const HAS_JWT = /eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/
+
+/**
+ * Clean credentials that have a pasted token stuck in the base URL (old bad
+ * saves like "https://host/path auth: eyJ…"). A clean URL is left alone, even
+ * when it contains the word "auth" (https://auth-api.company.com).
+ */
 export function sanitizeRestCredentials(values: Record<string, string>): Record<string, string> {
   const baseUrl = values.baseUrl ?? ''
-  if (!baseUrl.includes('auth') && !JWT_PATTERN.test(baseUrl)) return values
+  if (!/\sauth\s*:/i.test(baseUrl) && !HAS_JWT.test(baseUrl)) return values
 
-  const parsed = parseConnectionPaste(`url: ${baseUrl}${values.bearerToken ? '' : ''} auth: ${values.bearerToken ?? ''}`)
+  const parsed = parseConnectionPaste(`url: ${baseUrl} auth: ${values.bearerToken ?? ''}`)
   if (!parsed?.baseUrl) return values
+  const token = parsed.bearerToken || parsed.customHeaderValue || ''
 
   return {
     ...values,
     baseUrl: parsed.baseUrl,
-    resourcePath: parsed.resourcePath ?? values.resourcePath ?? '/',
-    authMethod: parsed.bearerToken ? 'bearer' : values.authMethod ?? 'none',
-    bearerToken: parsed.bearerToken || values.bearerToken || '',
+    // The path only moves when the stuck URL carried one.
+    resourcePath: parsed.resourcePath && parsed.resourcePath !== '/' ? parsed.resourcePath : (values.resourcePath ?? '/'),
+    authMethod: token ? 'bearer' : (values.authMethod ?? 'none'),
+    bearerToken: token || values.bearerToken || '',
     bearerPrefix: values.bearerPrefix || 'Bearer',
   }
 }

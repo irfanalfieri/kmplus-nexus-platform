@@ -255,7 +255,7 @@ export const en = {
     credentialsFor: '{connector} connection',
     testing: 'Testing…',
     create: 'Create',
-    connectedFound: 'Connected. Found {count, plural, one {# object} other {# objects}} via {method}.',
+    connectedFound: 'Connected. Found {count, plural, one {# object} other {# objects}}.',
     fillRequired: 'Fill all required fields before testing.',
     fillBeforeSend: 'Fill the required fields before sending.',
     requestFailed: 'Request failed',

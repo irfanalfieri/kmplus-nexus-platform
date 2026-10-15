@@ -11,7 +11,7 @@ import {
   scanConnectorSchema,
   testConnectorConnection,
 } from '@/lib/connectors/runtime'
-import { parseRestConfig, previewRestRequest, type RestRequestPreview } from '@/lib/connectors/rest-client'
+import { parseRestConfig, previewRestRequest, redactRestRequest, type RestRequestPreview } from '@/lib/connectors/rest-client'
 import { restRequestDesign } from '@/lib/connectors/rest/agent-request'
 import { agentOf } from '@/lib/agent/server'
 import { resolveSalesforceAuth } from '@/lib/connectors/salesforce/oauth'
@@ -154,7 +154,8 @@ async function previewRestConnectionImpl(rawCredentials: ConnectorCredentials, r
     if (source.sourceType === 'rest' && agentOf(source)) {
       await assertConnectorInstalled('rest')
       const test = (await testSource(source, await resolveSecretRefs(workspaceId, restRequestDesign(credentials)))) as { ok: boolean; message: string; preview?: RestRequestPreview }
-      return test.preview ?? failedPreview(test.message)
+      // An older agent may send the request back unmasked.
+      return test.preview ? { ...test.preview, request: redactRestRequest(test.preview.request, parseRestConfig(credentials)) } : failedPreview(test.message)
     }
   }
   await assertConnectorInstalled('rest')

@@ -481,7 +481,7 @@ function AddSourceDialog({
         return
       }
       setScan(result.scan)
-      setMessage(isSecretManager(type) ? `${result.test.message} ${t('sources.secretsReady', { example: secretRef(name.trim() || 'Name', 'path/to/secret', 'field') })}` : t('sources.connectedFound', { count: result.scan.tables.length, method: result.scan.method }))
+      setMessage(isSecretManager(type) ? `${result.test.message} ${t('sources.secretsReady', { example: secretRef(name.trim() || 'Name', 'path/to/secret', 'field') })}` : t('sources.connectedFound', { count: result.scan.tables.length }))
       setTested(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : t('sources.testFailed'))

@@ -39,7 +39,9 @@ import { signPayload } from '@/lib/webhooks/deliver'
 import { assertConnectorUrl, isInternalHostName, isPrivateAddress, withPrivateNetworkAccess } from '@/lib/net/safe-url'
 import { signRequest, verifyRequestSignature } from '@/lib/net/request-signing'
 import { agentRestRequest, isWithinBaseUrl, mergeAgentRestRequest, publicEndpoint, restRequestDesign } from '@/lib/connectors/rest/agent-request'
-import { buildRestRequest, parseRestConfig, previewRestRequest } from '@/lib/connectors/rest-client'
+import { buildRestRequest, parseRestConfig, previewRestRequest, redactRestRequest } from '@/lib/connectors/rest-client'
+import { parseConnectionPaste, sanitizeRestCredentials } from '@/lib/connectors/rest/parse-connection'
+import { parseKeyValueList, serializeKeyValueList } from '@/lib/connectors/rest/key-value'
 import { compareVersions } from '@/lib/agent/protocol'
 import { CONNECTOR_CATALOG } from '@/lib/connectors/catalog'
 import { readdirSync, readFileSync as readGuideFile } from 'node:fs'
@@ -1207,6 +1209,53 @@ async function main() {
     assert.ok(matchesQuery('Install a **Nexus Agent** on a server', 'agent nexus'))
     assert.ok(matchesQuery('Pengelola rahasia', 'RAHASIA'))
     assert.ok(!matchesQuery('Data sources', 'sources agent'))
+  })
+
+  await test('REST form: blank rows, URLs containing "auth", header case, masked previews', async () => {
+    // Stored key/value lists leave blank rows out (the editor keeps them on screen).
+    assert.equal(serializeKeyValueList([{ key: 'Accept', value: 'application/json', enabled: true }, { key: '', value: '', enabled: true }]), '[{"key":"Accept","value":"application/json","enabled":true}]')
+    assert.deepEqual(parseKeyValueList(serializeKeyValueList([])).map(({ key, value, enabled }) => ({ key, value, enabled })), [{ key: '', value: '', enabled: true }])
+
+    // A clean base URL that contains "auth" keeps its resource path (and the answer doesn't alternate).
+    const clean = { baseUrl: 'https://auth-api.example.com', resourcePath: '/v1/people', authMethod: 'bearer', bearerToken: 'tok' }
+    for (let i = 0; i < 3; i++) assert.deepEqual(sanitizeRestCredentials(clean), clean)
+    assert.equal(parseRestConfig(clean).resourcePath, '/v1/people')
+    // A token stuck in an old saved base URL is still moved out.
+    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.c2lnbmF0dXJl'
+    const fixed = sanitizeRestCredentials({ baseUrl: `https://hr.example.com/v2/people auth: ${jwt}`, resourcePath: '/' })
+    assert.equal(fixed.baseUrl, 'https://hr.example.com')
+    assert.equal(fixed.resourcePath, '/v2/people')
+    assert.equal(fixed.bearerToken, jwt)
+    // A pasted bare URL has no token, so the form keeps the sign-in already set.
+    assert.equal(parseConnectionPaste('https://api.example.com/v1/people')?.bearerToken, '')
+
+    // Headers are case-insensitive: the sign-in header replaces a typed one; a typed Content-Type wins.
+    const built = await buildRestRequest(parseRestConfig({
+      baseUrl: 'https://api.example.com',
+      resourcePath: '/people',
+      httpMethod: 'POST',
+      authMethod: 'bearer',
+      bearerToken: 'secret-token',
+      bodyType: 'json',
+      requestBody: '{"a":1}',
+      headersKv: JSON.stringify([{ key: 'authorization', value: 'old', enabled: true }, { key: 'content-type', value: 'application/vnd.api+json', enabled: true }]),
+    }))
+    assert.deepEqual(Object.keys(built.headers).filter((k) => k.toLowerCase() === 'authorization'), ['Authorization'])
+    assert.equal(built.headers.Authorization, 'Bearer secret-token')
+    assert.deepEqual(Object.entries(built.headers).filter(([k]) => k.toLowerCase() === 'content-type'), [['content-type', 'application/vnd.api+json']])
+
+    // Previews shown in the browser never carry sign-in values.
+    const masked = redactRestRequest(
+      { method: 'GET', url: 'https://api.example.com/people?key=abc123&unit=retail', headers: { Authorization: 'Bearer secret-token', 'X-Tenant': 'acme', Cookie: 'sid=1' } },
+      { authMethod: 'api_key', apiKeyHeader: 'key', apiKeyLocation: 'query', customHeaderName: '' },
+    )
+    assert.equal(masked.headers.Authorization, 'Bearer ••••')
+    assert.equal(masked.headers.Cookie, '••••')
+    assert.equal(masked.headers['X-Tenant'], 'acme')
+    assert.equal(masked.url, 'https://api.example.com/people?key=••••&unit=retail')
+    assert.equal(redactRestRequest({ method: 'GET', url: 'https://x.example.com/', headers: { auth: 'eyJ.token' } }, { authMethod: 'custom_header', apiKeyHeader: '', apiKeyLocation: 'header', customHeaderName: 'auth' }).headers.auth, '••••')
+    const failed = await previewRestRequest(parseRestConfig({ baseUrl: '', resourcePath: '/' }))
+    assert.equal(failed.ok, false)
   })
 
   console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`)

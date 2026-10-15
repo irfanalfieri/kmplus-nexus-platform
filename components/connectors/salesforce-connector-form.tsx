@@ -130,6 +130,7 @@ export default function SalesforceConnectorForm({ values, onChange, sourceId }: 
       <div className="space-y-1.5">
         <Label htmlFor={fid('authMethod')} className="text-xs text-muted-foreground">{t('connect.salesforce.authentication')}</Label>
         <Select
+          items={{ web_oauth: t('connect.salesforce.webOauth'), password: t('connect.salesforce.passwordLegacy') }}
           value={authMethod}
           onValueChange={(v) => v && onChange('authMethod', v)}
         >
@@ -146,7 +147,7 @@ export default function SalesforceConnectorForm({ values, onChange, sourceId }: 
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1.5">
           <Label htmlFor={fid('loginHost')} className="text-xs text-muted-foreground">{t('connect.salesforce.environment')}</Label>
-          <Select value={val(values, 'loginHost')} onValueChange={(v) => v && onChange('loginHost', v)}>
+          <Select items={{ login: t('connect.salesforce.production'), test: t('connect.salesforce.sandbox') }} value={val(values, 'loginHost')} onValueChange={(v) => v && onChange('loginHost', v)}>
             <SelectTrigger id={fid('loginHost')} className="w-full">
               <SelectValue />
             </SelectTrigger>

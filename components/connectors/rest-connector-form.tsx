@@ -27,6 +27,7 @@ import {
   parseConnectionPaste,
   sanitizeRestCredentials,
 } from '@/lib/connectors/rest/config'
+import { activePairs, parseKeyValueList } from '@/lib/connectors/rest/key-value'
 
 interface RestConnectorFormProps {
   values: Record<string, string>
@@ -81,12 +82,36 @@ export default function RestConnectorForm({
   const resolvedBodyType = scheme === 'graphql' ? 'graphql' : bodyType
 
   const base = agent ? (agent.endpoint ?? `<${agent.connection}>`) : val(values, 'baseUrl')
-  const fullUrlPreview = `${base.replace(/\/+$/, '')}${val(values, 'resourcePath').startsWith('/') ? '' : '/'}${val(values, 'resourcePath')}`
+  const query = activePairs(parseKeyValueList(val(values, 'paramsKv')))
+    .map((p) => `${encodeURIComponent(p.key.trim())}=${encodeURIComponent(p.value)}`)
+    .join('&')
+  const path = val(values, 'resourcePath')
+  const fullUrlPreview = `${base.replace(/\/+$/, '')}${path.startsWith('/') ? '' : '/'}${path}${query ? `${path.includes('?') ? '&' : '?'}${query}` : ''}`
+  const method = val(values, 'httpMethod')
   const [pasteBox, setPasteBox] = useState('')
   const [pasteHint, setPasteHint] = useState('')
   const uid = useId()
   const { t, formatNumber } = usePrefs()
   const fid = (key: string) => `${uid}-${key}`
+  const authItems = {
+    none: t('connect.rest.authMethods.none'),
+    api_key: t('connect.rest.authMethods.apiKey'),
+    bearer: t('connect.rest.authMethods.bearer'),
+    basic: t('connect.rest.authMethods.basic'),
+    custom_header: t('connect.rest.authMethods.customHeader'),
+    oauth2_client_credentials: t('connect.rest.authMethods.oauthClient'),
+    oauth2_password: t('connect.rest.authMethods.oauthPassword'),
+  }
+  const apiKeyLocationItems = { header: t('connect.rest.header'), query: t('connect.rest.queryParams') }
+  const schemeItems = { rest_json: 'REST / JSON', graphql: 'GraphQL', odata: 'OData' }
+  const bodyItems = { none: t('connect.rest.bodyNone'), json: 'JSON', raw: 'raw', urlencoded: 'x-www-form-urlencoded' }
+  const yesNoItems = { true: t('common.yes'), false: t('common.no') }
+  const paginationItems = {
+    none: t('connect.rest.paginationStyles.none'),
+    offset: t('connect.rest.paginationStyles.offset'),
+    page: t('connect.rest.paginationStyles.page'),
+    cursor: t('connect.rest.paginationStyles.cursor'),
+  }
 
   const applyPatch = useCallback(
     (patch: Record<string, string>) => {
@@ -104,34 +129,33 @@ export default function RestConnectorForm({
         setPasteHint(t('connect.rest.parseError'))
         return false
       }
+      const hasToken = Boolean(parsed.bearerToken || parsed.customHeaderValue)
       applyPatch({
-        baseUrl: parsed.baseUrl ?? val(values, 'baseUrl'),
-        resourcePath: parsed.resourcePath ?? val(values, 'resourcePath'),
-        authMethod: parsed.authMethod ?? 'bearer',
-        bearerToken: parsed.bearerToken ?? '',
-        bearerPrefix: parsed.bearerPrefix ?? 'Bearer',
-        ...(parsed.customHeaderName
+        ...(parsed.baseUrl ? { baseUrl: parsed.baseUrl } : {}),
+        ...(parsed.resourcePath ? { resourcePath: parsed.resourcePath } : {}),
+        // Only a pasted token changes the sign-in; a bare URL keeps the auth already set.
+        ...(hasToken
           ? {
-              customHeaderName: parsed.customHeaderName,
-              customHeaderValue: parsed.customHeaderValue ?? '',
+              authMethod: parsed.authMethod ?? 'bearer',
+              bearerToken: parsed.bearerToken ?? '',
+              bearerPrefix: parsed.bearerPrefix ?? 'Bearer',
+              ...(parsed.customHeaderName ? { customHeaderName: parsed.customHeaderName, customHeaderValue: parsed.customHeaderValue ?? '' } : {}),
             }
           : {}),
       })
-      setPasteHint(t('connect.rest.imported'))
+      setPasteHint(t(hasToken ? 'connect.rest.imported' : 'connect.rest.importedUrl'))
       return true
     },
-    [applyPatch, values, t]
+    [applyPatch, t]
   )
 
   const handlePaste = (raw: string) => {
-    if (raw.includes('auth') || raw.includes('eyJ') || raw.match(/url\s*:/i)) {
-      importConnection(raw)
-    }
+    if (/(^|\n)\s*(url|auth|authorization)\s*:/i.test(raw) || raw.includes('eyJ')) importConnection(raw)
   }
 
   useEffect(() => {
     const baseUrl = val(values, 'baseUrl')
-    if (baseUrl.includes(' auth:') || (baseUrl.includes('eyJ') && baseUrl.startsWith('http'))) {
+    if (/\sauth\s*:/i.test(baseUrl) || (baseUrl.includes('eyJ') && baseUrl.startsWith('http'))) {
       const fixed = sanitizeRestCredentials(values)
       if (fixed.baseUrl !== baseUrl) {
         applyPatch(fixed)
@@ -152,7 +176,7 @@ export default function RestConnectorForm({
         <textarea
           id={fid('quickImport')}
           className={`min-h-[72px] ${textareaClass} text-[11px]`}
-          placeholder={`url: https://developmentplan-service-portaverse.pelindo.co.id/tms/v2/event-talent/ninebox\nauth: eyJhbGci…`}
+          placeholder={`url: https://api.example.com/v1/employees\nauth: eyJhbGci…`}
           value={pasteBox}
           onChange={(e) => setPasteBox(e.target.value)}
           onPaste={(e) => {
@@ -201,8 +225,11 @@ export default function RestConnectorForm({
             value={val(values, 'baseUrl')}
             onChange={(e) => onChange('baseUrl', e.target.value)}
             onPaste={(e) => {
+              // A full URL (or url: + auth: lines) splits into host and path; a bare host pastes as typed.
               const text = e.clipboardData.getData('text')
-              if (text.includes('auth') || text.includes('eyJ') || text.includes('/tms/')) {
+              const parsed = parseConnectionPaste(text)
+              const hasPath = Boolean(parsed?.resourcePath && parsed.resourcePath !== '/')
+              if (parsed?.baseUrl && (hasPath || parsed.bearerToken || parsed.customHeaderValue)) {
                 e.preventDefault()
                 importConnection(text)
               }
@@ -253,8 +280,8 @@ export default function RestConnectorForm({
 
         <TabsContent value="auth" className="mt-3 space-y-3 rounded-lg border border-border p-3">
           <Field id={fid('authMethod')} label={t('connect.rest.type')}>
-            <Select value={authMethod} onValueChange={(v) => v && onChange('authMethod', v)}>
-              <SelectTrigger id={fid('authMethod')}>
+            <Select items={authItems} value={authMethod} onValueChange={(v) => v && onChange('authMethod', v)}>
+              <SelectTrigger id={fid('authMethod')} className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -274,10 +301,11 @@ export default function RestConnectorForm({
               <div className="grid grid-cols-2 gap-3">
                 <Field id={fid('apiKeyLocation')} label={t('connect.rest.addTo')}>
                   <Select
+                    items={apiKeyLocationItems}
                     value={val(values, 'apiKeyLocation')}
                     onValueChange={(v) => v && onChange('apiKeyLocation', v)}
                   >
-                    <SelectTrigger id={fid('apiKeyLocation')}>
+                    <SelectTrigger id={fid('apiKeyLocation')} className="w-full">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -375,8 +403,8 @@ export default function RestConnectorForm({
 
         <TabsContent value="body" className="mt-3 space-y-3 rounded-lg border border-border p-3">
           <Field id={fid('integrationScheme')} label={t('connect.rest.integrationScheme')}>
-            <Select value={scheme} onValueChange={(v) => v && onChange('integrationScheme', v)}>
-              <SelectTrigger id={fid('integrationScheme')}>
+            <Select items={schemeItems} value={scheme} onValueChange={(v) => v && onChange('integrationScheme', v)}>
+              <SelectTrigger id={fid('integrationScheme')} className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -389,8 +417,8 @@ export default function RestConnectorForm({
 
           {scheme !== 'graphql' && (
             <Field id={fid('bodyType')} label={t('connect.rest.bodyType')}>
-              <Select value={bodyType} onValueChange={(v) => v && onChange('bodyType', v)}>
-                <SelectTrigger id={fid('bodyType')}>
+              <Select items={bodyItems} value={bodyType} onValueChange={(v) => v && onChange('bodyType', v)}>
+                <SelectTrigger id={fid('bodyType')} className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -401,6 +429,12 @@ export default function RestConnectorForm({
                 </SelectContent>
               </Select>
             </Field>
+          )}
+
+          {resolvedBodyType !== 'none' && resolvedBodyType !== 'graphql' && (method === 'GET' || method === 'HEAD') && (
+            <Notice tone="warning" live={false}>
+              {t('connect.rest.bodyIgnored', { method })}
+            </Notice>
           )}
 
           {resolvedBodyType === 'graphql' && (
@@ -488,8 +522,8 @@ export default function RestConnectorForm({
           </div>
           {!agent && (
           <Field id={fid('followRedirects')} label={t('connect.rest.followRedirects')}>
-            <Select value={val(values, 'followRedirects')} onValueChange={(v) => v && onChange('followRedirects', v)}>
-              <SelectTrigger id={fid('followRedirects')}>
+            <Select items={yesNoItems} value={val(values, 'followRedirects')} onValueChange={(v) => v && onChange('followRedirects', v)}>
+              <SelectTrigger id={fid('followRedirects')} className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -505,8 +539,8 @@ export default function RestConnectorForm({
               {t('connect.rest.pagination')}
             </h3>
             <Field id={fid('paginationStyle')} label={t('connect.rest.style')}>
-              <Select value={val(values, 'paginationStyle')} onValueChange={(v) => v && onChange('paginationStyle', v)}>
-                <SelectTrigger id={fid('paginationStyle')}>
+              <Select items={paginationItems} value={val(values, 'paginationStyle')} onValueChange={(v) => v && onChange('paginationStyle', v)}>
+                <SelectTrigger id={fid('paginationStyle')} className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -572,6 +606,12 @@ export default function RestConnectorForm({
               <span className="truncate font-mono text-xs text-muted-foreground">{preview.response.contentType}</span>
             )}
           </div>
+          {preview.request.url && preview.response.status > 0 && (
+            <p className="border-b border-border bg-card px-3 py-1.5 font-mono text-[11px] break-all text-muted-foreground">
+              <span className="sr-only">{t('connect.rest.sentRequest')}: </span>
+              <span className="font-semibold text-foreground">{preview.request.method}</span> {preview.request.url}
+            </p>
+          )}
           <div className="max-h-48 overflow-auto bg-card p-3 font-mono text-xs text-foreground">
             <pre className="whitespace-pre-wrap break-all">{preview.response.bodyPreview || preview.message}</pre>
           </div>

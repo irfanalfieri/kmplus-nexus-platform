@@ -6,7 +6,7 @@ import {
   type KeyValuePair,
 } from './rest/key-value'
 import { applyVariables, parseVariablesJson } from './rest/variables'
-import { parseJsonObject, type RestConfig, type RestIntegrationScheme, type RestRequestPreview } from './rest/config'
+import { parseJsonObject, redactRestRequest, type RestConfig, type RestIntegrationScheme, type RestRequestPreview } from './rest/config'
 import { connectorFetch, type ConnectorFetchOptions } from '@/lib/net/safe-url'
 import { isWithinBaseUrl } from './rest/agent-request'
 
@@ -128,6 +128,12 @@ async function buildAuthHeaders(
   }
 }
 
+/** Sets a header, dropping any other spelling of the same name (headers are case-insensitive). */
+function setHeader(headers: Record<string, string>, name: string, value: string) {
+  for (const key of Object.keys(headers)) if (key.toLowerCase() === name.toLowerCase()) delete headers[key]
+  headers[name] = value
+}
+
 function schemeAcceptHeader(scheme: RestIntegrationScheme) {
   if (scheme === 'odata') return 'application/json;odata.metadata=minimal'
   return 'application/json'
@@ -227,10 +233,13 @@ export async function buildRestRequest(config: RestConfig, paginationOverrides?:
     headers.Accept = schemeAcceptHeader(config.integrationScheme)
   }
 
-  Object.assign(headers, authHeaders)
+  // Sign-in headers replace a same-named header typed in the Headers tab (any case),
+  // so fetch never joins two values ("Bearer a, Bearer b").
+  for (const [name, value] of Object.entries(authHeaders)) setHeader(headers, name, value)
 
   const { body, contentType } = resolveBody(config, variables)
-  if (contentType) headers['Content-Type'] = contentType
+  // A Content-Type typed in the Headers tab wins over the body type's default.
+  if (contentType && !Object.keys(headers).some((k) => k.toLowerCase() === 'content-type')) headers['Content-Type'] = contentType
 
   const method =
     config.integrationScheme === 'graphql' || config.bodyType === 'graphql'
@@ -377,12 +386,15 @@ export async function previewRestRequest(config: RestConfig): Promise<RestReques
       message: ok
         ? `${result.response.status} ${result.response.statusText} · ${result.durationMs}ms`
         : `Expected ${config.validateStatus}, got ${result.response.status}`,
-      request: {
-        method: result.method,
-        url: result.url,
-        headers: result.headers,
-        bodyPreview: result.bodyPreview,
-      },
+      request: redactRestRequest(
+        {
+          method: result.method,
+          url: result.url,
+          headers: result.headers,
+          bodyPreview: result.bodyPreview,
+        },
+        config
+      ),
       response: {
         status: result.response.status,
         statusText: result.response.statusText,

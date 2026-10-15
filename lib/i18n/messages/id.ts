@@ -252,7 +252,7 @@ export const id: Messages = {
     credentialsFor: 'Koneksi {connector}',
     testing: 'Menguji…',
     create: 'Buat',
-    connectedFound: 'Terhubung. Ditemukan {count} objek melalui {method}.',
+    connectedFound: 'Terhubung. Ditemukan {count} objek.',
     fillRequired: 'Isi semua kolom wajib sebelum menguji.',
     fillBeforeSend: 'Isi kolom wajib sebelum mengirim.',
     requestFailed: 'Permintaan gagal',

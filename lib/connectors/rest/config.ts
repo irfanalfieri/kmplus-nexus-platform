@@ -165,6 +165,41 @@ export const REST_DEFAULTS: RestConfig = {
   signingSecret: '',
 }
 
+const SECRET_MASK = '••••'
+const ALWAYS_SECRET_HEADERS = ['authorization', 'proxy-authorization', 'cookie', 'x-nexus-signature']
+
+/**
+ * The request part of a preview, safe to show in the browser: sign-in header
+ * values and an API key in the query string are masked ("Bearer ••••"). The
+ * preview runs with stored or secrets-manager values the browser must never see.
+ */
+export function redactRestRequest(request: RestRequestPreview['request'], config: Pick<RestConfig, 'authMethod' | 'apiKeyHeader' | 'apiKeyLocation' | 'customHeaderName'>): RestRequestPreview['request'] {
+  const secretHeaders = new Set(ALWAYS_SECRET_HEADERS)
+  if (config.authMethod === 'api_key' && config.apiKeyLocation === 'header') secretHeaders.add((config.apiKeyHeader || 'X-API-Key').toLowerCase())
+  if (config.authMethod === 'custom_header' && config.customHeaderName.trim()) secretHeaders.add(config.customHeaderName.trim().toLowerCase())
+  const headers = Object.fromEntries(
+    Object.entries(request.headers ?? {}).map(([name, value]) => {
+      if (!secretHeaders.has(name.toLowerCase())) return [name, value]
+      const scheme = /^(Bearer|Basic|Token|Bot)\s+/i.exec(value)?.[0] ?? ''
+      return [name, `${scheme}${SECRET_MASK}`]
+    })
+  )
+  let url = request.url
+  if (config.authMethod === 'api_key' && config.apiKeyLocation === 'query' && url) {
+    try {
+      const parsed = new URL(url)
+      const param = config.apiKeyHeader || 'api_key'
+      if (parsed.searchParams.has(param)) {
+        parsed.searchParams.set(param, SECRET_MASK)
+        url = parsed.toString().replaceAll(encodeURIComponent(SECRET_MASK), SECRET_MASK)
+      }
+    } catch {
+      /* not a URL: leave it */
+    }
+  }
+  return { ...request, headers, url }
+}
+
 export function parseJsonObject(raw: string, label: string): Record<string, string> {
   if (!raw.trim()) return {}
   try {

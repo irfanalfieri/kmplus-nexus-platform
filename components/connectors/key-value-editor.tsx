@@ -1,15 +1,11 @@
 'use client'
 
+import { useRef, useState } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useT } from '@/components/i18n/i18n-provider'
-import {
-  EMPTY_KV,
-  parseKeyValueList,
-  serializeKeyValueList,
-  type KeyValuePair,
-} from '@/lib/connectors/rest/key-value'
+import { parseKeyValueList, serializeKeyValueList, type KeyValuePair } from '@/lib/connectors/rest/key-value'
 
 interface KeyValueEditorProps {
   value: string
@@ -23,6 +19,14 @@ interface KeyValueEditorProps {
   valueLabel?: string
 }
 
+type Row = KeyValuePair & { id: number }
+
+/**
+ * Rows of key / value pairs (query params, headers, form fields). The rows on
+ * screen live here, so a new blank row stays until it is filled or removed;
+ * the stored value (`serializeKeyValueList`) leaves blank rows out. When the
+ * value changes from outside (a pasted connection, a reset), the rows follow it.
+ */
 export default function KeyValueEditor({
   value,
   onChange,
@@ -35,27 +39,33 @@ export default function KeyValueEditor({
   const t = useT()
   const keyPlaceholder = keyPlaceholderProp ?? t('connect.kv.key')
   const valuePlaceholder = valuePlaceholderProp ?? t('connect.kv.value')
-  const pairs = parseKeyValueList(value)
   const keyName = keyLabel ?? t('connect.kv.keyName', { name: keyPlaceholder })
   const valueName =
     valueLabel ?? (valuePlaceholder === t('connect.kv.value') ? t('connect.kv.valueName', { name: keyPlaceholder }) : valuePlaceholder)
   const rowName = keyPlaceholder.toLowerCase()
 
-  const update = (next: KeyValuePair[]) => {
-    onChange(serializeKeyValueList(next))
+  const nextId = useRef(0)
+  const withIds = (pairs: KeyValuePair[]): Row[] => pairs.map((p) => ({ ...p, id: nextId.current++ }))
+  const serialize = (list: Row[]) => serializeKeyValueList(list.map(({ id: _id, ...pair }) => pair))
+  const [rows, setRows] = useState<Row[]>(() => withIds(parseKeyValueList(value)))
+  // The value this editor last reported: anything else came from outside.
+  const [reported, setReported] = useState(value)
+  if (value !== reported) {
+    setReported(value)
+    if (value !== serialize(rows)) setRows(withIds(parseKeyValueList(value)))
   }
 
-  const setPair = (index: number, patch: Partial<KeyValuePair>) => {
-    const next = pairs.map((p, i) => (i === index ? { ...p, ...patch } : p))
-    update(next)
+  const update = (next: Row[]) => {
+    const rowsToShow = next.length ? next : withIds([{ key: '', value: '', enabled: true }])
+    setRows(rowsToShow)
+    const serialized = serialize(rowsToShow)
+    setReported(serialized)
+    if (serialized !== value) onChange(serialized)
   }
 
-  const addRow = () => update([...pairs, { key: '', value: '', enabled: true }])
-
-  const removeRow = (index: number) => {
-    const next = pairs.filter((_, i) => i !== index)
-    update(next.length ? next : EMPTY_KV)
-  }
+  const setPair = (id: number, patch: Partial<KeyValuePair>) => update(rows.map((r) => (r.id === id ? { ...r, ...patch } : r)))
+  const addRow = () => update([...rows, ...withIds([{ key: '', value: '', enabled: true }])])
+  const removeRow = (id: number) => update(rows.filter((r) => r.id !== id))
 
   return (
     <div className="space-y-2">
@@ -65,14 +75,14 @@ export default function KeyValueEditor({
         <span>{valuePlaceholder}</span>
         <span />
       </div>
-      {pairs.map((pair, index) => {
+      {rows.map((pair, index) => {
         const n = index + 1
         return (
-          <div key={index} className="grid grid-cols-[24px_1fr_1fr_32px] items-center gap-2">
+          <div key={pair.id} className="grid grid-cols-[24px_1fr_1fr_32px] items-center gap-2">
             <input
               type="checkbox"
               checked={pair.enabled}
-              onChange={(e) => setPair(index, { enabled: e.target.checked })}
+              onChange={(e) => setPair(pair.id, { enabled: e.target.checked })}
               className="size-4 rounded border-input accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
               aria-label={t('connect.kv.sendRow', { name: rowName, n })}
             />
@@ -81,14 +91,14 @@ export default function KeyValueEditor({
               placeholder={keyPlaceholder}
               aria-label={t('connect.kv.fieldRow', { label: keyName, n })}
               value={pair.key}
-              onChange={(e) => setPair(index, { key: e.target.value })}
+              onChange={(e) => setPair(pair.id, { key: e.target.value })}
             />
             <Input
               className="h-8 font-mono text-xs"
               placeholder={valuePlaceholder}
               aria-label={t('connect.kv.fieldRow', { label: valueName, n })}
               value={pair.value}
-              onChange={(e) => setPair(index, { value: e.target.value })}
+              onChange={(e) => setPair(pair.id, { value: e.target.value })}
               type={valuePlaceholder.toLowerCase().includes('secret') ? 'password' : 'text'}
             />
             <Button
@@ -96,7 +106,7 @@ export default function KeyValueEditor({
               size="icon"
               variant="ghost"
               className="shrink-0"
-              onClick={() => removeRow(index)}
+              onClick={() => removeRow(pair.id)}
               aria-label={t('connect.kv.removeRow', { name: rowName, n })}
             >
               <Trash2 className="size-3.5" aria-hidden />
@@ -107,7 +117,7 @@ export default function KeyValueEditor({
                 placeholder={t('connect.kv.description')}
                 aria-label={t('connect.kv.descriptionRow', { name: rowName, n })}
                 value={pair.description ?? ''}
-                onChange={(e) => setPair(index, { description: e.target.value })}
+                onChange={(e) => setPair(pair.id, { description: e.target.value })}
               />
             )}
           </div>
