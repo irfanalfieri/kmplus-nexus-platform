@@ -206,6 +206,10 @@ function describeNode(n: PipelineNode): string {
       return `groups by ${[...n.groupBy, ...(n.timeGrain ? [`${n.timeGrain.column}/${n.timeGrain.grain}`] : [])].join(', ') || 'all rows'}: ${n.measures.map((m) => `${m.name}=${m.fn}(${m.column})${m.condition ? ' where …' : ''}`).join('; ')}`.slice(0, 1500)
     case 'dedupe':
       return `one row per ${n.keys.join(', ')}, keeps the ${n.keep.replace('_', ' ')}${n.recentBy ? ` by ${n.recentBy}` : ''}`
+    case 'enrich':
+      return `asks ${n.method} ${n.path} (${n.mode}) for ${n.answer.fields.map((f) => f.as).join(', ') || 'nothing yet'}`
+    case 'apicall':
+      return `changes data: ${n.create.method} ${n.create.path}${n.update ? `, update ${n.update.method} ${n.update.path}` : ''}; keeps ${n.answer.fields.map((f) => f.as).join(', ') || 'no answer values'}`
     case 'destination':
       return n.kind === 'dataset' ? `dataset ${n.datasetName} (${n.mode})` : n.kind === 'api' ? `API request ${n.method} ${n.path}` : `table ${n.table} (${n.mode})`
   }

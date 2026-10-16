@@ -251,7 +251,7 @@ export const helpEn: HelpContent = {
     {
       id: 'pipelines',
       title: 'Build pipelines',
-      summary: 'Templates, the editor, steps, several sources with Join and Union, Aggregate and Deduplicate, checks, destinations, publishing, schedules, approvals, and environments with promotion.',
+      summary: 'Templates, the editor, steps, several sources with Join and Union, Aggregate and Deduplicate, API calls, checks, destinations, publishing, schedules, approvals, and environments with promotion.',
       screen: 'pipelines',
       sections: [
         {
@@ -273,6 +273,8 @@ export const helpEn: HelpContent = {
                 ['Union', 'Stacks the rows of several sources, e.g. two HR systems, and records which one each row came from.'],
                 ['Aggregate', 'One row per group with counts, sums, averages and more, e.g. headcount per unit per month.'],
                 ['Deduplicate', 'Keeps one row per key, e.g. the latest record of each employee, and lists the rest in Data quality.'],
+                ['Enrich', 'Asks an API about each row and adds the values it returns, e.g. grade and allowance from the HR API.'],
+                ['Change data (API)', 'Creates or updates a record in another system for each row, e.g. a user account, and continues with the id it returns.'],
                 ['Destination', 'Writes to a dataset or to a destination data source such as a KMPlus product.'],
               ],
             },
@@ -301,7 +303,7 @@ export const helpEn: HelpContent = {
             {
               kind: 'list',
               items: [
-                '**Add after the selected step** on the left inserts Filter, Map & transform, Validate, Business rules, Router, Join, Union, Aggregate, Deduplicate or Destination steps; **Source** adds another source to combine.',
+                '**Add after the selected step** on the left inserts Filter, Map & transform, Validate, Business rules, Router, Join, Union, Aggregate, Deduplicate, Enrich, Change data or Destination steps; **Source** adds another source to combine.',
                 'Select a step to edit it on the right; **Next steps** connects it to the following steps (a Router has one per branch).',
                 '**Run settings** sets retries, timeout, batch size, the quarantine threshold and when to alert (never, on failure, or on failure or held rows).',
                 '**Schedule** sets when the published version runs (see Schedules and triggers).',
@@ -362,6 +364,35 @@ export const helpEn: HelpContent = {
                 '**Test on sample** aggregates the sample only; the test says so.',
               ],
             },
+          ],
+        },
+        {
+          id: 'api-steps',
+          title: 'API calls inside a pipeline',
+          blocks: [
+            { kind: 'p', text: 'Two steps call a REST API data source with its sign-in, headers and network settings. **Enrich** only reads; **Change data (API)** creates or updates records in the other system and is drawn as an outward action on the canvas.' },
+            {
+              kind: 'table',
+              head: ['Enrich setting', 'What it does'],
+              rows: [
+                ['Requests', 'One per row (`GET /employees/{{employee_code}}/details`), or a batch: the keys in a query parameter (`?codes=E1,E2`) or in a POST body list, with the answer field that names each item’s key.'],
+                ['Values from the answer', 'Paste an example answer or **Send test call**, pick the values you need, name the new columns and set their types. A list in the answer gives one row per item (rows can multiply), the first item, or JSON lists.'],
+                ['No answer', '404 or no item for the key: keep the row with empty values, drop it, or quarantine it. Other refusals (4xx) are quarantined with the API’s reason; 5xx and 429 are retried.'],
+                ['Cache', 'Answers are kept between runs (24 hours by default, at most 7 days; “not found” for an hour). Only the picked values are kept, encrypted. **Clear cache** asks again; a changed mapping asks again too.'],
+                ['Limits', 'Requests per second, how many at once, and a timeout. A run makes at most 50,000 calls to a data source; an admin can raise that in the step.'],
+              ],
+            },
+            {
+              kind: 'list',
+              items: [
+                '**Change data (API)**: a create request (POST, PUT or PATCH; no DELETE) and, optionally, an update request used when a record created before has changed data. Its path can use values the create answer returned, e.g. `/users/{{user_id}}`.',
+                'Each record is created once: a call ledger remembers every successful call by the key columns, so a retry, a resumed run or a replay never creates it again. Every call also carries an **Idempotency-Key**.',
+                'A later step failing does not undo a change already made in the other system; fix the problem and run again.',
+                '**Test on sample** sends nothing for this step (a dry run). **Send one test call** creates the record for real after you confirm it, and records it.',
+                'A pipeline with this step always needs a second person’s approval when your workspace approves destructive changes.',
+              ],
+            },
+            { kind: 'note', tone: 'info', text: 'Test on sample asks an Enrich step’s API for the first 5 requests only; the other sample rows show empty values. For APIs inside your network, the Nexus Agent (1.4.0 or later) sends the calls.' },
           ],
         },
         {
@@ -1001,6 +1032,8 @@ export const helpEn: HelpContent = {
     { id: 'join-incremental', group: 'pipelines', q: 'Can an incremental pipeline use a Join?', a: 'Yes. The looked-up sources are read in full every run, so new rows of the driver always find their partners. But a change only on the looked-up side (a new salary) reaches an employee only when that employee’s row is read again: use a full read when that matters, or reset the sync position.' },
     { id: 'dedupe-which', group: 'pipelines', q: 'An employee appears twice in the source. Which record is kept?', a: 'Add a **Deduplicate** step on the employee key. By default it keeps the most recent record by a date column such as `updated_at`; you can keep the first or last one read instead. Each removed record is listed in Data quality, naming the one kept. Duplicates across runs are handled by an upsert destination with the same key.' },
     { id: 'aggregate-incremental', group: 'pipelines', q: 'Why can’t an Aggregate read incrementally?', a: 'An incremental read only brings new or changed rows, so a headcount would count just those. Set the sources feeding the Aggregate to **Full**; if they are large, schedule the pipeline less often.' },
+    { id: 'api-duplicates', group: 'pipelines', q: 'Can a retried run create an account twice in the other system?', a: 'Not with a **Change data (API)** step: every successful call is recorded by the row’s key before anything else happens, so a retry, a resumed run or a replay skips it. Each call also carries an Idempotency-Key; only an API that ignores that key could, very rarely, see a repeat when Nexus stops right after a call.' },
+    { id: 'api-cache', group: 'pipelines', q: 'Why didn’t an Enrich step pick up a change in the API?', a: 'Its answers are cached (24 hours by default). Lower the cache time, or press **Clear cache** in the step; the next run asks the API again.' },
     { id: 'deleted-employees', group: 'pipelines', q: 'How are people who left the company handled?', a: 'With an upsert destination and **Mark rows missing from the source as deleted**, rows that disappear from the source are marked deleted instead of removed. Reads exclude them; the history stays.' },
     { id: 'env-why', group: 'environments', q: 'Why use Development, Staging and Production?', a: 'To change pipelines without risking production data. Build against test data in Development, check the result with production-like data in Staging, and promote only what works to Production, which can’t be edited directly.' },
     { id: 'env-sources', group: 'environments', q: 'Does a promoted pipeline read Development’s database in Production?', a: 'No. Data sources are matched **by name**, and each environment has its own source with its own credentials. Give the source the same name in every environment; a missing one blocks the promotion.' },

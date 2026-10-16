@@ -19,6 +19,8 @@ export function localizeStepTitle(text: string, t: Translate): string {
   if (text === 'Aggregate by all rows') return t('editor.stepTitle.aggregateAll')
   if ((m = /^Aggregate by (.+)$/.exec(text))) return t('editor.stepTitle.aggregate', { groups: m[1] })
   if ((m = /^Deduplicate on (.+)$/.exec(text))) return t('editor.stepTitle.dedupe', { keys: m[1] })
+  if ((m = /^Enrich from (.+)$/.exec(text))) return t('editor.stepTitle.enrich', { request: m[1] })
+  if ((m = /^Call (.+)$/.exec(text))) return t('editor.stepTitle.apicall', { request: m[1] })
   if ((m = /^Write dataset (.+)$/.exec(text))) return t('editor.stepTitle.destinationDataset', { name: m[1] })
   if ((m = /^Write (.+)$/.exec(text))) return t('editor.stepTitle.destinationTable', { name: m[1] })
   return text

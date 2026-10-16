@@ -191,6 +191,7 @@ export const ws: Messages['ws'] = {
       ENABLE: 'Aktifkan',
       DISABLE: 'Nonaktifkan',
       RESET_SYNC: 'Atur ulang posisi sinkronisasi',
+      CACHE_CLEAR: 'Hapus cache API',
       INSTALL: 'Pasang connector',
       PURCHASE: 'Pembelian',
       UNINSTALL: 'Copot connector',

@@ -11,6 +11,10 @@ import type { AddressInfo } from 'node:net'
  *   POST /employees/batch         { batch_id, records: [{ code, email }] } → 200 { errors: [{ index, message }] } for records without email
  *   POST /echo                    anything (JSON, form, XML)           → 200 { received: <bytes> }
  *   GET  /payroll                 → 200 { items: payroll }  (a listing a pipeline reads as a source; set `payroll`)
+ *   GET  /details?codes=E1,E2     → 200 { items: [{ code, grade, allowance }] } for the codes in `details` (Enrich, batch)
+ *   GET  /employees/:code/details → 200 { data: { grade, allowance } }, 404 when unknown (Enrich, per row)
+ *   POST /users                   { email, name } → 201 { user: { id } }; 422 without a name (Changes data; `users`, `created` per email)
+ *   PUT  /users/:id               { email, name } → 200 { user: { id } }
  *
  * Every route needs `Authorization: Bearer <token>` (401 otherwise).
  * `failNext(n, status, retryAfter, skip)` answers n requests (after `skip` normal ones) with `status`.
@@ -28,6 +32,10 @@ export async function startRestWriteMock(token = 'rest-token', port = 0) {
   const received: ReceivedRequest[] = []
   const employees = new Map<string, Record<string, unknown>>()
   const payroll: Record<string, unknown>[] = []
+  const details = new Map<string, Record<string, unknown>>()
+  const users = new Map<string, { id: string; email: string; name: string }>()
+  /** Creates per email: more than 1 is a duplicate. */
+  const created = new Map<string, number>()
   let failing: { skip: number; left: number; status: number; retryAfter?: string } | null = null
 
   const server = createServer((req, res) => {
@@ -57,6 +65,30 @@ export async function startRestWriteMock(token = 'rest-token', port = 0) {
       }
       if (url.pathname === '/echo' && req.method === 'POST') return send(200, { received: raw.length })
       if (url.pathname === '/payroll' && req.method === 'GET') return send(200, { items: payroll })
+      if (url.pathname === '/details' && req.method === 'GET') {
+        const codes = (url.searchParams.get('codes') ?? '').split(',').filter(Boolean)
+        return send(200, { items: codes.flatMap((c) => (details.has(c) ? [{ code: c, ...details.get(c) }] : [])) })
+      }
+      const detail = /^\/employees\/([^/]+)\/details$/.exec(url.pathname)
+      if (detail && req.method === 'GET') {
+        const d = details.get(decodeURIComponent(detail[1]))
+        return d ? send(200, { data: d }) : send(404, { message: 'no such employee' })
+      }
+      if (url.pathname === '/users' && req.method === 'POST') {
+        const b = body as { email?: string; name?: string }
+        if (!b.name) return send(422, { message: `name is required for ${String(b.email)}` })
+        const id = `U${String(users.size + 1).padStart(4, '0')}`
+        users.set(id, { id, email: String(b.email), name: b.name })
+        created.set(String(b.email), (created.get(String(b.email)) ?? 0) + 1)
+        return send(201, { user: { id } })
+      }
+      const user = /^\/users\/([^/]+)$/.exec(url.pathname)
+      if (user && req.method === 'PUT') {
+        const u = users.get(decodeURIComponent(user[1]))
+        if (!u) return send(404, { message: 'no such user' })
+        Object.assign(u, body)
+        return send(200, { user: { id: u.id } })
+      }
       if (url.pathname === '/employees/batch' && req.method === 'POST') {
         const records = (body.records as Record<string, unknown>[] | undefined) ?? []
         const errors: { index: number; message: string }[] = []
@@ -90,6 +122,9 @@ export async function startRestWriteMock(token = 'rest-token', port = 0) {
     received,
     employees,
     payroll,
+    details,
+    users,
+    created,
     /** After `skip` normal answers, the next `count` requests get `status`. */
     failNext(count: number, status = 503, retryAfter?: string, skip = 0) {
       failing = { skip, left: count, status, retryAfter }
@@ -97,6 +132,9 @@ export async function startRestWriteMock(token = 'rest-token', port = 0) {
     reset() {
       received.length = 0
       employees.clear()
+      details.clear()
+      users.clear()
+      created.clear()
       failing = null
     },
     stop: () => new Promise<void>((r) => server.close(() => r())),

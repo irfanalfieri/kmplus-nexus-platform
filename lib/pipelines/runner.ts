@@ -9,6 +9,7 @@ import { runEngine, type EngineIO, type EngineResult } from './engine'
 import { NonRetryableError, datasetTableName, readRowsByKeys, readSourceRows, type StoredDataSource } from './io'
 import { loadRunContext } from './context'
 import { lanePlan } from './lanes'
+import { apiRuntime } from './api-runtime'
 
 /** Who a run belongs to: the workspace, and the user who triggered or owns it. */
 export interface RunScope {
@@ -98,9 +99,10 @@ export async function upsertDatasetRecord(
 /**
  * Dry run on a small sample: reads real data, runs every step, writes nothing.
  * Streamed sources read a sample; a Join's staged side reads only the rows of
- * the sample's keys where the source can filter, else up to 5,000 rows.
+ * the sample's keys where the source can filter, else up to 5,000 rows. Enrich
+ * calls the API for its first 5 requests; "Changes data" sends nothing.
  */
-export async function testRunDefinition(scope: RunScope, config: unknown, sampleSize = 25, state?: unknown): Promise<EngineResult> {
+export async function testRunDefinition(scope: RunScope, config: unknown, sampleSize = 25, state?: unknown, pipelineId: string | null = null): Promise<EngineResult> {
   const def = parseDefinition(config)
   const plan = lanePlan(def)
   const watermarks = currentWatermarks(def, state)
@@ -126,6 +128,8 @@ export async function testRunDefinition(scope: RunScope, config: unknown, sample
   let context: Awaited<ReturnType<typeof loadRunContext>>
   try {
     context = await loadRunContext(scope.workspaceId, def)
+    // Enrich asks the API for its first few requests only; "Changes data" is a dry run (nothing sent).
+    context.api = apiRuntime({ workspaceId: scope.workspaceId, pipelineId, mode: 'test', loadSource: (id) => sourceFor(id), counters: {} })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return { status: 'failed', steps: [], rejects: [], rejectedCount: 0, rowsRead: 0, rowsWritten: 0, columns: [], error: message, retryable: false }

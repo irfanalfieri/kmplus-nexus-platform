@@ -18,7 +18,7 @@ export const AGENT_PROTOCOL = 1
 /** Oldest agent that accepts REST requests designed in Nexus (intranet APIs). */
 export const MIN_AGENT_VERSION_FOR_REQUESTS = '1.2.0'
 /** Operations newer than the first agents: older agents are refused before a task is queued. */
-export const MIN_AGENT_VERSION_FOR_OP: Partial<Record<AgentOp, string>> = { apiWrite: '1.3.0' }
+export const MIN_AGENT_VERSION_FOR_OP: Partial<Record<AgentOp, string>> = { apiWrite: '1.3.0', apiCall: '1.4.0' }
 
 /** Compares dotted versions: negative when a < b. */
 export function compareVersions(a: string, b: string) {
@@ -40,7 +40,7 @@ export const AGENT_OFFLINE_AFTER_MS = 90_000
 /** Rows per write task (keeps request and response bodies small). */
 export const WRITE_BATCH_ROWS = 1000
 
-export const AGENT_OPS = ['test', 'scan', 'sample', 'readChunk', 'readRows', 'write', 'apiWrite', 'liveQuery', 'activeKeys', 'markDeleted', 'ai'] as const
+export const AGENT_OPS = ['test', 'scan', 'sample', 'readChunk', 'readRows', 'write', 'apiWrite', 'apiCall', 'liveQuery', 'activeKeys', 'markDeleted', 'ai'] as const
 export type AgentOp = (typeof AGENT_OPS)[number]
 
 /** Connector types an agent can serve (file uploads live in Nexus itself). */
@@ -83,6 +83,17 @@ export const payloadSchemas = {
     budgetMs: z.number().int().min(1000).max(600_000).default(170_000),
     /** "Send test request" from the editor: one row, one attempt; the answer comes back (ApiTestResult). */
     test: z.boolean().default(false),
+  }),
+  /** Enrich / "Changes data" steps (agent 1.4.0+): calls rendered by Nexus, sent by the agent with its sign-in; answers come back (also the ones before a failure). */
+  apiCall: z.object({
+    ...conn,
+    calls: z
+      .array(z.object({ method: z.enum(['GET', 'POST', 'PUT', 'PATCH']), path: z.string().min(1).max(4000), body: z.string().max(2_000_000).optional(), contentType: z.string().max(200).optional(), headers: z.record(z.string().max(100), z.string().max(500)).optional() }))
+      .max(1000),
+    options: z.object({ maxRequestsPerSecond: z.number().min(0.1).max(50), concurrency: z.number().int().min(1).max(4), timeoutSeconds: z.number().int().min(1).max(120) }),
+    /** "Changes data" calls need a writable connection; Enrich reads. */
+    writes: z.boolean().default(false),
+    budgetMs: z.number().int().min(1000).max(600_000).default(170_000),
   }),
   liveQuery: z.object({ ...conn, table: z.string().min(1).max(300), limit: z.number().int().min(1).max(10_000), timeoutMs: z.number().int().min(100).max(120_000), filters: z.array(z.object({ column: z.string(), value: z.string() })).max(10) }),
   /** Mark missing rows deleted, step 1: keys of rows not marked yet (one page). */

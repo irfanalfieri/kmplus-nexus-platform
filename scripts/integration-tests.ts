@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { and, eq, inArray, like } from 'drizzle-orm'
 import { db, pool } from '@/lib/db'
-import { agentTasks as agentTaskTable, agents as agentTable, apiKeys, apiRateLimits, auditLogs, businessRuleVersions, businessRules, catalogEntries, connectorInstalls, dashboards, dataSources, datasetPolicies, datasetQualitySnapshots, domainMappings, mappingTemplates, notifications, pipelineApprovals, scimGroups, scimTokens, scimUsers, ssoProvider, webhookDeliveries, webhooks, workspaceSso, executionLogs, nexusDatasets, pipelineJobs, pipelineRunRejects, pipelines, pipelineStageTables, pipelineVersions, session, user, verification, workspaceInvites, workspaceMembers, workspaces } from '@/lib/db/schema'
+import { agentTasks as agentTaskTable, agents as agentTable, apiCallCache, apiCallLedger, apiKeys, apiRateLimits, auditLogs, businessRuleVersions, businessRules, catalogEntries, connectorInstalls, dashboards, dataSources, datasetPolicies, datasetQualitySnapshots, domainMappings, mappingTemplates, notifications, pipelineApprovals, scimGroups, scimTokens, scimUsers, ssoProvider, webhookDeliveries, webhooks, workspaceSso, executionLogs, nexusDatasets, pipelineJobs, pipelineRunRejects, pipelines, pipelineStageTables, pipelineVersions, session, user, verification, workspaceInvites, workspaceMembers, workspaces } from '@/lib/db/schema'
 import { acceptInvite, changeMemberRole, createAccountFromInvite, createInvite, describeInvite, getWorkspaceContext, listMembers, resetMemberTwoFactor, switchWorkspace } from '@/lib/actions/workspaces'
 import { installConnector } from '@/lib/actions/connectors'
 import { createDataSource, deleteDataSource, getDataSources, getEditableCredentials, listSecretManagers, listSecretNames, renameDataSource, setDataSourceRole, testConnection, updateDataSourceCredentials } from '@/lib/actions/data-sources'
@@ -22,7 +22,7 @@ import { writeDataset } from '@/lib/pipelines/io'
 import { startKmplusMock } from './test/kmplus-mock'
 import { startRestWriteMock } from './test/rest-write-mock'
 import { autoBindBody, bodyLeaves, parseBodySample, setRowsArray, updateBodyNode } from '@/lib/pipelines/body-template'
-import { cancelPipelineRun, createWebhookTrigger, discardDraft, getBuilderOptions, getDatasetPreview, getRunStatus, listPipelines, listRuns, publishPipeline, retryPipelineRun, runPipelineNow, savePipeline, sendApiTestRequest, testPipeline } from '@/lib/actions/pipelines'
+import { cancelPipelineRun, createWebhookTrigger, discardDraft, getBuilderOptions, getDatasetPreview, getRunStatus, listPipelines, listRuns, publishPipeline, retryPipelineRun, runPipelineNow, savePipeline, sendApiTestRequest, testPipeline, clearStepCache } from '@/lib/actions/pipelines'
 import { createSamlProvider, createSsoProvider, deleteSsoProvider, listSsoProviders, setSamlIdp, updateSsoProvider, verifySsoDomain } from '@/lib/actions/sso'
 import { approveRequest, listApprovals, rejectRequest } from '@/lib/actions/approvals'
 import { listPromotionStatus, previewPromotion, promotePipeline, setApprovalPolicy, setupEnvironments, unlinkEnvironment } from '@/lib/actions/environments'
@@ -1282,6 +1282,135 @@ async function main() {
       }
     })
 
+    await test('API calls: Enrich of 5,000 rows uses the cache on the second run; create-then-continue survives a forced retry and a replay without a duplicate', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const prevFlag = process.env.NEXUS_ALLOW_PRIVATE_URLS
+      process.env.NEXUS_ALLOW_PRIVATE_URLS = 'true'
+      const api = await startRestWriteMock()
+      try {
+        const S = `"${FIXTURE_SCHEMA}"`
+        await pool.query(`CREATE TABLE ${S}.staff (id int PRIMARY KEY, code text)`)
+        await pool.query(`INSERT INTO ${S}.staff SELECT g, 'E' || lpad(g::text, 4, '0') FROM generate_series(1, 5000) g`)
+        // The HR API knows every employee except the last 40.
+        for (let g = 1; g <= 4960; g++) api.details.set(`E${String(g).padStart(4, '0')}`, { grade: `G${g % 9}`, allowance: g * 1000 })
+        const apiSource = await createDataSource({ name: `${RUN} HR details API`, type: 'rest', sourceType: 'rest', config: { role: 'source' }, credentials: { baseUrl: api.baseUrl, authMethod: 'bearer', bearerToken: api.token } })
+
+        const enrichDef = {
+          schemaVersion: 2,
+          nodes: [
+            { id: 's', type: 'source', position: { x: 0, y: 0 }, dataSourceId: sourceId, table: 'staff', maxRows: 100_000 },
+            { id: 'en', type: 'enrich', position: { x: 300, y: 0 }, dataSourceId: apiSource, method: 'GET', path: '/details', mode: 'query', keyColumn: 'code', queryParam: 'codes', matchField: 'code', batchSize: 100, maxRequestsPerSecond: 50, concurrency: 4,
+              answer: { listPath: 'items', fields: [{ path: 'grade', as: 'grade', type: 'text' }, { path: 'allowance', as: 'allowance', type: 'numeric' }] } },
+            { id: 'd', type: 'destination', position: { x: 600, y: 0 }, kind: 'dataset', datasetName: `${RUN}_staff_details`, mode: 'replace' },
+          ],
+          edges: [{ id: 'e1', from: 's', to: 'en' }, { id: 'e2', from: 'en', to: 'd' }],
+          settings: { retries: 0 },
+        }
+        const enrich = await savePipeline({ publish: true, name: `${RUN} enrich`, definition: enrichDef, schedule: { type: 'manual' } as never })
+        const runOnce = async (id: string) => {
+          const run = await runPipelineNow(id)
+          takeAfterCallbacks()
+          for (let i = 0; i < 10; i++) {
+            const [job] = await db.select({ status: pipelineJobs.status }).from(pipelineJobs).where(eq(pipelineJobs.id, run.runId))
+            if (job.status === 'done') break
+            await processJobs({})
+          }
+          const status = await getRunStatus(run.runId)
+          const details = (await db.select({ d: executionLogs.executionDetails }).from(executionLogs).where(eq(executionLogs.id, run.runId)))[0].d as { steps: { id: string; calls?: number; cached?: number }[]; log: { message: string }[] }
+          return { status, details, runId: run.runId }
+        }
+        const calls = () => api.received.filter((r) => r.path.startsWith('/details')).length
+        const first = await runOnce(enrich.id)
+        assert.equal(first.status.status, 'success', first.status.errorMessage ?? '')
+        assert.equal(calls(), 50, '5,000 keys in batches of 100')
+        assert.deepEqual([first.details.steps.find((s) => s.id === 'en')!.calls, first.details.steps.find((s) => s.id === 'en')!.cached], [50, 0])
+        const [ds] = await db.select().from(nexusDatasets).where(and(eq(nexusDatasets.workspaceId, adminWs), eq(nexusDatasets.name, `${RUN}_staff_details`)))
+        const { rows: sample } = await pool.query(`SELECT code, grade, allowance::numeric AS allowance FROM "nexus_data"."${ds.tableName}" WHERE code IN ('E0010', 'E4999') ORDER BY code`)
+        assert.deepEqual(sample.map((r) => [r.code, r.grade, Number(r.allowance) || null]), [['E0010', 'G1', 10000], ['E4999', null, null]], 'unknown employees kept with empty values')
+        const [cachedRow] = await db.select().from(apiCallCache).where(eq(apiCallCache.pipelineId, enrich.id)).limit(1)
+        assert.equal((cachedRow.value as { __enc?: string }).__enc, 'v2', 'cached answers are sealed')
+        assert.ok(!JSON.stringify(cachedRow.value).includes('allowance'), 'no plain values in the cache')
+
+        const second = await runOnce(enrich.id)
+        assert.equal(second.status.status, 'success')
+        assert.equal(calls(), 50, 'the second run asks the API nothing')
+        assert.deepEqual([second.details.steps.find((s) => s.id === 'en')!.calls, second.details.steps.find((s) => s.id === 'en')!.cached], [0, 5000])
+        assert.ok(second.details.log.some((l) => /5,000 of 5,000 from cache · 0 calls/.test(l.message)), 'the run log says how much came from the cache')
+        assert.equal((await clearStepCache(enrich.id, 'en')).removed, 5000)
+
+        // "Changes data": create each new hire's account, keep the returned id.
+        await pool.query(`CREATE TABLE ${S}.new_hires (id int PRIMARY KEY, email text, name text)`)
+        await pool.query(`INSERT INTO ${S}.new_hires SELECT g, 'hire' || g || '@kmplus.test', CASE WHEN g = 13 THEN '' ELSE 'Hire ' || g END FROM generate_series(1, 30) g`)
+        const usersApi = await createDataSource({ name: `${RUN} accounts API`, type: 'rest', sourceType: 'rest', config: { role: 'destination' }, credentials: { baseUrl: api.baseUrl, authMethod: 'bearer', bearerToken: api.token } })
+        const body = { format: 'json', template: { t: 'object', fields: [{ key: 'email', node: { t: 'value', binding: { kind: 'column', column: 'email' } } }, { key: 'name', node: { t: 'value', binding: { kind: 'column', column: 'name' } } }] } }
+        const callDef = (update: boolean) => ({
+          schemaVersion: 2,
+          nodes: [
+            { id: 's', type: 'source', position: { x: 0, y: 0 }, dataSourceId: sourceId, table: 'new_hires' },
+            { id: 'ac', type: 'apicall', position: { x: 300, y: 0 }, dataSourceId: usersApi, keys: ['email'], create: { method: 'POST', path: '/users', body }, ...(update ? { update: { method: 'PUT', path: '/users/{{user_id}}', body } } : {}),
+              answer: { fields: [{ path: 'user.id', as: 'user_id', type: 'text' }] }, maxRequestsPerSecond: 50 },
+            { id: 'd', type: 'destination', position: { x: 600, y: 0 }, kind: 'dataset', datasetName: `${RUN}_accounts`, mode: 'upsert', keys: ['email'] },
+          ],
+          edges: [{ id: 'e1', from: 's', to: 'ac' }, { id: 'e2', from: 'ac', to: 'd' }],
+          settings: { retries: 2, retryDelaySeconds: 5 },
+        })
+        const accounts = await savePipeline({ publish: true, name: `${RUN} accounts`, definition: callDef(false), schedule: { type: 'manual' } as never })
+        // Forced stop: after 10 accounts the API is down long enough for the chunk to fail.
+        api.failNext(4, 503, undefined, 10)
+        const run = await runPipelineNow(accounts.id)
+        takeAfterCallbacks()
+        await processJobs({ maxJobs: 1 })
+        const [job] = await db.select().from(pipelineJobs).where(eq(pipelineJobs.id, run.runId))
+        assert.equal(job.status, 'queued', 'the chunk failed and the run waits to retry from its checkpoint')
+        assert.equal(api.users.size, 10)
+        assert.equal((await db.select().from(apiCallLedger).where(eq(apiCallLedger.pipelineId, accounts.id))).length, 10, 'calls that went through are in the ledger')
+        await db.update(pipelineJobs).set({ availableAt: new Date() }).where(eq(pipelineJobs.id, run.runId))
+        for (let i = 0; i < 5; i++) {
+          const [j] = await db.select({ status: pipelineJobs.status }).from(pipelineJobs).where(eq(pipelineJobs.id, run.runId))
+          if (j.status === 'done') break
+          await processJobs({})
+        }
+        const done = await getRunStatus(run.runId)
+        assert.equal(done.status, 'partial', done.errorMessage ?? '')
+        assert.equal(api.users.size, 29, 'every account but the one without a name')
+        assert.ok([...api.created.values()].every((n) => n === 1), 'no account was created twice')
+        const idempotency = api.received.filter((r) => r.path === '/users').map((r) => r.idempotencyKey)
+        assert.ok(idempotency.every((k) => k && k.startsWith(`${accounts.id}:ac:`)), 'every call carries a stable idempotency key')
+        const { rows: written } = await pool.query(`SELECT email, user_id FROM "nexus_data"."${(await db.select().from(nexusDatasets).where(and(eq(nexusDatasets.workspaceId, adminWs), eq(nexusDatasets.name, `${RUN}_accounts`))))[0].tableName}" ORDER BY email`)
+        assert.equal(written.length, 29)
+        assert.ok(written.every((r) => /^U\d{4}$/.test(r.user_id)), 'the returned id continues to the dataset')
+
+        // The refused row (no name) is fixed and replayed: one more account, still no duplicates.
+        const [held] = (await listQuarantine({ pipelineId: accounts.id, kind: 'invalid' })).rows
+        assert.match(held.messages[0], /^POST \/users: The API refused the request \(HTTP 422\): name is required/)
+        await fixRow({ id: held.id, row: { ...held.row, name: 'Hire 13' } })
+        const [replay] = await replayRows([held.id])
+        takeAfterCallbacks()
+        await processJobs({})
+        assert.equal((await getRunStatus(replay.runId)).recordsSuccess, 1)
+        assert.equal(api.users.size, 30)
+        // A full run again: every record is known and unchanged, nothing is sent.
+        const before = api.received.length
+        await pool.query(`UPDATE ${S}.new_hires SET name = 'Hire 13' WHERE id = 13`)
+        const again = await runOnce(accounts.id)
+        assert.equal(again.status.status, 'success', again.status.errorMessage ?? '')
+        assert.equal(api.received.length, before, 'known records without an update request are skipped')
+        // With an update request, a changed name is sent once as PUT /users/<id from the create answer>.
+        await savePipeline({ id: accounts.id, publish: true, name: `${RUN} accounts`, definition: callDef(true), schedule: { type: 'manual' } as never })
+        await pool.query(`UPDATE ${S}.new_hires SET name = 'Renamed' WHERE id = 1`)
+        await runOnce(accounts.id)
+        const puts = api.received.slice(before).filter((r) => r.method === 'PUT')
+        assert.equal(puts.length, 1)
+        assert.ok([...api.users.values()].some((u) => u.name === 'Renamed'))
+        assert.ok([...api.created.values()].every((n) => n === 1), 'still no duplicates')
+      } finally {
+        await api.stop()
+        if (prevFlag === undefined) delete process.env.NEXUS_ALLOW_PRIVATE_URLS
+        else process.env.NEXUS_ALLOW_PRIVATE_URLS = prevFlag
+      }
+    })
+
     await test('TD-24: a full run supersedes older quarantine (fixes carry over); replays into a replace dataset replace by key', async () => {
       setTestUser(admin)
       await switchWorkspace(adminWs)
@@ -2002,7 +2131,7 @@ async function cleanup(userIds: string[]) {
   if (pipeIds.length) await db.delete(apiRateLimits).where(inArray(apiRateLimits.bucket, pipeIds))
   const sso = await db.select({ providerId: workspaceSso.providerId }).from(workspaceSso).where(inArray(workspaceSso.workspaceId, ws))
   if (sso.length) await db.delete(ssoProvider).where(inArray(ssoProvider.providerId, sso.map((x) => x.providerId)))
-  for (const t of [agentTaskTable, agentTable, pipelineApprovals, scimTokens, scimUsers, scimGroups, notifications, workspaceSso, webhookDeliveries, webhooks, mappingTemplates, datasetQualitySnapshots, apiKeys, catalogEntries, domainMappings, businessRuleVersions, businessRules, datasetPolicies, dashboards, nexusDatasets, pipelineRunRejects, executionLogs, pipelineStageTables, pipelineJobs, pipelineVersions, pipelines, dataSources, connectorInstalls, workspaceInvites, auditLogs, workspaceMembers]) {
+  for (const t of [agentTaskTable, agentTable, pipelineApprovals, scimTokens, scimUsers, scimGroups, notifications, workspaceSso, webhookDeliveries, webhooks, mappingTemplates, datasetQualitySnapshots, apiKeys, catalogEntries, domainMappings, businessRuleVersions, businessRules, datasetPolicies, dashboards, nexusDatasets, pipelineRunRejects, executionLogs, pipelineStageTables, apiCallCache, apiCallLedger, pipelineJobs, pipelineVersions, pipelines, dataSources, connectorInstalls, workspaceInvites, auditLogs, workspaceMembers]) {
     await db.delete(t).where(inArray(t.workspaceId, ws))
   }
   await db.delete(auditLogs).where(inArray(auditLogs.userId, userIds))

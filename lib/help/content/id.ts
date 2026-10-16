@@ -251,7 +251,7 @@ export const helpId: HelpContent = {
     {
       id: 'pipelines',
       title: 'Bangun pipeline',
-      summary: 'Templat, editor, langkah, beberapa sumber dengan Gabung dan Satukan, Agregasi dan Hapus duplikat, pemeriksaan, tujuan, penerbitan, jadwal, persetujuan, serta lingkungan dengan promosi.',
+      summary: 'Templat, editor, langkah, beberapa sumber dengan Gabung dan Satukan, Agregasi dan Hapus duplikat, panggilan API, pemeriksaan, tujuan, penerbitan, jadwal, persetujuan, serta lingkungan dengan promosi.',
       screen: 'pipelines',
       sections: [
         {
@@ -273,6 +273,8 @@ export const helpId: HelpContent = {
                 ['Satukan (union)', 'Menumpuk baris dari beberapa sumber, mis. dua sistem HR, dan mencatat asal setiap baris.'],
                 ['Agregasi', 'Satu baris per kelompok dengan jumlah, total, rata-rata, dan lainnya, mis. jumlah karyawan per unit per bulan.'],
                 ['Hapus duplikat', 'Mempertahankan satu baris per kunci, mis. catatan terbaru setiap karyawan, dan mencantumkan sisanya di Kualitas data.'],
+                ['Perkaya (API)', 'Menanyakan setiap baris ke sebuah API dan menambahkan nilai yang dikembalikannya, mis. golongan dan tunjangan dari API HR.'],
+                ['Ubah data (API)', 'Membuat atau memperbarui catatan di sistem lain untuk setiap baris, mis. akun pengguna, lalu melanjutkan dengan id yang dikembalikannya.'],
                 ['Tujuan', 'Menulis ke dataset atau ke sumber data tujuan seperti produk KMPlus.'],
               ],
             },
@@ -301,7 +303,7 @@ export const helpId: HelpContent = {
             {
               kind: 'list',
               items: [
-                '**Tambahkan setelah langkah terpilih** di kiri menyisipkan langkah Filter, Pemetaan & transformasi, Validasi, Aturan bisnis, Router, Gabung, Satukan, Agregasi, Hapus duplikat, atau Tujuan; **Sumber** menambahkan sumber lain untuk digabungkan.',
+                '**Tambahkan setelah langkah terpilih** di kiri menyisipkan langkah Filter, Pemetaan & transformasi, Validasi, Aturan bisnis, Router, Gabung, Satukan, Agregasi, Hapus duplikat, Perkaya, Ubah data, atau Tujuan; **Sumber** menambahkan sumber lain untuk digabungkan.',
                 'Pilih langkah untuk mengeditnya di kanan; **Langkah berikutnya** menghubungkannya ke langkah selanjutnya (Router punya satu per cabang).',
                 '**Pengaturan eksekusi** mengatur pengulangan, batas waktu, ukuran batch, ambang karantina, dan kapan memberi peringatan (tidak pernah, saat gagal, atau saat gagal atau ada baris tertahan).',
                 '**Jadwal** mengatur kapan versi terbit berjalan (lihat Jadwal dan pemicu).',
@@ -362,6 +364,35 @@ export const helpId: HelpContent = {
                 '**Uji pada sampel** mengagregasi sampelnya saja; hasil uji menyebutkannya.',
               ],
             },
+          ],
+        },
+        {
+          id: 'api-steps',
+          title: 'Panggilan API di dalam pipeline',
+          blocks: [
+            { kind: 'p', text: 'Dua langkah memanggil sumber data API REST dengan sign-in, header, dan pengaturan jaringannya. **Perkaya** hanya membaca; **Ubah data (API)** membuat atau memperbarui catatan di sistem lain dan digambar sebagai tindakan keluar di kanvas.' },
+            {
+              kind: 'table',
+              head: ['Pengaturan Perkaya', 'Fungsinya'],
+              rows: [
+                ['Permintaan', 'Satu per baris (`GET /employees/{{employee_code}}/details`), atau batch: kunci di parameter query (`?codes=E1,E2`) atau di daftar body POST, beserta field jawaban yang menyebutkan kunci setiap item.'],
+                ['Nilai dari jawaban', 'Tempel contoh jawaban atau **Kirim panggilan uji**, pilih nilai yang diperlukan, beri nama kolom baru, dan setel tipenya. Daftar dalam jawaban menghasilkan satu baris per item (baris bisa berlipat), item pertama, atau daftar JSON.'],
+                ['Tanpa jawaban', '404 atau tidak ada item untuk kunci itu: pertahankan baris dengan nilai kosong, buang, atau karantina. Penolakan lain (4xx) dikarantina dengan alasan dari API; 5xx dan 429 dicoba ulang.'],
+                ['Cache', 'Jawaban disimpan antar-eksekusi (bawaan 24 jam, paling lama 7 hari; “tidak ditemukan” selama satu jam). Hanya nilai yang dipilih yang disimpan, terenkripsi. **Hapus cache** menanyakan lagi; pemetaan yang berubah juga menanyakan lagi.'],
+                ['Batas', 'Permintaan per detik, berapa sekaligus, dan batas waktu. Satu eksekusi paling banyak 50.000 panggilan ke sebuah sumber data; admin dapat menaikkannya di langkah itu.'],
+              ],
+            },
+            {
+              kind: 'list',
+              items: [
+                '**Ubah data (API)**: permintaan pembuatan (POST, PUT, atau PATCH; tanpa DELETE) dan, bila perlu, permintaan pembaruan yang dipakai bila data catatan yang dibuat sebelumnya berubah. Path-nya dapat memakai nilai dari jawaban pembuatan, mis. `/users/{{user_id}}`.',
+                'Setiap catatan dibuat sekali: buku catatan panggilan mengingat setiap panggilan yang berhasil menurut kolom kunci, sehingga percobaan ulang, eksekusi yang dilanjutkan, atau putar ulang tidak pernah membuatnya lagi. Setiap panggilan juga membawa **Idempotency-Key**.',
+                'Kegagalan langkah sesudahnya tidak membatalkan perubahan yang sudah terjadi di sistem lain; perbaiki masalahnya lalu jalankan lagi.',
+                '**Uji pada sampel** tidak mengirim apa pun untuk langkah ini (uji coba kering). **Kirim satu panggilan uji** benar-benar membuat catatan setelah Anda mengonfirmasi, lalu mencatatnya.',
+                'Pipeline dengan langkah ini selalu memerlukan persetujuan orang kedua bila ruang kerja Anda menyetujui perubahan destruktif.',
+              ],
+            },
+            { kind: 'note', tone: 'info', text: 'Uji pada sampel hanya menanyakan 5 permintaan pertama ke API langkah Perkaya; baris sampel lainnya menampilkan nilai kosong. Untuk API di dalam jaringan Anda, Nexus Agent (1.4.0 atau lebih baru) yang mengirim panggilan.' },
           ],
         },
         {
@@ -1001,6 +1032,8 @@ export const helpId: HelpContent = {
     { id: 'join-incremental', group: 'pipelines', q: 'Bisakah pipeline inkremental memakai langkah Gabung?', a: 'Bisa. Sumber yang dicari dibaca penuh setiap eksekusi, sehingga baris baru dari sumber penggerak selalu menemukan pasangannya. Namun perubahan yang hanya terjadi di sisi yang dicari (gaji baru) baru sampai ke seorang karyawan ketika baris karyawan itu dibaca lagi: gunakan pembacaan penuh bila hal itu penting, atau atur ulang posisi sinkronisasi.' },
     { id: 'dedupe-which', group: 'pipelines', q: 'Seorang karyawan muncul dua kali di sumber. Catatan mana yang dipertahankan?', a: 'Tambahkan langkah **Hapus duplikat** pada kunci karyawan. Secara bawaan langkah ini mempertahankan catatan terbaru menurut kolom tanggal seperti `updated_at`; Anda juga dapat mempertahankan yang pertama atau terakhir dibaca. Setiap catatan yang dihapus dicantumkan di Kualitas data, dengan menyebutkan yang dipertahankan. Duplikat antar-eksekusi ditangani oleh tujuan upsert dengan kunci yang sama.' },
     { id: 'aggregate-incremental', group: 'pipelines', q: 'Mengapa langkah Agregasi tidak bisa membaca secara inkremental?', a: 'Pembacaan inkremental hanya membawa baris baru atau yang berubah, sehingga jumlah karyawan hanya akan menghitung baris itu. Setel sumber yang mengisi langkah Agregasi ke **Penuh**; bila datanya besar, jadwalkan pipeline lebih jarang.' },
+    { id: 'api-duplicates', group: 'pipelines', q: 'Bisakah eksekusi yang dicoba ulang membuat akun dua kali di sistem lain?', a: 'Tidak dengan langkah **Ubah data (API)**: setiap panggilan yang berhasil dicatat menurut kunci barisnya sebelum hal lain terjadi, sehingga percobaan ulang, eksekusi yang dilanjutkan, atau putar ulang melewatinya. Setiap panggilan juga membawa Idempotency-Key; hanya API yang mengabaikan kunci itu yang, sangat jarang, bisa menerima pengulangan bila Nexus berhenti tepat setelah sebuah panggilan.' },
+    { id: 'api-cache', group: 'pipelines', q: 'Mengapa langkah Perkaya tidak menangkap perubahan di API?', a: 'Jawabannya disimpan di cache (bawaan 24 jam). Turunkan waktu cache, atau tekan **Hapus cache** di langkah itu; eksekusi berikutnya menanyakan lagi ke API.' },
     { id: 'deleted-employees', group: 'pipelines', q: 'Bagaimana karyawan yang keluar ditangani?', a: 'Dengan tujuan upsert dan **Tandai baris yang tidak ada lagi di sumber sebagai terhapus**, baris yang hilang dari sumber ditandai terhapus alih-alih dibuang. Pembacaan mengecualikannya; riwayatnya tetap ada.' },
     { id: 'env-why', group: 'environments', q: 'Mengapa memakai Development, Staging, dan Production?', a: 'Agar pipeline bisa diubah tanpa membahayakan data produksi. Bangun dengan data uji di Development, periksa hasilnya dengan data mirip produksi di Staging, dan promosikan hanya yang berhasil ke Production, yang tidak bisa diedit langsung.' },
     { id: 'env-sources', group: 'environments', q: 'Apakah pipeline yang dipromosikan membaca database Development di Production?', a: 'Tidak. Sumber data dicocokkan **berdasarkan nama**, dan setiap lingkungan punya sumber sendiri dengan kredensialnya sendiri. Beri sumber nama yang sama di setiap lingkungan; sumber yang belum ada memblokir promosi.' },

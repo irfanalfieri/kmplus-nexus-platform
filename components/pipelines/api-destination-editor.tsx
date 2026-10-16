@@ -274,7 +274,8 @@ function sampleError(err: unknown, t: ReturnType<typeof usePrefs>['t']) {
   return err instanceof Error ? err.message : String(err)
 }
 
-function BodyDialog({ step, columns, onClose, onSave }: { step: ApiStep; columns: Column[]; onClose: () => void; onSave: (body: ApiStep['body']) => void }) {
+/** Edits a request body from a pasted example (API destinations, Enrich POST bodies, "Changes data" requests). */
+export function BodyDialog({ step, columns, onClose, onSave }: { step: Pick<ApiStep, 'body' | 'path'>; columns: Column[]; onClose: () => void; onSave: (body: ApiStep['body']) => void }) {
   const { t, locale } = usePrefs()
   const [format, setFormat] = useState<BodyFormat>(step.body.format)
   const [sample, setSample] = useState(step.body.sample)

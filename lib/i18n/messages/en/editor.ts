@@ -12,6 +12,8 @@ export const editor = {
     union: 'Union',
     aggregate: 'Aggregate',
     dedupe: 'Deduplicate',
+    enrich: 'Enrich (API)',
+    apicall: 'Change data (API)',
     destination: 'Destination',
   },
   hints: {
@@ -25,6 +27,8 @@ export const editor = {
     union: 'Stack rows of several sources',
     aggregate: 'Count, sum or average per group',
     dedupe: 'Keep one row per key',
+    enrich: 'Add values an API returns for each row (read only)',
+    apicall: 'Create or update a record in another system, then continue',
     destination: 'Where results are written',
   },
   /** One-line summary of a step (mirrors stepTitle in lib/pipelines/definition.ts). */
@@ -42,6 +46,8 @@ export const editor = {
     aggregate: 'Aggregate by {groups}',
     aggregateAll: 'Aggregate all rows',
     dedupe: 'Deduplicate on {keys}',
+    enrich: 'Enrich from {request}',
+    apicall: 'Call {request}',
     destinationDataset: 'Write dataset {name}',
     destinationTable: 'Write {name}',
     destinationApi: 'Send {name}',
@@ -59,6 +65,8 @@ export const editor = {
     matched: '{matched} of {count} matched',
     multiplied: 'rows ×{count}',
     staged: '{count} staged',
+    calls: '{count} calls',
+    cached: '{count} cached',
   },
   modal: {
     newPipeline: 'New pipeline',
@@ -132,6 +140,8 @@ export const editor = {
     joinMultiplied: '; rows multiplied: {count}',
     joinSample: ' (looked up {staged, plural, one {# row} other {# rows}} of the other source for this sample)',
     aggregatedSample: '{step}: aggregated over the sample only; a run counts every row.',
+    enrichSample: '{step}: {calls, plural, one {# call} other {# calls}} (a test asks for the first 5 only), {cached} from cache',
+    apicallDryRun: '{step}: dry run, nothing was sent. Use “Send one test call” in the step to try it for real.',
     severity: {
       error: 'error',
       warning: 'warning',

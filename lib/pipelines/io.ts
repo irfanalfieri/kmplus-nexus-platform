@@ -11,6 +11,8 @@ import { readFileChunk } from '@/lib/connectors/drivers/file'
 import { liveSqlServerQuery, readSqlServerChunk, readSqlServerRows } from '@/lib/connectors/drivers/sqlserver'
 import type { ConnectorCredentials } from '@/lib/connectors/types'
 import { isBatchBody, type ApiDestinationSpec, type ColumnType } from './definition'
+import type { ApiCall } from './api-calls'
+import type { CallsResult } from '@/lib/connectors/rest/call'
 import type { Row } from './transforms'
 import { compareWatermarks, type OutputColumn } from './columns'
 import { rowFilterSql, type RowFilter } from '@/lib/governance/row-filters'
@@ -401,6 +403,35 @@ export async function readDatasetPairs(tableName: string, keyColumn: string, val
 
 export async function dropDatasetTable(tableName: string) {
   await nexusPool.query(`DROP TABLE IF EXISTS "nexus_data".${qIdent(tableName)}`)
+}
+
+/**
+ * Enrich and "Changes data" calls to a REST data source, directly or through
+ * the Nexus Agent next to an intranet API (agent 1.4.0+). Answers already
+ * received come back with the error that stopped the rest.
+ */
+export async function sendApiCalls(
+  source: StoredDataSource,
+  calls: ApiCall[],
+  opts: { maxRequestsPerSecond: number; concurrency: number; timeoutSeconds: number; deadline?: number; writes: boolean }
+): Promise<CallsResult> {
+  if (source.sourceType !== 'rest') throw new NonRetryableError(`"${source.name}" is not a REST API data source.`)
+  if (!calls.length) return { answers: [] }
+  const options = { maxRequestsPerSecond: opts.maxRequestsPerSecond, concurrency: opts.concurrency, timeoutSeconds: opts.timeoutSeconds }
+  const via = agentOf(source)
+  if (!via) {
+    const { sendRestCalls } = await import('@/lib/connectors/rest/call')
+    return sendRestCalls(credentialsOf(source), calls, { ...options, deadline: opts.deadline })
+  }
+  const budgetMs = Math.min(opts.deadline ? Math.max(5_000, opts.deadline - Date.now()) : 170_000, 170_000)
+  const out: CallsResult = { answers: [] }
+  for (let i = 0; i < calls.length; i += 500) {
+    const part = calls.slice(i, i + 500)
+    const res = (await callAgent(via.agentId, 'apiCall', { connection: via.connection, request: agentRequestOf(source), calls: part, options, writes: opts.writes, budgetMs }, { timeoutMs: budgetMs + 10_000, workspaceId: via.workspaceId })) as CallsResult
+    out.answers.push(...part.map((_, j) => res.answers?.[j] ?? undefined))
+    if (res.error) return { ...out, error: res.error }
+  }
+  return out
 }
 
 /** JSON-safe value for HTTP destinations (dates as ISO text, bigint as text). */

@@ -10,7 +10,12 @@ import { newId, requireWorkspace, type WorkspaceContext } from '@/lib/auth/sessi
 import { recordAudit, type AuditAction } from '@/lib/audit'
 import { db } from '@/lib/db'
 import { businessRules, dataSources, datasetPolicies, executionLogs, mappingTemplates, nexusDatasets, pipelineApprovals, pipelineRunRejects, pipelineVersions, pipelines } from '@/lib/db/schema'
-import { apiDestinationSpec, definitionSchema, scheduleSchema, type MapStep } from '@/lib/pipelines/definition'
+import { DEFAULT_MAX_CALLS, apiCallStepSchema, apiDestinationSpec, definitionSchema, enrichStepSchema, scheduleSchema, type MapStep } from '@/lib/pipelines/definition'
+import { mapAnswer, matchBatchAnswer, planEnrich } from '@/lib/pipelines/api-calls'
+import { apiRuntime, clearApiCache } from '@/lib/pipelines/api-runtime'
+import { loadSource } from '@/lib/pipelines/runner'
+import { sendApiCalls } from '@/lib/pipelines/io'
+import { shortApiMessage } from '@/lib/pipelines/body-template'
 import { decryptCredentials } from '@/lib/security/credentials'
 import { withResolvedSecrets } from '@/lib/secrets/resolve'
 import { agentOf, callAgent } from '@/lib/agent/server'
@@ -135,6 +140,8 @@ async function getBuilderOptionsImpl() {
         sourceType: s.sourceType,
         status: s.status,
         role: config.role ?? 'source',
+        /** Calls per run an Enrich or "Changes data" step may make (admins can raise it). */
+        maxCallsPerRun: Number((s.config as { maxCallsPerRun?: number } | null)?.maxCallsPerRun) || DEFAULT_MAX_CALLS,
         tables: (config.schemaScan?.tables ?? []).map((t) => ({
           name: t.name,
           columns: t.columns.map((c) => ({ name: c.name, type: c.type })),
@@ -412,7 +419,7 @@ async function testPipelineImpl(definition: unknown, rawPipelineId?: string) {
   try {
     let state: unknown = null
     if (rawPipelineId) state = (await getOwned(ctx, idSchema.parse(rawPipelineId))).state
-    const result = await testRunDefinition(scope(ctx), definition, 25, state)
+    const result = await testRunDefinition(scope(ctx), definition, 25, state, rawPipelineId ? idSchema.parse(rawPipelineId) : null)
     await audit(ctx, 'TEST_RUN', rawPipelineId ?? 'unsaved', { rowsRead: result.rowsRead })
     // Plain JSON only (rows may hold Buffers/BigInts from drivers).
     return { ok: true as const, result: JSON.parse(JSON.stringify(result, (_k, v) => (typeof v === 'bigint' ? v.toString() : v))) as typeof result }
@@ -460,6 +467,75 @@ async function sendApiTestRequestImpl(raw: z.input<typeof apiTestInput>): Promis
   }
   await audit(ctx, 'TEST_REQUEST', input.pipelineId ?? 'unsaved', { dataSource: ds.name, method: input.step.method, path: input.step.path, status: result.response?.status ?? null, outcome: result.outcome })
   return result
+}
+
+const rowInput = z.record(z.string().max(200), z.unknown()).refine((r) => Object.keys(r).length <= 500 && JSON.stringify(r).length <= 200_000)
+
+export interface EnrichTestResult {
+  request: { method: string; path: string }
+  status: number | null
+  /** The answer as text (shown to the person testing; never logged). */
+  answer: string
+  /** The columns a run would add for this row. */
+  mapped: Record<string, unknown>[]
+  message: string
+}
+
+/**
+ * "Send test call" on an Enrich step: asks the API about one row (read-only),
+ * returns its answer for picking values and what the mapping makes of it. Audited.
+ */
+async function sendEnrichTestCallImpl(raw: { pipelineId?: string; step: unknown; row: unknown }): Promise<EnrichTestResult> {
+  const ctx = await requireWorkspace('pipelines:edit')
+  const input = z.object({ pipelineId: idSchema.optional(), step: enrichStepSchema, row: rowInput }).parse(raw)
+  if (input.pipelineId) await getOwned(ctx, input.pipelineId)
+  const source = await loadSource(ctx.workspaceId, input.step.dataSourceId)
+  if (source.sourceType !== 'rest') throw new Error('Choose a REST data source.')
+  const plan = planEnrich(input.step, [input.row], source.id)
+  const req = plan.requests[0]
+  if (!req) return { request: { method: input.step.method, path: input.step.path }, status: null, answer: '', mapped: [], message: plan.rejects[0]?.errors.join('; ') || 'The row has no value to send.' }
+  const res = await sendApiCalls(source, [req.call], { maxRequestsPerSecond: 1, concurrency: 1, timeoutSeconds: input.step.timeoutSeconds, writes: false })
+  const answer = res.answers[0]
+  await audit(ctx, 'TEST_REQUEST', input.pipelineId ?? 'unsaved', { dataSource: source.name, method: req.call.method, path: input.step.path, status: answer?.status ?? null })
+  if (!answer) throw new Error(res.error?.message ?? 'The API did not answer.')
+  let mapped: Record<string, unknown>[] = []
+  let message = answer.status >= 300 ? `HTTP ${answer.status}: ${shortApiMessage(answer.text)}` : ''
+  if (answer.status < 300) {
+    try {
+      const payload = answer.text.trim() ? JSON.parse(answer.text) : null
+      mapped = input.step.mode === 'row' ? mapAnswer(payload, input.step.answer) : ([...matchBatchAnswer(input.step, payload).values()][0] ?? [])
+    } catch {
+      message = 'The answer is not JSON.'
+    }
+  }
+  return { request: { method: req.call.method, path: req.call.path }, status: answer.status, answer: answer.text.slice(0, 20_000), mapped, message }
+}
+
+/**
+ * "Send one test call" on a "Changes data" step: really creates (or updates) the
+ * row's record, after the person confirmed it, and records it in the call
+ * ledger, so a run later won't create it again. Saved pipelines only. Audited.
+ */
+async function sendApiCallTestImpl(raw: { pipelineId: string; step: unknown; row: unknown }) {
+  const ctx = await requireWorkspace('pipelines:edit')
+  const input = z.object({ pipelineId: idSchema, step: apiCallStepSchema, row: rowInput }).parse(raw)
+  await getOwned(ctx, input.pipelineId)
+  const runtime = apiRuntime({ workspaceId: ctx.workspaceId, pipelineId: input.pipelineId, mode: 'run', loadSource: (id) => loadSource(ctx.workspaceId, id), counters: {} })
+  const { outcomes, calls } = await runtime.call(input.step, [input.row])
+  const o = outcomes[0]
+  await audit(ctx, 'TEST_REQUEST', input.pipelineId, { step: input.step.id, method: input.step.create.method, path: input.step.create.path, sent: calls, outcome: o?.kind ?? 'none' })
+  return o?.kind === 'ok' ? { sent: o.sent, answer: o.answer, message: '' } : { sent: false, answer: {}, message: o?.message ?? '' }
+}
+
+/** "Clear cache" on an Enrich step: the next run asks the API again. Audited. */
+async function clearStepCacheImpl(rawPipelineId: string, rawStepId: string) {
+  const ctx = await requireWorkspace('pipelines:edit')
+  const pipelineId = idSchema.parse(rawPipelineId)
+  const stepId = idSchema.parse(rawStepId)
+  await getOwned(ctx, pipelineId)
+  const removed = await clearApiCache(ctx.workspaceId, { pipelineId, stepId })
+  await audit(ctx, 'CACHE_CLEAR', pipelineId, { step: stepId, removed })
+  return { removed }
 }
 
 /** Forget the incremental sync position so the next run reads everything again. */
@@ -540,6 +616,18 @@ export async function testPipeline(...args: Parameters<typeof testPipelineImpl>)
 
 export async function sendApiTestRequest(...args: Parameters<typeof sendApiTestRequestImpl>) {
   return guard(() => sendApiTestRequestImpl(...args))
+}
+
+export async function sendEnrichTestCall(...args: Parameters<typeof sendEnrichTestCallImpl>) {
+  return guard(() => sendEnrichTestCallImpl(...args))
+}
+
+export async function sendApiCallTest(...args: Parameters<typeof sendApiCallTestImpl>) {
+  return guard(() => sendApiCallTestImpl(...args))
+}
+
+export async function clearStepCache(...args: Parameters<typeof clearStepCacheImpl>) {
+  return guard(() => clearStepCacheImpl(...args))
 }
 
 export async function resetSyncPosition(...args: Parameters<typeof resetSyncPositionImpl>) {

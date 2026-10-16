@@ -13,6 +13,7 @@ import { recordAudit, type AuditAction } from '@/lib/audit'
 import { diffObjects } from '@/lib/audit-diff'
 import { hasCustomCredentialForm, maskCredentials, restoreSecrets } from '@/lib/connectors/secret-mask'
 import { guard } from '@/lib/server-action'
+import { DEFAULT_MAX_CALLS } from '@/lib/pipelines/definition'
 import { restRequestDesign } from '@/lib/connectors/rest/agent-request'
 import { forgetCachedSecrets, resolveSecretRefs } from '@/lib/secrets/resolve'
 import { SECRET_MANAGER_SLUGS, hasSecretRefs, isSecretManager } from '@/lib/secrets/types'
@@ -301,6 +302,20 @@ async function setDataSourceRoleImpl(rawId: string, rawRole: string) {
   revalidatePath('/dashboard', 'layout')
 }
 
+/** Calls one Enrich or "Changes data" step may make to this data source per run (admins; decided default 50,000). */
+async function setMaxCallsPerRunImpl(rawId: string, rawMax: number) {
+  const ctx = await requireWorkspace('sources:manage')
+  const source = await getOwned(ctx, idSchema.parse(rawId))
+  const max = z.number().int().min(1).max(10_000_000).parse(rawMax)
+  const before = Number((source.config as { maxCallsPerRun?: number } | null)?.maxCallsPerRun) || DEFAULT_MAX_CALLS
+  await db
+    .update(dataSources)
+    .set({ config: { ...(source.config as Record<string, unknown>), maxCallsPerRun: max }, updatedAt: new Date() })
+    .where(and(eq(dataSources.id, source.id), eq(dataSources.workspaceId, ctx.workspaceId)))
+  await recordAudit(ctx, { action: 'UPDATE', resource: 'data_source', resourceId: source.id, changes: { maxCallsPerRun: max }, diff: diffObjects({ maxCallsPerRun: before }, { maxCallsPerRun: max }) })
+  revalidatePath('/dashboard', 'layout')
+}
+
 async function deleteDataSourceImpl(rawId: string) {
   const ctx = await requireWorkspace('sources:manage')
   const id = idSchema.parse(rawId)
@@ -362,6 +377,10 @@ export async function renameDataSource(...args: Parameters<typeof renameDataSour
 
 export async function setDataSourceRole(...args: Parameters<typeof setDataSourceRoleImpl>) {
   return guard(() => setDataSourceRoleImpl(...args))
+}
+
+export async function setMaxCallsPerRun(...args: Parameters<typeof setMaxCallsPerRunImpl>) {
+  return guard(() => setMaxCallsPerRunImpl(...args))
 }
 
 export async function deleteDataSource(...args: Parameters<typeof deleteDataSourceImpl>) {

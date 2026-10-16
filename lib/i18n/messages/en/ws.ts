@@ -189,6 +189,7 @@ export const ws = {
       ENABLE: 'Enable',
       DISABLE: 'Disable',
       RESET_SYNC: 'Reset sync position',
+      CACHE_CLEAR: 'Clear API cache',
       INSTALL: 'Install connector',
       PURCHASE: 'Purchase',
       UNINSTALL: 'Uninstall connector',

@@ -16,7 +16,7 @@ import {
   type NodeProps,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { BellRing, CopyMinus, Database, Filter, FlaskConical, GitBranch, GitMerge, Layers, Sigma, Link2, Loader2, OctagonAlert, Rocket, Save, Scale, ShieldCheck, Shuffle, Trash2, Upload, X } from 'lucide-react'
+import { BellRing, CloudDownload, CopyMinus, Database, Webhook, Filter, FlaskConical, GitBranch, GitMerge, Layers, Sigma, Link2, Loader2, OctagonAlert, Rocket, Save, Scale, ShieldCheck, Shuffle, Trash2, Upload, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -52,6 +52,7 @@ import type { EngineResult, StepStat } from '@/lib/pipelines/engine'
 import { createWebhookTrigger, disableWebhookTrigger, savePipeline, testPipeline } from '@/lib/actions/pipelines'
 import { localizeCheck } from '@/lib/pipelines/check-messages'
 import { localizeStepTitle } from './step-title'
+import { ApiCallEditor, EnrichEditor } from './api-step-editors'
 import { isStagedStep, joinPrefix, laneLabel, planLanes, type LanePlan } from '@/lib/pipelines/lanes'
 import { joinOutputColumns } from '@/lib/pipelines/join'
 import { aggregateOutputTypes, recencyColumn } from '@/lib/pipelines/aggregate'
@@ -120,6 +121,8 @@ const META: Record<NodeType, { icon: typeof Database }> = {
   union: { icon: Layers },
   aggregate: { icon: Sigma },
   dedupe: { icon: CopyMinus },
+  enrich: { icon: CloudDownload },
+  apicall: { icon: Webhook },
   destination: { icon: Upload },
 }
 const kindTitle = (type: NodeType, t: Translate) => t(`editor.nodes.${type}`)
@@ -149,11 +152,15 @@ function stepLabel(n: PipelineNode, t: Translate): string {
     }
     case 'dedupe':
       return t('editor.stepTitle.dedupe', { keys: n.keys.join(', ') || '…' })
+    case 'enrich':
+      return t('editor.stepTitle.enrich', { request: `${n.method} ${n.path}` })
+    case 'apicall':
+      return t('editor.stepTitle.apicall', { request: `${n.create.method} ${n.create.path}` })
     case 'destination':
       return n.kind === 'dataset' ? t('editor.stepTitle.destinationDataset', { name: n.datasetName }) : n.kind === 'api' ? t('editor.stepTitle.destinationApi', { name: `${n.method} ${n.path}` }) : t('editor.stepTitle.destinationTable', { name: n.table })
   }
 }
-const ADDABLE: NodeType[] = ['source', 'filter', 'map', 'validate', 'rules', 'router', 'join', 'union', 'aggregate', 'dedupe', 'destination']
+const ADDABLE: NodeType[] = ['source', 'filter', 'map', 'validate', 'rules', 'router', 'join', 'union', 'aggregate', 'dedupe', 'enrich', 'apicall', 'destination']
 
 /** Node frame and icon colour by kind: sources in, destinations out, transforms neutral. */
 const KIND_BORDER: Record<NodeType, string> = {
@@ -167,6 +174,9 @@ const KIND_BORDER: Record<NodeType, string> = {
   union: 'border-border',
   aggregate: 'border-border',
   dedupe: 'border-border',
+  enrich: 'border-border',
+  // Changes data elsewhere: drawn as an outward action.
+  apicall: 'border-warning',
   destination: 'border-live',
 }
 const KIND_ICON: Record<NodeType, string> = {
@@ -180,6 +190,8 @@ const KIND_ICON: Record<NodeType, string> = {
   union: 'text-muted-foreground',
   aggregate: 'text-muted-foreground',
   dedupe: 'text-muted-foreground',
+  enrich: 'text-muted-foreground',
+  apicall: 'text-warning-text',
   destination: 'text-live',
 }
 
@@ -215,6 +227,17 @@ function newNode(type: NodeType, columns: Column[], position: { x: number; y: nu
       return { id, type, position, joinType: 'left', keys: [{ left: first, right: '' }], normalize: { trim: true, ignoreCase: true, leadingZeros: false }, onMany: 'all', firstBy: { column: '', direction: 'desc' }, onNoMatch: 'keep', prefix: '' }
     case 'union':
       return { id, type, position, sourceColumn: '_source', labels: [] }
+    case 'enrich':
+      return {
+        id, type, position, dataSourceId: '', method: 'GET', path: '/', mode: 'row', body: { format: 'json', sample: '', template: { t: 'object', fields: [] } },
+        keyColumn: first, queryParam: 'ids', matchField: '', normalize: { trim: true, ignoreCase: true, leadingZeros: false }, batchSize: 50,
+        answer: { listPath: '', listMode: 'rows', fields: [], sample: '' }, onNoMatch: 'keep', cacheHours: 24, maxRequestsPerSecond: 10, concurrency: 2, timeoutSeconds: 30,
+      }
+    case 'apicall':
+      return {
+        id, type, position, dataSourceId: '', keys: first ? [first] : [], create: { method: 'POST', path: '/', body: { format: 'json', sample: '', template: { t: 'object', fields: [] } } },
+        answer: { listPath: '', listMode: 'first', fields: [], sample: '' }, idempotencyHeader: 'Idempotency-Key', maxRequestsPerSecond: 5, concurrency: 1, timeoutSeconds: 30,
+      }
     case 'aggregate':
       return { id, type, position, groupBy: [], measures: [{ name: 'row_count', fn: 'count', column: '', sortBy: '', separator: ', ' }] }
     case 'dedupe': {
@@ -254,6 +277,9 @@ function columnsPerNode(nodes: PipelineNode[], edges: PipelineEdge[], options: B
       const right = gather(node.id, true)
       input.right.set(node.id, right)
       output.set(node.id, joinOutputColumns(node, cols, right, joinPrefix({ nodes, edges }, plan, node)))
+    } else if (node.type === 'enrich' || node.type === 'apicall') {
+      const added = node.answer.fields.map((f) => ({ name: f.as, type: f.type }))
+      output.set(node.id, [...cols.filter((c) => !added.some((a) => a.name === c.name)), ...added])
     } else if (node.type === 'aggregate') {
       const types = aggregateOutputTypes(node, Object.fromEntries(cols.map((c) => [c.name, c.type as ColumnType])))
       output.set(node.id, Object.entries(types).map(([name, type]) => ({ name, type })))
@@ -332,6 +358,8 @@ function NexusNode({ data, selected }: NodeProps<FlowNode<NodeData>>) {
                 {node.type === 'join' && stat.rowsIn > 0 && <span>{t('editor.canvas.matched', { matched: stat.matched ?? 0, count: stat.rowsIn })}</span>}
                 {!!stat.multiplied && <span className="text-warning-text">{t('editor.canvas.multiplied', { count: stat.multiplied })}</span>}
                 {!!stat.staged && <span>{t('editor.canvas.staged', { count: stat.staged })}</span>}
+                {!!stat.calls && <span>{t('editor.canvas.calls', { count: stat.calls })}</span>}
+                {!!stat.cached && <span>{t('editor.canvas.cached', { count: stat.cached })}</span>}
               </>
             )}
           </div>
@@ -533,6 +561,8 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
   const [linkSide, setLinkSide] = useState<Port>('')
   const linkTarget = draft.nodes.find((n) => n.id === linkTo)
   const selectedStat = selected ? statFor(selected.id) : undefined
+  /** The first row that reached a step in the last test (what a test call sends). */
+  const inputSample = (id: string) => draft.edges.filter((e) => e.to === id).map((e) => statFor(e.from)?.sample?.[0]).find(Boolean) as Record<string, unknown> | undefined
 
   // The canvas shares the height with the panel below it: fit the steps again when its size changes.
   // A callback ref, because the editor mounts inside a dialog portal after the first effects run.
@@ -699,6 +729,8 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
                   onChange={setNode}
                 />
               )}
+              {selected.type === 'enrich' && <EnrichEditor step={selected} columns={columns.get(selected.id) ?? []} options={options} sampleRow={inputSample(selected.id)} pipelineId={draft.id} onChange={setNode} />}
+              {selected.type === 'apicall' && <ApiCallEditor step={selected} columns={columns.get(selected.id) ?? []} options={options} sampleRow={inputSample(selected.id)} pipelineId={draft.id} onChange={setNode} />}
               {selected.type === 'aggregate' && <AggregateEditor step={selected} columns={columns.get(selected.id) ?? []} onChange={setNode} />}
               {selected.type === 'dedupe' && <DedupeEditor step={selected} columns={columns.get(selected.id) ?? []} onChange={setNode} />}
               {selected.type === 'union' && (
@@ -884,6 +916,13 @@ function TestSummary({ test, testing, draft }: { test: EngineResult | null; test
             {t('editor.test.join', { step: localizeStepTitle(s.label, t), matched: s.matched ?? 0, count: s.rowsIn })}
             {!!s.multiplied && t('editor.test.joinMultiplied', { count: s.multiplied })}
             {!!s.staged && t('editor.test.joinSample', { staged: s.staged })}
+          </p>
+        ))}
+      {test.steps
+        .filter((s) => (s.type === 'enrich' || s.type === 'apicall') && s.rowsIn > 0)
+        .map((s) => (
+          <p key={s.id} className="text-xs text-muted-foreground">
+            {s.type === 'enrich' ? t('editor.test.enrichSample', { step: localizeStepTitle(s.label, t), calls: s.calls ?? 0, cached: s.cached ?? 0 }) : t('editor.test.apicallDryRun', { step: localizeStepTitle(s.label, t) })}
           </p>
         ))}
       {test.steps

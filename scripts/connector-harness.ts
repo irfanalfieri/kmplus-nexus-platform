@@ -177,6 +177,7 @@ const cases: Case[] = [
     : { slug: 'file', label: 'File upload', skip: 'run with --env-file=.env.local (uses the Nexus database)' },
   { slug: 'kmplus', label: 'KMPlus product (local mock of the Nexus Ingest Contract)', setup: startKmplus, sampleTable: 'employee' },
   { slug: 'rest', label: 'REST write (local mock: per row, batch, refused items)', run: restWriteCheck },
+  { slug: 'rest', label: 'REST calls in a lane (local mock: Enrich per row and batch, a create call)', run: restCallsCheck },
   { slug: 'prometheus', label: 'Prometheus (local mock of the HTTP API)', setup: startInfra, infra: true, sampleTable: 'service_up' },
   { slug: 'elasticsearch', label: 'Elasticsearch (local mock: indices, mapping, scroll)', setup: startInfra, infra: true, sampleTable: 'logs-hr' },
   { slug: 'datadog', label: 'Datadog (local mock, checks API + app keys)', setup: startInfra, infra: true, sampleTable: 'hr_api_latency' },
@@ -227,6 +228,35 @@ async function restWriteCheck(): Promise<string> {
     const keys = api.received.filter((r) => r.path === '/employees/batch').map((r) => r.idempotencyKey)
     if (keys.join() !== 'harness:0:0,harness:0:1') throw new Error(`unexpected idempotency keys ${keys.join()}`)
     return `3 PUT /employees/{code} · 2 batch requests (2 + 1 rows) · 1 refused item → quarantine ("${many.rejected[0].error}")`
+  } finally {
+    await api.stop()
+  }
+}
+
+// ── Enrich and "Changes data": calls rendered by the step, sent with the data source's sign-in ──
+async function restCallsCheck(): Promise<string> {
+  process.env.NEXUS_ALLOW_PRIVATE_URLS = 'true'
+  const { startRestWriteMock } = await import('./test/rest-write-mock')
+  const { sendRestCalls } = await import('@/lib/connectors/rest/call')
+  const { enrichStepSchema } = await import('@/lib/pipelines/definition')
+  const { mapAnswer, matchBatchAnswer, planEnrich } = await import('@/lib/pipelines/api-calls')
+  const api = await startRestWriteMock('harness-token')
+  try {
+    api.details.set('E1', { grade: 'G7', allowance: 100 })
+    const credentials = { ...restDefaults, baseUrl: api.baseUrl, authMethod: 'bearer', bearerToken: api.token }
+    const pace = { maxRequestsPerSecond: 20, concurrency: 2, timeoutSeconds: 10 }
+    const rows = [{ code: 'E1' }, { code: 'E2' }]
+    const perRow = enrichStepSchema.parse({ id: 'en', type: 'enrich', dataSourceId: 'x', path: '/employees/{{code}}/details', answer: { fields: [{ path: 'data.grade', as: 'grade' }] } })
+    const a = await sendRestCalls(credentials, planEnrich(perRow, rows, 'x').requests.map((r) => r.call), pace)
+    if (a.error || a.answers.map((x) => x?.status).join() !== '200,404') throw new Error(`per-row answers ${a.answers.map((x) => x?.status).join()} ${a.error?.message ?? ''}`)
+    if (mapAnswer(JSON.parse(a.answers[0]!.text), perRow.answer)[0]?.grade !== 'G7') throw new Error('per-row answer not mapped')
+    const batch = enrichStepSchema.parse({ id: 'en', type: 'enrich', dataSourceId: 'x', path: '/details', mode: 'query', keyColumn: 'code', queryParam: 'codes', matchField: 'code', answer: { listPath: 'items', fields: [{ path: 'grade', as: 'grade' }] } })
+    const b = await sendRestCalls(credentials, planEnrich(batch, rows, 'x').requests.map((r) => r.call), pace)
+    const matched = matchBatchAnswer(batch, JSON.parse(b.answers[0]!.text))
+    if (matched.get('e1')?.[0]?.grade !== 'G7' || matched.has('e2')) throw new Error('batch answer not matched by key')
+    const created = await sendRestCalls(credentials, [{ method: 'POST', path: '/users', body: JSON.stringify({ email: 'h@kmplus.test', name: 'H' }), contentType: 'application/json', headers: { 'Idempotency-Key': 'p:s:k:h' } }], pace)
+    if (created.answers[0]?.status !== 201 || api.received.at(-1)?.idempotencyKey !== 'p:s:k:h') throw new Error('create call not sent with its idempotency key')
+    return 'Enrich: 1 of 2 per-row answers (404 = no match) · 1 batch request matched by key · POST /users → 201 with Idempotency-Key'
   } finally {
     await api.stop()
   }

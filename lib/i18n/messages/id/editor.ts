@@ -13,6 +13,8 @@ export const editor: Messages['editor'] = {
     union: 'Satukan (union)',
     aggregate: 'Agregasi',
     dedupe: 'Hapus duplikat',
+    enrich: 'Perkaya (API)',
+    apicall: 'Ubah data (API)',
     destination: 'Tujuan',
   },
   hints: {
@@ -26,6 +28,8 @@ export const editor: Messages['editor'] = {
     union: 'Tumpuk baris dari beberapa sumber',
     aggregate: 'Hitung, jumlahkan, atau rata-ratakan per kelompok',
     dedupe: 'Pertahankan satu baris per kunci',
+    enrich: 'Tambahkan nilai yang dikembalikan API untuk setiap baris (hanya baca)',
+    apicall: 'Buat atau perbarui catatan di sistem lain, lalu lanjutkan',
     destination: 'Tempat hasil ditulis',
   },
   stepTitle: {
@@ -42,6 +46,8 @@ export const editor: Messages['editor'] = {
     aggregate: 'Agregasi per {groups}',
     aggregateAll: 'Agregasi semua baris',
     dedupe: 'Hapus duplikat berdasarkan {keys}',
+    enrich: 'Perkaya dari {request}',
+    apicall: 'Panggil {request}',
     destinationDataset: 'Tulis dataset {name}',
     destinationTable: 'Tulis {name}',
     destinationApi: 'Kirim {name}',
@@ -59,6 +65,8 @@ export const editor: Messages['editor'] = {
     matched: '{matched} dari {count} berpasangan',
     multiplied: 'baris ×{count}',
     staged: '{count} disiapkan',
+    calls: '{count} panggilan',
+    cached: '{count} dari cache',
   },
   modal: {
     newPipeline: 'Pipeline baru',
@@ -133,6 +141,8 @@ export const editor: Messages['editor'] = {
     joinMultiplied: '; baris berlipat: {count}',
     joinSample: ' (mencari {staged, plural, one {# baris} other {# baris}} dari sumber lain untuk sampel ini)',
     aggregatedSample: '{step}: diagregasi atas sampel saja; eksekusi menghitung semua baris.',
+    enrichSample: '{step}: {calls, plural, one {# panggilan} other {# panggilan}} (uji hanya meminta 5 yang pertama), {cached} dari cache',
+    apicallDryRun: '{step}: uji coba kering, tidak ada yang dikirim. Gunakan “Kirim satu panggilan uji” di langkah itu untuk mencobanya sungguhan.',
     severity: {
       error: 'galat',
       warning: 'peringatan',

@@ -318,6 +318,46 @@ export const pipelineStageTables = pgTable('pipeline_stage_tables', {
   index('pipeline_stage_tables_created_idx').on(t.createdAt),
 ])
 
+// Enrich steps: mapped answers of API calls, reused across runs until they expire (lib/pipelines/api-runtime.ts).
+// Only the mapped fields are kept, sealed with the workspace key; "not found" answers are kept for an hour.
+export const apiCallCache = pgTable('api_call_cache', {
+  /** Hash of the step, data source, request and mapping. */
+  key: text('key').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  pipelineId: text('pipelineId').notNull(),
+  stepId: text('stepId').notNull(),
+  /** Sealed list of mapped rows (encryptCredentials envelope). */
+  value: jsonb('value').notNull(),
+  notFound: boolean('notFound').notNull().default(false),
+  expiresAt: timestamp('expiresAt', { withTimezone: true }).notNull(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  index('api_call_cache_workspace_idx').on(t.workspaceId),
+  index('api_call_cache_step_idx').on(t.pipelineId, t.stepId),
+  index('api_call_cache_expires_idx').on(t.expiresAt),
+])
+
+// "API call (changes data)" steps: one entry per record a step created, so retries, resumed chunks
+// and replays never send a create twice; updates only when the row's data changed.
+export const apiCallLedger = pgTable('api_call_ledger', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  pipelineId: text('pipelineId').notNull(),
+  stepId: text('stepId').notNull(),
+  /** Hash of the step's key columns' values. */
+  keyHash: text('keyHash').notNull(),
+  /** Hash of the create request the row renders (its data as the API sees it). */
+  contentHash: text('contentHash').notNull(),
+  status: text('status').notNull().default('done'),
+  /** Sealed mapped answer fields (e.g. the user_id the API returned). */
+  answer: jsonb('answer').notNull(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  index('api_call_ledger_workspace_idx').on(t.workspaceId),
+  uniqueIndex('api_call_ledger_key_idx').on(t.pipelineId, t.stepId, t.keyHash),
+])
+
 // Values already seen by Validate unique rules in earlier chunks of a running job (hashed).
 export const pipelineJobSeen = pgTable('pipeline_job_seen', {
   jobId: text('jobId').notNull(),

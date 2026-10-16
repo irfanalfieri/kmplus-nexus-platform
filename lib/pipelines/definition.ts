@@ -419,6 +419,96 @@ const apiDestination = z.object({
   softDeleteMissing: z.literal(false).default(false),
 })
 
+// ── API calls inside a lane (lanes phase C): Enrich (read) and "Changes data" (write and continue) ──
+
+/** A value taken from an API's answer into a new column (the body mapping in reverse). */
+export const answerFieldSchema = z.object({
+  /** Dotted path in the answer item, e.g. "data.salary" or "contacts.0.email". */
+  path: z.string().trim().min(1, 'Choose a value from the answer').max(300),
+  as: outputName,
+  type: z.enum(COLUMN_TYPES).default('text'),
+})
+export type AnswerField = z.infer<typeof answerFieldSchema>
+
+export const answerMappingSchema = z.object({
+  /** Path to a list in the answer (empty = the answer itself is the item). */
+  listPath: z.string().trim().max(300).default(''),
+  /** A list in the answer: one row per item (decided), the first item, or every field as a JSON list. */
+  listMode: z.enum(['rows', 'first', 'json']).default('rows'),
+  fields: z.array(answerFieldSchema).max(100).default([]),
+  /** The pasted or test-call answer the paths were picked from (kept so the mapping can be rebuilt). */
+  sample: z.string().max(50_000).default(''),
+})
+export type AnswerMapping = z.infer<typeof answerMappingSchema>
+
+export const ENRICH_METHODS = ['GET', 'POST'] as const
+export const ENRICH_MODES = ['row', 'query', 'body'] as const
+export const DEFAULT_MAX_CALLS = 50_000
+export const CACHE_MAX_HOURS = 24 * 7
+
+/**
+ * Enrich (read-only, decided): one request per row (`/employees/{{code}}/details`)
+ * or per batch: the batch's keys in a query parameter (comma-joined) or as a
+ * list in a POST body; answer items are matched back by a key field.
+ */
+export const enrichStepSchema = z.object({
+  id: z.string(),
+  type: z.literal('enrich'),
+  position,
+  dataSourceId: z.string().min(1, 'Choose a REST data source'),
+  method: z.enum(ENRICH_METHODS).default('GET'),
+  /** Under the data source's base URL; {{column}} takes the row's value (per row only). */
+  path: z.string().trim().max(500).regex(/^\//, 'The request path starts with /').default('/'),
+  mode: z.enum(ENRICH_MODES).default('row'),
+  /** POST used as a query: the body (per row, or with a list of rows in batch "body" mode). */
+  body: z.object({ format: z.enum(BODY_FORMATS).default('json'), sample: z.string().max(50_000).default(''), template: bodyNodeSchema.default({ t: 'object', fields: [] }) }).default({}),
+  /** Batch: the column whose values are sent, the query parameter that carries them, and the answer field that names each item's key. */
+  keyColumn: z.string().default(''),
+  queryParam: z.string().trim().max(100).default('ids'),
+  matchField: z.string().trim().max(300).default(''),
+  normalize: z.object({ trim: z.boolean().default(true), ignoreCase: z.boolean().default(true), leadingZeros: z.boolean().default(false) }).default({}),
+  batchSize: z.number().int().min(1).max(500).default(50),
+  answer: answerMappingSchema.default({}),
+  /** 404 or no item for the key. */
+  onNoMatch: z.enum(JOIN_NO_MATCH).default('keep'),
+  /** Cross-run cache of mapped answers (decided: default 24 h, max 7 days; "not found" 1 h); 0 = off. */
+  cacheHours: z.number().int().min(0).max(CACHE_MAX_HOURS).default(24),
+  maxRequestsPerSecond: z.number().min(0.1).max(50).default(10),
+  concurrency: z.number().int().min(1).max(4).default(2),
+  timeoutSeconds: z.number().int().min(1).max(120).default(30),
+})
+
+export const CHANGE_METHODS = ['POST', 'PUT', 'PATCH'] as const
+const apiRequestSchema = z.object({
+  method: z.enum(CHANGE_METHODS).default('POST'),
+  /** {{column}} takes the row's value, or (update request) a column the create answer was mapped to, e.g. {{user_id}}. */
+  path: z.string().trim().max(500).regex(/^\//, 'The request path starts with /').default('/'),
+  body: z.object({ format: z.enum(BODY_FORMATS).default('json'), sample: z.string().max(50_000).default(''), template: bodyNodeSchema.default({ t: 'object', fields: [] }) }).default({}),
+})
+export type ApiRequestSpec = z.infer<typeof apiRequestSchema>
+
+/**
+ * "API call (changes data)" (decided): create the record (e.g. POST /users),
+ * take values from the answer (user_id) and continue. A call ledger per key
+ * makes retries, resumed chunks and replays safe; an optional update request
+ * runs when a known key's data changed. No DELETE.
+ */
+export const apiCallStepSchema = z.object({
+  id: z.string(),
+  type: z.literal('apicall'),
+  position,
+  dataSourceId: z.string().min(1, 'Choose a REST data source'),
+  /** Columns that identify the record (the ledger key). */
+  keys: z.array(z.string().min(1)).min(1, 'Choose the key columns').max(5),
+  create: apiRequestSchema.default({}),
+  update: apiRequestSchema.optional(),
+  answer: answerMappingSchema.default({}),
+  idempotencyHeader: z.string().trim().max(100).regex(/^[A-Za-z0-9-]+$/, 'Letters, numbers and dashes').default('Idempotency-Key'),
+  maxRequestsPerSecond: z.number().min(0.1).max(50).default(5),
+  concurrency: z.number().int().min(1).max(4).default(1),
+  timeoutSeconds: z.number().int().min(1).max(120).default(30),
+})
+
 const destinationNode = z.discriminatedUnion('kind', [datasetDestination, datasourceDestination, apiDestination])
 
 /** Every node of a body tree with its display path (`employee.name`, `contacts[].email`, `[].id`). */
@@ -494,7 +584,7 @@ export function apiDestinationIssues(spec: Pick<ApiDestinationSpec, 'body' | 'pa
   return issues
 }
 
-export const nodeSchema = z.union([sourceNode, filterNode, mapNode, validateNode, rulesNode, routerNode, joinNode, unionNode, aggregateNode, dedupeNode, destinationNode])
+export const nodeSchema = z.union([sourceNode, filterNode, mapNode, validateNode, rulesNode, routerNode, joinNode, unionNode, aggregateNode, dedupeNode, enrichStepSchema, apiCallStepSchema, destinationNode])
 export type PipelineNode = z.infer<typeof nodeSchema>
 /** @deprecated name kept for v1 call sites; a node is a step. */
 export type PipelineStep = PipelineNode
@@ -508,6 +598,8 @@ export type JoinStep = z.infer<typeof joinNode>
 export type UnionStep = z.infer<typeof unionNode>
 export type AggregateStep = z.infer<typeof aggregateNode>
 export type DedupeStep = z.infer<typeof dedupeNode>
+export type EnrichStep = z.infer<typeof enrichStepSchema>
+export type ApiCallStep = z.infer<typeof apiCallStepSchema>
 export type DestinationStep = z.infer<typeof destinationNode>
 export type NodeType = PipelineNode['type']
 
@@ -630,6 +722,16 @@ export const definitionSchema = z.preprocess(
           if (s.mode === 'incremental' && plan?.lanes.get(n.id)?.has(s.id)) issue(`${stepTitle(n)} needs a full read: set "${stepTitle(s)}" to Full.`)
         }
       }
+      if (n.type === 'enrich') {
+        for (const message of enrichIssues(n)) issue(`${stepTitle(n)}: ${message}`)
+      }
+      if (n.type === 'apicall') {
+        for (const r of [n.create, ...(n.update ? [n.update] : [])]) {
+          for (const message of apiDestinationIssues({ path: r.path, body: r.body })) issue(`${stepTitle(n)}: ${message}`)
+          if (isBatchBody(r.body.template)) issue(`${stepTitle(n)}: each call sends one row; remove the list of rows from the body.`)
+        }
+        if (n.create.body.template.t === 'object' && !n.create.body.template.fields.length && n.create.method !== 'PUT') issue(`${stepTitle(n)}: paste an example request body.`)
+      }
       if (n.type === 'dedupe' && n.keep === 'most_recent' && !n.recentBy.trim()) issue(`${stepTitle(n)}: choose the date or timestamp column that decides the most recent row.`)
     }
     // Soft deletes need every streamed row (driver and Union partners); staged lanes only add values.
@@ -693,9 +795,34 @@ export function stepTitle(n: PipelineNode): string {
       return `Aggregate by ${[...n.groupBy, ...(n.timeGrain ? [`${n.timeGrain.column} (${n.timeGrain.grain})`] : [])].join(', ') || 'all rows'}`
     case 'dedupe':
       return `Deduplicate on ${n.keys.join(', ')}`
+    case 'enrich':
+      return `Enrich from ${n.method} ${n.path}`
+    case 'apicall':
+      return `Call ${n.create.method} ${n.create.path}`
     case 'destination':
       return n.kind === 'dataset' ? `Write dataset ${n.datasetName}` : n.kind === 'api' ? `Send ${n.method} ${n.path}` : `Write ${n.table}`
   }
+}
+
+/** Problems with an Enrich step the schema alone can't express. English; shown as validation messages. */
+export function enrichIssues(n: EnrichStep): string[] {
+  const issues: string[] = []
+  if (!n.answer.fields.length) issues.push('choose at least one value from the answer.')
+  if (n.mode !== 'row') {
+    if (!n.keyColumn.trim()) issues.push('choose the column whose values are sent.')
+    if (!n.matchField.trim()) issues.push("choose the answer field that names each item's key.")
+    if (!n.answer.listPath.trim()) issues.push('choose the list in the answer that holds the items.')
+    if (new RegExp(PATH_PLACEHOLDER.source).test(n.path)) issues.push('the path can only use {{column}} values when each request sends one row.')
+  }
+  if (n.mode === 'body') {
+    if (n.method !== 'POST') issues.push('sending keys in the body needs POST.')
+    if (!isBatchBody(n.body.template)) issues.push('mark the list in the body that holds the keys.')
+  }
+  if (n.mode !== 'body' && n.method === 'POST') {
+    for (const message of apiDestinationIssues({ path: n.path, body: n.body })) issues.push(message)
+    if (isBatchBody(n.body.template)) issues.push('a list of rows in the body needs the "keys in the body" mode.')
+  }
+  return issues
 }
 
 /** Name of an Aggregate's time bucket column: its own name, else "<column>_<grain>". */

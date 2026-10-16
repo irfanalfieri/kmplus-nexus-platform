@@ -17,6 +17,7 @@ import { rowFiltersSchema } from '@/lib/governance/row-filters'
 import { applyRetentionFor } from '@/lib/governance/retention'
 import { readDatasetSample } from '@/lib/pipelines/io'
 import { guard } from '@/lib/server-action'
+import { clearApiCache } from '@/lib/pipelines/api-runtime'
 
 const qIdent = (name: string) => `"${name.replace(/"/g, '""')}"`
 const nameSchema = z.string().trim().min(1).max(63)
@@ -217,11 +218,13 @@ async function eraseRecordsImpl(input: z.input<typeof erasureInput>) {
     await db.update(nexusDatasets).set({ rowCount: rows[0].n, updatedAt: new Date() }).where(eq(nexusDatasets.id, d.id))
     erased.push({ dataset: d.name, deleted: res.rowCount ?? 0 })
   }
+  // Cached API answers may hold the person's data too: they are fetched again when needed.
+  const cacheCleared = await clearApiCache(ctx.workspaceId)
   await recordAudit(ctx, {
     action: 'DELETE',
     resource: 'erasure',
     resourceId: column,
-    changes: { column, valueSha256: createHash('sha256').update(value).digest('hex'), erased },
+    changes: { column, valueSha256: createHash('sha256').update(value).digest('hex'), erased, cacheCleared },
   })
   revalidatePath('/dashboard', 'layout')
   return { erased, total: erased.reduce((s, e) => s + e.deleted, 0) }

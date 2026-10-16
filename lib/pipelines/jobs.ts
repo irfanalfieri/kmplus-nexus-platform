@@ -6,6 +6,8 @@ import { newId } from '@/lib/auth/session'
 import { recordAudit } from '@/lib/audit'
 import { MAX_STAGED_ROWS, destinationTarget, scheduleSchema, stepTitle, type AggregateStep, type ColumnType, type DedupeStep, type DestinationStep, type JoinStep, type PipelineDefinition, type PipelineNode, type SourceStep } from './definition'
 import { apiChunkRows } from './body-template'
+import { enrichChunkRows } from './api-calls'
+import { apiRuntime } from './api-runtime'
 import { checkDestination, dedupeSeenField, newRunTotals, outputColumns, totalsStatus, transformChunk, upgradeTotals, type ChunkOutput, type DestinationResult, type EngineResult, type Reject, type RunTotals } from './engine'
 import { NonRetryableError, dropDatasetTable, finalizeDatasetReplace, readSourceChunk, softDeleteDataSourceMissing, softDeleteDatasetMissing, stagingTableName, writeDataset, writeToDataSource, type ReadCache, type StoredDataSource } from './io'
 import { inferColumns, type TypeHints } from './columns'
@@ -78,6 +80,8 @@ interface JobProgress {
   stageTypes?: Record<string, Record<string, ColumnType>>
   /** Rows staged per Join or blocking step (capped at MAX_STAGED_ROWS). */
   stageRows?: Record<string, number>
+  /** API calls made so far per Enrich / "Changes data" step (the per-run call cap). */
+  apiCalls?: Record<string, number>
   /** Incremental sync per Source: rows after these values (fixed for the whole run). */
   watermarksAfter?: Record<string, string | null>
 }
@@ -362,7 +366,12 @@ async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promi
   const totals = upgradeTotals(progress.totals ?? newRunTotals(def))
   progress.totals = totals
   // An API destination sets the pace: its chunk must finish well inside one invocation (apiChunkRows).
-  const chunkRows = Math.min(def.settings.batchSize ?? CHUNK_ROWS, ...destinations.flatMap((d) => (d.kind === 'api' ? [apiChunkRows(d)] : [])))
+  const chunkRows = Math.min(
+    def.settings.batchSize ?? CHUNK_ROWS,
+    ...destinations.flatMap((d) => (d.kind === 'api' ? [apiChunkRows(d)] : [])),
+    // API calls inside a lane set the pace too.
+    ...def.nodes.flatMap((n) => (n.type === 'enrich' ? [enrichChunkRows(n)] : n.type === 'apicall' ? [Math.max(20, Math.floor(n.maxRequestsPerSecond * 40))] : []))
+  )
 
   try {
     // The run's passes (lib/pipelines/lanes.ts planPasses): lookups first, then the driver,
@@ -404,6 +413,7 @@ async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promi
     const ctx = await loadRunContext(scope.workspaceId, def)
     const { seen, sets } = await loadSeen(job.id, def)
     ctx.seen = seen
+    ctx.api = apiRuntime({ workspaceId: scope.workspaceId, pipelineId: job.pipelineId, mode: 'run', loadSource: dataSource, counters: (progress.apiCalls ??= {}), deadline: deadline - 20_000 })
     ctx.joinPartners = async (join, keys) => ({
       partners: await lookupStage(stageTableName(job.id, join.id), keys),
       columns: Object.keys(progress.stageTypes?.[join.id] ?? {}),
@@ -819,6 +829,8 @@ async function finishJob(job: Job, progress: JobProgress, def: PipelineDefinitio
 
   // Several sources: what each Join did, and the run's staging is dropped (kept only while the run can still resume).
   for (const st of totals.steps) {
+    if (st.type === 'enrich' && st.rowsIn) log(progress, 'info', `${st.label}: ${(st.cached ?? 0).toLocaleString('en-US')} of ${st.rowsIn.toLocaleString('en-US')} from cache · ${(st.calls ?? 0).toLocaleString('en-US')} calls${st.multiplied ? `; rows multiplied: ${st.multiplied.toLocaleString('en-US')}` : ''}`)
+    if (st.type === 'apicall' && st.rowsIn) log(progress, 'info', `${st.label}: ${(st.calls ?? 0).toLocaleString('en-US')} calls changed data; ${(st.rowsIn - (st.calls ?? 0) - st.rejected).toLocaleString('en-US')} rows already up to date`)
     if (st.type !== 'join' || !st.rowsIn) continue
     log(progress, 'info', `${st.label}: ${(st.matched ?? 0).toLocaleString('en-US')} of ${st.rowsIn.toLocaleString('en-US')} rows matched${st.multiplied ? `; rows multiplied: ${st.multiplied.toLocaleString('en-US')}` : ''}${st.rejected ? `; ${st.rejected.toLocaleString('en-US')} without a partner quarantined` : ''}`)
   }

@@ -5,7 +5,7 @@ import { destinationTarget, type PipelineDefinition } from './definition'
  *
  * A workspace chooses who must approve a pipeline before a version runs:
  *   off          publishing is immediate
- *   destructive  versions that replace a dataset or mark rows deleted need a second person
+ *   destructive  versions that replace a dataset, mark rows deleted or call an API that changes data need a second person
  *   always       every publish (and every promotion into this workspace) needs a second person
  * The requester can never approve their own request.
  */
@@ -30,6 +30,8 @@ export function isApprovalPolicy(value: unknown): value is ApprovalPolicy {
 export function destructiveWrites(def: PipelineDefinition): string[] {
   const out: string[] = []
   for (const n of def.nodes) {
+    // An API call that changes data in another system can't be undone by Nexus (decided: always destructive).
+    if (n.type === 'apicall') out.push(`Changes data through ${n.create.method} ${n.create.path}${n.update ? ` and ${n.update.method} ${n.update.path}` : ''}`)
     if (n.type !== 'destination') continue
     const target = n.kind === 'dataset' ? `dataset ${n.datasetName}` : `${n.kind === 'api' ? 'API request' : 'table'} ${destinationTarget(n)}`
     if (n.kind === 'dataset' && n.mode === 'replace') out.push(`Replaces ${target} on every run`)

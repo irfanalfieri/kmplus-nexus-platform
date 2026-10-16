@@ -1,4 +1,4 @@
-import { OTHERWISE, stepTitle, topoOrder, type AggregateStep, type DedupeStep, type DestinationStep, type JoinStep, type PipelineDefinition, type PipelineNode, type Severity, type SourceStep } from './definition'
+import { OTHERWISE, stepTitle, topoOrder, type AggregateStep, type ApiCallStep, type DedupeStep, type EnrichStep, type DestinationStep, type JoinStep, type PipelineDefinition, type PipelineNode, type Severity, type SourceStep } from './definition'
 import { checkText } from './check-messages'
 import { applyMap, matchesFilter, validateRow, type LookupTables, type Row } from './transforms'
 import { evalGroup } from './conditions'
@@ -8,6 +8,7 @@ import { applyRules } from '@/lib/rules/evaluate'
 import { describeKey, joinKey, joinRows } from './join'
 import { isBlocking, joinPrefix, lanePlan, laneLabel, passNodes, unionLabel, type LanePlan } from './lanes'
 import { aggregateOutputTypes, aggregateRows, dedupeKey, dedupeRows, duplicateMessage } from './aggregate'
+import { applyEnrich, type EnrichOutcome } from './api-calls'
 
 /**
  * Pipeline engine (pure). Runs the definition graph over a batch of rows:
@@ -35,6 +36,9 @@ export interface StepStat {
   matched?: number
   multiplied?: number
   staged?: number
+  /** Enrich / "Changes data": requests sent, and rows answered from the cache. */
+  calls?: number
+  cached?: number
   durationMs: number
   /** First rows after this node (test runs only). */
   sample?: Row[]
@@ -64,6 +68,11 @@ export interface EngineContext {
   lookupTables?: LookupTables
   /** Join lookups: the staged rows of these (normalized) keys, grouped by key, and the staged side's columns. */
   joinPartners?: (join: JoinStep, keys: string[]) => Promise<StagedPartners>
+  /** API calls of Enrich and "Changes data" steps (lib/pipelines/api-runtime.ts); the only other I/O, injected. */
+  api?: {
+    enrich(step: EnrichStep, rows: Row[]): Promise<{ outcomes: EnrichOutcome[]; calls: number; cached: number }>
+    call(step: ApiCallStep, rows: Row[]): Promise<{ outcomes: ({ kind: 'ok'; answer: Row; sent: boolean } | { kind: 'refused'; message: string })[]; calls: number }>
+  }
 }
 
 export interface StagedPartners {
@@ -426,6 +435,14 @@ export async function transformChunk(
         }
         break
       }
+      case 'enrich': {
+        out.set('', await enrichChunk(node, rows, ctx, totals, stat, result))
+        break
+      }
+      case 'apicall': {
+        out.set('', await apiCallChunk(node, rows, ctx, totals, stat, result))
+        break
+      }
       case 'union': {
         const next: Row[] = []
         if (node.id === entry) next.push(...rows)
@@ -457,6 +474,46 @@ export async function transformChunk(
     stat.durationMs += Date.now() - started
   }
   return result
+}
+
+const noApi = (node: PipelineNode) => Object.assign(new Error(`${stepTitle(node)}: API calls are not available here.`), { retryable: false })
+
+/** Enrich: ask the API (or the cache) about each row and merge the answer in (pure merge: lib/pipelines/api-calls.ts). */
+async function enrichChunk(node: EnrichStep, rows: Row[], ctx: EngineContext, totals: RunTotals, stat: StepStat, result: ChunkOutput): Promise<Row[]> {
+  if (!rows.length) return []
+  if (!ctx.api) throw noApi(node)
+  const { outcomes, calls, cached } = await ctx.api.enrich(node, rows)
+  stat.calls = (stat.calls ?? 0) + calls
+  stat.cached = (stat.cached ?? 0) + cached
+  const res = applyEnrich(node, rows, outcomes)
+  stat.matched = (stat.matched ?? 0) + res.matched
+  stat.multiplied = (stat.multiplied ?? 0) + res.multiplied
+  stat.rowsOut += res.rows.length
+  const request = `${node.method} ${node.path}`
+  for (const u of res.unmatched) result.rejects.push({ stepId: node.id, row: u, errors: [checkText('enrichNoMatch', { request })], severity: 'error', kind: 'invalid' })
+  for (const r of res.refused) result.rejects.push({ stepId: node.id, row: r.row, errors: [`${request}: ${r.message}`], severity: 'error', kind: 'invalid' })
+  stat.rejected += res.unmatched.length + res.refused.length
+  totals.rejectedCount += res.unmatched.length + res.refused.length
+  return res.rows
+}
+
+/** "Changes data": create (or update) each row's record once, then continue with the answer's values. */
+async function apiCallChunk(node: ApiCallStep, rows: Row[], ctx: EngineContext, totals: RunTotals, stat: StepStat, result: ChunkOutput): Promise<Row[]> {
+  if (!rows.length) return []
+  if (!ctx.api) throw noApi(node)
+  const { outcomes, calls } = await ctx.api.call(node, rows)
+  stat.calls = (stat.calls ?? 0) + calls
+  const next: Row[] = []
+  const request = `${node.create.method} ${node.create.path}`
+  rows.forEach((row, i) => {
+    const o = outcomes[i]
+    if (o?.kind === 'ok') return next.push({ ...row, ...o.answer })
+    stat.rejected++
+    totals.rejectedCount++
+    result.rejects.push({ stepId: node.id, row, errors: [`${request}: ${o?.message ?? 'not sent'}`], severity: 'error', kind: 'invalid' })
+  })
+  stat.rowsOut += next.length
+  return next
 }
 
 export const dedupeSeenField = (nodeId: string) => `__dedupe:${nodeId}`

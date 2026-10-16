@@ -124,6 +124,14 @@ async function run(op: AgentOp, raw: unknown, env: AgentEnvironment): Promise<un
       const index = new Map(p.rows.map((r, i) => [r, i]))
       return { written: res.written, rejected: res.rejected.map((r) => ({ rowIndex: index.get(r.row) ?? -1, error: r.error, errors: r.errors })) }
     }
+    case 'apiCall': {
+      const p = payloadSchemas.apiCall.parse(raw)
+      const c = connection(env, p.connection)
+      if (c.type !== 'rest') throw new NonRetryableError(`Connection "${c.name}" is ${c.type}, not a REST API.`)
+      if (p.writes && !c.writable) throw new NonRetryableError(`Connection "${c.name}" is read-only on this agent. Set "writable": true in the agent's config to allow writes.`)
+      const { sendRestCalls } = await import('@/lib/connectors/rest/call')
+      return sendRestCalls(credentialsFor(c, p.request), p.calls, { ...p.options, deadline: Date.now() + p.budgetMs - 5_000 })
+    }
     case 'liveQuery': {
       const p = payloadSchemas.liveQuery.parse(raw)
       const c = connection(env, p.connection)

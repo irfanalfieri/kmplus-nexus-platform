@@ -11,6 +11,7 @@ import { pruneRateLimits } from '@/lib/api/rate-limit'
 import { upgradeCredentialEnvelopes, upgradeSsoSecrets } from '@/lib/security/upgrade'
 import { pruneAgentTasks } from '@/lib/agent/server'
 import { sweepStageTables } from '@/lib/pipelines/stage'
+import { purgeApiCache } from '@/lib/pipelines/api-runtime'
 
 /**
  * Scheduler tick. Called every minute by Supabase pg_cron (see
@@ -19,7 +20,8 @@ import { sweepStageTables } from '@/lib/pipelines/stage'
  * (new runs, retries, and runs resuming from a checkpoint) within the budget,
  * enforces dataset retention policies (hourly per dataset), retries webhook
  * deliveries, prunes rate-limit counters, drops run staging older than 48 h
- * (runs that never finished) and re-seals old credential envelopes.
+ * (runs that never finished), removes expired API answers from the Enrich cache
+ * and re-seals old credential envelopes.
  */
 export const maxDuration = 300
 export const dynamic = 'force-dynamic'
@@ -71,6 +73,7 @@ async function tick(request: Request) {
   await pruneRateLimits().catch(() => undefined)
   await pruneAgentTasks().catch(() => undefined)
   await sweepStageTables()
+  await purgeApiCache()
   const credentials = await upgradeCredentialEnvelopes().catch((err) => (console.error('[cron] credentials:', err instanceof Error ? err.message : err), { upgraded: 0, failed: 0 }))
   const ssoSecrets = await upgradeSsoSecrets().catch((err) => (console.error('[cron] SSO secrets:', err instanceof Error ? err.message : err), { upgraded: 0, failed: 0 }))
   const processed = await processJobs({ budgetMs: WORKER_BUDGET_MS })
