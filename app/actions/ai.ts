@@ -198,6 +198,10 @@ function describeNode(n: PipelineNode): string {
       return `${n.ruleIds.length} business rule(s)`
     case 'router':
       return n.branches.map((b) => b.label).join(', ')
+    case 'join':
+      return `${n.joinType} join on ${n.keys.map((k) => `${k.left}=${k.right}`).join(', ')}`
+    case 'union':
+      return `stacks its inputs${n.sourceColumn ? ` (input in ${n.sourceColumn})` : ''}`
     case 'destination':
       return n.kind === 'dataset' ? `dataset ${n.datasetName} (${n.mode})` : n.kind === 'api' ? `API request ${n.method} ${n.path}` : `table ${n.table} (${n.mode})`
   }

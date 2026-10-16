@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { planLanes, type LanePlan } from './lanes'
 
 /**
  * Pipeline definition (stored in pipelines.config and pipeline_versions.config).
@@ -126,6 +127,12 @@ const sourceNode = z.object({
   mode: z.enum(['full', 'incremental']).default('full'),
   /** Ever-increasing column, e.g. updated_at or an auto-increment id. */
   watermarkColumn: z.string().default(''),
+  /**
+   * Several Sources (lanes): the driver streams in chunks; every other lane is
+   * staged (read in full first) or streamed after it into a Union. A single
+   * Source is the driver implicitly, so this is only set with several.
+   */
+  driver: z.boolean().optional(),
 })
 
 const filterNode = z.object({
@@ -188,6 +195,52 @@ const routerNode = z.object({
       })
     )
     .min(1, 'Add at least one branch'),
+})
+
+// ── Several sources (lanes): Join and Union ──
+
+export const JOIN_TYPES = ['left', 'inner', 'no_match'] as const
+export type JoinType = (typeof JOIN_TYPES)[number]
+export const JOIN_NO_MATCH = ['keep', 'drop', 'quarantine'] as const
+export const MAX_SOURCES = 10
+/** Rows one staged lane may hold (all the sources feeding one Join's right side). */
+export const MAX_STAGED_ROWS = 1_000_000
+
+/**
+ * Joins the rows arriving on its left port (the driving side) with the rows of
+ * the lane on its right port, which is staged first. Edges into a Join carry
+ * `port: 'left' | 'right'`.
+ */
+const joinNode = z.object({
+  id: z.string(),
+  type: z.literal('join'),
+  position,
+  /** left: every left row (unmatched per onNoMatch); inner: matched rows only; no_match: left rows without a partner. */
+  joinType: z.enum(JOIN_TYPES).default('left'),
+  keys: z
+    .array(z.object({ left: z.string().trim().min(1, 'Choose the key column on both sides'), right: z.string().trim().min(1, 'Choose the key column on both sides') }))
+    .min(1, 'Choose at least one pair of key columns')
+    .max(5),
+  /** Key normalization before comparing: " E00123 " = "e00123"; leadingZeros: "00123" = "123". */
+  normalize: z.object({ trim: z.boolean().default(true), ignoreCase: z.boolean().default(true), leadingZeros: z.boolean().default(false) }).default({}),
+  /** all: one row per match (rows can multiply); first: one partner, picked by firstBy (else the first staged). */
+  onMany: z.enum(['all', 'first']).default('all'),
+  firstBy: z.object({ column: z.string().default(''), direction: z.enum(['asc', 'desc']).default('desc') }).default({}),
+  /** Left rows without a partner: kept with empty right values (left joins), dropped, or quarantined (replayable). */
+  onNoMatch: z.enum(JOIN_NO_MATCH).default('keep'),
+  /** Right columns whose name the left row already has get this prefix; empty = the right source's table name + "_". */
+  prefix: z.string().trim().max(40).regex(/^([A-Za-z_][A-Za-z0-9_]*)?$/, 'Use letters, numbers and underscores').default(''),
+})
+
+/** Stacks the rows of its inputs (columns matched by name) and records which input each came from. */
+const unionNode = z.object({
+  id: z.string(),
+  type: z.literal('union'),
+  position,
+  /** Column that records the input; empty = not recorded. */
+  sourceColumn: z.string().trim().max(60).regex(/^([A-Za-z_][A-Za-z0-9_]*)?$/, 'Use letters, numbers and underscores').default('_source'),
+  /** Value written for each input (keyed by the step it comes from); default: that lane's table. */
+  labels: z.array(z.object({ from: z.string().min(1), label: z.string().trim().max(60) })).max(MAX_SOURCES).default([]),
 })
 
 const datasetDestination = z.object({
@@ -392,7 +445,7 @@ export function apiDestinationIssues(spec: Pick<ApiDestinationSpec, 'body' | 'pa
   return issues
 }
 
-export const nodeSchema = z.union([sourceNode, filterNode, mapNode, validateNode, rulesNode, routerNode, destinationNode])
+export const nodeSchema = z.union([sourceNode, filterNode, mapNode, validateNode, rulesNode, routerNode, joinNode, unionNode, destinationNode])
 export type PipelineNode = z.infer<typeof nodeSchema>
 /** @deprecated name kept for v1 call sites; a node is a step. */
 export type PipelineStep = PipelineNode
@@ -402,8 +455,13 @@ export type MapStep = z.infer<typeof mapNode>
 export type ValidateStep = z.infer<typeof validateNode>
 export type RulesStep = z.infer<typeof rulesNode>
 export type RouterStep = z.infer<typeof routerNode>
+export type JoinStep = z.infer<typeof joinNode>
+export type UnionStep = z.infer<typeof unionNode>
 export type DestinationStep = z.infer<typeof destinationNode>
 export type NodeType = PipelineNode['type']
+
+export const PORTS = ['', 'left', 'right'] as const
+export type Port = (typeof PORTS)[number]
 
 export const edgeSchema = z.object({
   id: z.string().min(1),
@@ -411,6 +469,8 @@ export const edgeSchema = z.object({
   to: z.string().min(1),
   /** Router edges: the branch id, or "otherwise". */
   branch: z.string().default(''),
+  /** Edges into a Join: the driving side (left) or the staged side (right). */
+  port: z.enum(PORTS).optional(),
 })
 export type PipelineEdge = z.infer<typeof edgeSchema>
 export const OTHERWISE = 'otherwise'
@@ -463,39 +523,53 @@ export const definitionSchema = z.preprocess(
       ids.add(n.id)
     }
     for (const n of def.nodes) if (n.type === 'filter' && !n.conditions.length && !n.ruleId) issue('A Filter needs a condition or a business rule.')
-    const sources = def.nodes.filter((n) => n.type === 'source')
+    const sources = def.nodes.filter((n): n is SourceStep => n.type === 'source')
     const destinations = def.nodes.filter((n) => n.type === 'destination')
-    if (sources.length !== 1) issue('A pipeline needs exactly one Source.')
+    if (!sources.length) issue('A pipeline needs a Source.')
+    if (sources.length > MAX_SOURCES) issue(`A pipeline reads at most ${MAX_SOURCES} sources.`)
     if (!destinations.length) issue('Add at least one Destination.')
     const byId = new Map(def.nodes.map((n) => [n.id, n]))
+    let edgesOk = true
+    let plan: LanePlan | null = null
     for (const e of def.edges) {
       const from = byId.get(e.from)
       const to = byId.get(e.to)
       if (!from || !to) {
         issue('A connection points to a step that no longer exists.')
+        edgesOk = false
         continue
       }
-      if (to.type === 'source') issue('Nothing can flow into the Source.')
+      if (to.type === 'source') issue('Nothing can flow into a Source.')
       if (from.type === 'destination') issue('A Destination is the end of a path; it has no outgoing connections.')
       if (from.type === 'router') {
         if (e.branch !== OTHERWISE && !from.branches.some((b) => b.id === e.branch)) issue(`A connection from router ${from.id} has no branch.`)
       } else if (e.branch) issue('Only Router connections carry a branch.')
+      if (to.type === 'join' && !e.port) issue(`${stepTitle(to)}: connect each input to the left (driving) or right (looked-up) side.`)
+      if (to.type !== 'join' && e.port) issue('Only connections into a Join have a left or right side.')
     }
-    // Every step is reachable from the Source, and the graph has no cycles.
-    const source = sources[0]
-    if (source) {
+    // Every step is reachable from a Source, and the graph has no cycles.
+    if (sources.length && edgesOk) {
       const out = new Map<string, string[]>()
       for (const e of def.edges) out.set(e.from, [...(out.get(e.from) ?? []), e.to])
-      const reach = new Set<string>([source.id])
-      const stack = [source.id]
+      const reach = new Set<string>(sources.map((s) => s.id))
+      const stack = [...reach]
       while (stack.length) for (const next of out.get(stack.pop()!) ?? []) if (!reach.has(next)) (reach.add(next), stack.push(next))
       const orphan = def.nodes.find((n) => !reach.has(n.id))
-      if (orphan) issue(`"${stepTitle(orphan)}" isn't connected to the Source.`)
+      if (orphan) issue(`"${stepTitle(orphan)}" isn't connected to a Source.`)
       if (!topoOrder(def.nodes, def.edges)) issue('Connections form a loop. Pipelines must flow one way.')
+      else {
+        plan = planLanes(def)
+        for (const message of plan.issues) issue(message)
+      }
     }
-    if (source?.type === 'source' && source.mode === 'incremental' && !source.watermarkColumn.trim()) {
-      issue('Incremental sync needs a watermark column (e.g. updated_at).')
+    for (const s of sources) {
+      if (s.mode === 'incremental' && !s.watermarkColumn.trim()) issue('Incremental sync needs a watermark column (e.g. updated_at).')
     }
+    for (const n of def.nodes) {
+      if (n.type === 'union' && def.edges.filter((e) => e.to === n.id).length < 2) issue(`${stepTitle(n)}: connect at least two inputs.`)
+    }
+    // Soft deletes need every streamed row (driver and Union partners); staged lanes only add values.
+    const streamedIncremental = sources.some((s) => s.mode === 'incremental' && (!plan || plan.streamed.includes(s.id)))
     for (const d of destinations) {
       if (d.type !== 'destination') continue
       if (d.kind === 'api') {
@@ -506,7 +580,7 @@ export const definitionSchema = z.preprocess(
       if (d.mode === 'upsert' && d.keys.length === 0) issue(`${stepTitle(d)}: upsert needs at least one key column.`)
       if (d.softDeleteMissing) {
         if (d.mode !== 'upsert') issue(`${stepTitle(d)}: "mark missing rows deleted" needs upsert mode.`)
-        if (source?.type === 'source' && source.mode === 'incremental') issue(`${stepTitle(d)}: "mark missing rows deleted" needs a full read, not incremental.`)
+        if (streamedIncremental) issue(`${stepTitle(d)}: "mark missing rows deleted" needs a full read, not incremental.`)
         if (d.kind === 'datasource' && !d.softDeleteColumn.trim()) issue(`${stepTitle(d)}: choose the column that marks deleted rows.`)
       }
     }
@@ -547,6 +621,10 @@ export function stepTitle(n: PipelineNode): string {
       return `Business rules (${n.ruleIds.length})`
     case 'router':
       return `Route (${n.branches.length + 1} branches)`
+    case 'join':
+      return `Join on ${n.keys.map((k) => k.left).filter(Boolean).join(', ') || 'keys'}`
+    case 'union':
+      return 'Union'
     case 'destination':
       return n.kind === 'dataset' ? `Write dataset ${n.datasetName}` : n.kind === 'api' ? `Send ${n.method} ${n.path}` : `Write ${n.table}`
   }

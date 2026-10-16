@@ -189,6 +189,7 @@ export const en = {
     webhook: 'webhook trigger',
     noSource: 'No source',
     noDestination: 'No destination',
+    moreSources: '{name} + {count} more',
     datasetsTitle: 'Nexus datasets',
     datasetsBody: 'Outputs written by your pipelines.',
     colDataset: 'Dataset',

@@ -14,6 +14,7 @@ import { FlowLine, StateMark, type FlowState } from '@/components/ui/flow-line'
 import { useToast } from '@/components/ui/toast'
 import { deletePipeline, discardDraft, getBuilderOptions, publishPipeline, getDatasetPreview, getRunStatus, listPipelines, resetSyncPosition, runPipelineNow, setPipelineEnabled } from '@/lib/actions/pipelines'
 import { DEFAULT_SCHEDULE, DEFAULT_SETTINGS, definitionSchema, scheduleSchema, topoOrder, type PipelineDefinition } from '@/lib/pipelines/definition'
+import { lanePlan } from '@/lib/pipelines/lanes'
 import { describeScheduleT } from '@/lib/pipelines/schedule'
 import PipelineEditor, { blankPipeline, SampleTable, type EditablePipeline } from '@/components/pipelines/pipeline-editor'
 import TemplatePicker from '@/components/pipelines/template-picker'
@@ -382,7 +383,8 @@ export default function PipelineDesignerLayer() {
                 {visible.map(({ p, def, from, table, to, line }) => {
                   const published = (p.version ?? 0) > 0
                   const schedule = scheduleSchema.safeParse(p.schedule ?? {}).data ?? DEFAULT_SCHEDULE
-                  const src = def?.nodes.find((n) => n.type === 'source')
+                  const driver = def ? lanePlan(def).driver : null
+                  const src = def?.nodes.find((n) => n.type === 'source' && n.id === driver)
                   const incremental = src?.type === 'source' && src.mode === 'incremental' ? src : null
                   const meta = [
                     describeScheduleT(schedule, t) + (schedule.type === 'after' ? ` (${items.find((x) => x.id === schedule.afterPipelineId)?.name ?? '—'})` : ''),

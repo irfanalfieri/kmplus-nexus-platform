@@ -28,3 +28,6 @@ tsconfig.tsbuildinfo
 
 # Manual test workbook (kept locally, not in the repo)
 /docs/testing/KMPlus-Nexus-Test-Cases.xlsx
+
+# Planning and design docs stay local (not committed)
+/docs/design/

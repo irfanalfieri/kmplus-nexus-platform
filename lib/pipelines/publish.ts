@@ -8,6 +8,7 @@ import { recordAudit } from '@/lib/audit'
 import { diffObjects, diffPipelineDefinitions } from '@/lib/audit-diff'
 import { notify } from '@/lib/notifications'
 import { definitionSchema, scheduleSchema, stepTitle, type PipelineDefinition, type PipelineSchedule } from './definition'
+import { lanePlan } from './lanes'
 import { approvalReasons, isApprovalPolicy, type ApprovalPolicy } from './approvals'
 import { parseDefinition } from './runner'
 import { assertValidSchedule, nextRunAt } from './schedule'
@@ -39,7 +40,9 @@ export function computeNextRun(enabled: boolean, schedule: PipelineSchedule) {
 
 /** Data sources a definition reads from or writes to (delete guard, quick lookups). */
 export function sourceRefs(definition: PipelineDefinition) {
-  const source = definition.nodes.find((n) => n.type === 'source')
+  // The driver: the pipeline's main source (one Source is the driver implicitly).
+  const driver = lanePlan(definition).driver
+  const source = definition.nodes.find((n) => n.type === 'source' && n.id === driver) ?? definition.nodes.find((n) => n.type === 'source')
   const dest = definition.nodes.find((n) => n.type === 'destination' && n.kind === 'datasource')
   return {
     sourceId: source?.type === 'source' ? source.dataSourceId : null,

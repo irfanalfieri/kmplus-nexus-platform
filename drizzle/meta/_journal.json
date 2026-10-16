@@ -155,6 +155,13 @@
       "when": 1792043492876,
       "tag": "0021_terms_acceptances",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1792137909456,
+      "tag": "0022_pipeline_stage_tables",
+      "breakpoints": true
     }
   ]
 }

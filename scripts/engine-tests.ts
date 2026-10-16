@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict'
 import { compareWatermarks, inferColumns, maxWatermark } from '@/lib/pipelines/columns'
-import { definitionSchema, scheduleSchema, settingsSchema } from '@/lib/pipelines/definition'
+import { DEFAULT_SCHEDULE, definitionSchema, scheduleSchema, settingsSchema } from '@/lib/pipelines/definition'
 import { checkDestination, emptyContext, newRunTotals, runEngine, transformChunk } from '@/lib/pipelines/engine'
 import type { BusinessRule } from '@/lib/rules/definition'
 import { describeSchedule, nextRunTimes } from '@/lib/pipelines/schedule'
@@ -31,6 +31,7 @@ import { SERVER_ERRORS } from '@/lib/i18n/server-errors-table'
 import { localizeServerError } from '@/lib/i18n/server-errors'
 import { checkCatalogAnswer, checkConnectorAnswer, detectConnectors, rankCatalog, scrubPasted } from '@/lib/ai/discovery'
 import { serverErrorTemplates } from './test/server-error-sources'
+import { laneTests } from './test/lane-tests'
 import { localizeStepTitle } from '@/components/pipelines/step-title'
 import { alertEmail, inviteEmail, passwordChangedEmail, resetPasswordEmail } from '@/lib/email-templates'
 import { BUILTIN_MAPPING_TEMPLATES, PIPELINE_TEMPLATES, applyMappingTemplate, buildPipelineTemplate, mapToEntity } from '@/lib/pipelines/templates'
@@ -231,7 +232,7 @@ async function main() {
       const out: Record<string, unknown>[] = []
       let rejects = 0
       for (let i = 0; i < hr.length; i += size) {
-        const chunk = transformChunk(def, hr.slice(i, i + size), totals, seen)
+        const chunk = await transformChunk(def, hr.slice(i, i + size), totals, seen)
         out.push(...chunk.rows)
         rejects += chunk.rejects.length
       }
@@ -247,9 +248,9 @@ async function main() {
     }
   })
 
-  await test('chunked run: abort validation and missing upsert key are not retryable', () => {
+  await test('chunked run: abort validation and missing upsert key are not retryable', async () => {
     const abortDef = definitionSchema.parse({ steps: [base.steps[0], { id: 'v', type: 'validate', onFail: 'abort', rules: [{ field: 'EMAIL', rule: 'email' }] }, base.steps[4]] })
-    assert.throws(() => transformChunk(abortDef, hr, newRunTotals(abortDef), new Map()), (e: { retryable?: boolean }) => e.retryable === false)
+    await assert.rejects(() => transformChunk(abortDef, hr, newRunTotals(abortDef), new Map()), (e: { retryable?: boolean }) => e.retryable === false)
     const noKey = definitionSchema.parse({ steps: [base.steps[0], base.steps[4]] })
     assert.throws(() => checkDestination(noKey, [{ name: 'PERNR', type: 'text' }]), (e: { retryable?: boolean }) => e.retryable === false)
   })
@@ -343,7 +344,7 @@ async function main() {
     assert.equal(res.destinations?.length, 3)
   })
 
-  await test('business rules node: exclude, set, calculate, route, approval holds, hit counts', () => {
+  await test('business rules node: exclude, set, calculate, route, approval holds, hit counts', async () => {
     const rules = new Map<string, BusinessRule>([
       ['inactive', { id: 'inactive', name: 'Drop inactive', version: 1, when: { match: 'all', conditions: [{ field: 'STAT', operator: 'equals', value: 'Inactive', valueField: '' }], groups: [] }, then: [{ type: 'exclude' }], otherwise: [] }],
       ['label', { id: 'label', name: 'Label', version: 1, when: { match: 'all', conditions: [], groups: [] }, then: [{ type: 'set_field', field: 'source', value: 'SAP-{PERNR}' }, { type: 'calculate', field: 'salary_k', expr: { kind: 'op', op: '/', left: { kind: 'fn', fn: 'coalesce', args: [{ kind: 'field', name: 'SAL' }, { kind: 'value', value: '0' }] }, right: { kind: 'value', value: '1000' } } }], otherwise: [] }],
@@ -365,7 +366,7 @@ async function main() {
       { PERNR: '3', STAT: 'Active', SAL: '9000000' },
     ]
     const totals = newRunTotals(def)
-    const out = transformChunk(def, rows, totals, { ...emptyContext(), rules })
+    const out = await transformChunk(def, rows, totals, { ...emptyContext(), rules })
     const normal = out.byDestination.get('normal')!
     assert.equal(normal.length, 1)
     assert.deepEqual(normal[0], { PERNR: '1', STAT: 'Active', SAL: '3000000', source: 'SAP-1', salary_k: 3000 }, '_nexus_route is stripped before writing')
@@ -374,11 +375,11 @@ async function main() {
     assert.equal(out.rejects[0].kind, 'approval')
     assert.equal(totals.heldCount, 1)
     assert.equal(totals.ruleHits['big:then'], 1, 'notify/trigger counts per branch')
-    const replay = transformChunk(def, [rows[2]], newRunTotals(def), { ...emptyContext(), rules, approved: true }, {}, { startNodeId: 'rules' })
+    const replay = await transformChunk(def, [rows[2]], newRunTotals(def), { ...emptyContext(), rules, approved: true }, {}, { startNodeId: 'rules' })
     assert.equal(replay.byDestination.get('other')!.length, 1, 'an approved row continues downstream')
   })
 
-  await test('data quality: new rule types and severities (warnings are written and flagged)', () => {
+  await test('data quality: new rule types and severities (warnings are written and flagged)', async () => {
     const def = definitionSchema.parse({
       nodes: [
         { id: 'src', type: 'source', dataSourceId: 'x', table: 't' },
@@ -407,7 +408,7 @@ async function main() {
       { ...good, npwp: '123', phone: '12', start: '2999-01-01', end: '2999-02-01' },
     ]
     const totals = newRunTotals(def)
-    const out = transformChunk(def, rows, totals, ctx)
+    const out = await transformChunk(def, rows, totals, ctx)
     assert.equal(out.byDestination.get('d')!.length, 2, 'good row + warning-only row are written')
     assert.equal(out.rejects.length, 2)
     assert.deepEqual(out.rejects[0].errors.map((e) => e.split(' ')[0]), ['nik', 'org'])
@@ -728,6 +729,16 @@ async function main() {
     const blocked = planPromotion(def, schedule, from, { dataSources: [], rules: [], pipelines: [] }, 'Production')
     assert.ok(blocked.blocking.some((b) => /Add the data source "HR DB" \(postgresql\) in Production/.test(b)))
     assert.ok(blocked.blocking.some((b) => /promote that one to Production first/.test(b)))
+    // A REST API destination sends to the target environment's API, not Development's.
+    const apiDef = definitionSchema.parse({
+      nodes: [{ id: 's', type: 'source', dataSourceId: 'dev-hr', table: 'employees' }, { id: 'api', type: 'destination', kind: 'api', dataSourceId: 'dev-api', path: '/employees', body: { template: { t: 'object', fields: [{ key: 'code', node: { t: 'value', binding: { kind: 'column', column: 'code' } } }] } } }],
+      edges: [{ id: 'e', from: 's', to: 'api' }],
+    })
+    const withApi = (prefix: string) => [{ id: `${prefix}-hr`, name: 'HR DB', sourceType: 'postgresql' }, { id: `${prefix}-api`, name: 'HR API', sourceType: 'rest' }]
+    const apiPlan = planPromotion(apiDef, DEFAULT_SCHEDULE, { ...from, dataSources: withApi('dev') }, { ...to, dataSources: withApi('stg') }, 'Staging')
+    const apiDest = apiPlan.definition.nodes.find((n) => n.id === 'api')!
+    assert.equal(apiDest.type === 'destination' && apiDest.kind === 'api' && apiDest.dataSourceId, 'stg-api')
+    assert.ok(planPromotion(apiDef, DEFAULT_SCHEDULE, { ...from, dataSources: withApi('dev') }, { ...to, dataSources: withApi('stg').slice(0, 1) }, 'Staging').blocking.some((b) => /"HR API" \(rest\)/.test(b)), 'a missing API data source blocks it')
     assert.equal(nextEnvironment('dev', ['dev', 'prod']), 'prod', 'skips a missing staging')
     assert.equal(nextEnvironment('prod', ['dev', 'staging', 'prod']), null)
   })
@@ -1502,6 +1513,8 @@ async function main() {
       assert.notEqual(localizeCheck(`PUT /e/{{id}}: ${msg}`, 'id'), `PUT /e/{{id}}: ${msg}`)
     }
   })
+
+  await laneTests(test)
 
   console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`)
 }

@@ -6,8 +6,9 @@ import { newId } from '@/lib/auth/session'
 import { notify } from '@/lib/notifications'
 import { definitionSchema, describeDefinitionError, type PipelineDefinition, type SourceStep } from './definition'
 import { runEngine, type EngineIO, type EngineResult } from './engine'
-import { NonRetryableError, datasetTableName, readSourceRows, type StoredDataSource } from './io'
+import { NonRetryableError, datasetTableName, readRowsByKeys, readSourceRows, type StoredDataSource } from './io'
 import { loadRunContext } from './context'
+import { lanePlan } from './lanes'
 
 /** Who a run belongs to: the workspace, and the user who triggered or owns it. */
 export interface RunScope {
@@ -16,8 +17,14 @@ export interface RunScope {
 }
 
 export interface PipelineState {
+  /** The driver's position (kept for pipelines saved before several sources). */
   watermark?: { column: string; value: string | null; sourceKey: string }
+  /** Every incremental Source's position, by step id. */
+  watermarks?: Record<string, { column: string; value: string | null; sourceKey: string }>
 }
+
+/** Rows a sample test reads from a staged lane when the source can't filter by key. */
+export const STAGED_SAMPLE_ROWS = 5000
 
 export function parseDefinition(config: unknown): PipelineDefinition {
   const parsed = definitionSchema.safeParse(config)
@@ -30,12 +37,23 @@ export function watermarkKey(step: SourceStep) {
   return `${step.dataSourceId}|${step.table}|${step.watermarkColumn}`
 }
 
-/** The stored watermark if it still matches the pipeline's source, else null (full read). */
+/** Stored positions of every incremental Source that still match it (source, table, column); null = read from the start. */
+export function currentWatermarks(def: PipelineDefinition, state: unknown): Record<string, string | null> {
+  const st = (state as PipelineState | null) ?? {}
+  const driver = lanePlan(def).driver
+  const out: Record<string, string | null> = {}
+  for (const n of def.nodes) {
+    if (n.type !== 'source' || n.mode !== 'incremental') continue
+    const wm = st.watermarks?.[n.id] ?? (n.id === driver ? st.watermark : undefined)
+    out[n.id] = wm && wm.sourceKey === watermarkKey(n) ? wm.value : null
+  }
+  return out
+}
+
+/** The driver's stored watermark if it still matches its source, else null (full read). */
 export function currentWatermark(def: PipelineDefinition, state: unknown): string | null {
-  const source = def.nodes.find((n) => n.type === 'source')
-  if (source?.type !== 'source' || source.mode !== 'incremental') return null
-  const wm = (state as PipelineState | null)?.watermark
-  return wm && wm.sourceKey === watermarkKey(source) ? wm.value : null
+  const driver = lanePlan(def).driver
+  return driver ? (currentWatermarks(def, state)[driver] ?? null) : null
 }
 
 export async function loadSource(workspaceId: string, dataSourceId: string): Promise<StoredDataSource> {
@@ -77,15 +95,31 @@ export async function upsertDatasetRecord(
     })
 }
 
-/** Dry run on a small sample: reads real data, runs every step, writes nothing. */
+/**
+ * Dry run on a small sample: reads real data, runs every step, writes nothing.
+ * Streamed sources read a sample; a Join's staged side reads only the rows of
+ * the sample's keys where the source can filter, else up to 5,000 rows.
+ */
 export async function testRunDefinition(scope: RunScope, config: unknown, sampleSize = 25, state?: unknown): Promise<EngineResult> {
   const def = parseDefinition(config)
-  const watermarkAfter = currentWatermark(def, state)
+  const plan = lanePlan(def)
+  const watermarks = currentWatermarks(def, state)
+  const loaded = new Map<string, Promise<StoredDataSource>>()
+  const sourceFor = (id: string) => {
+    if (!loaded.has(id)) loaded.set(id, loadSource(scope.workspaceId, id))
+    return loaded.get(id)!
+  }
   const io: EngineIO = {
     async read(step) {
-      const source = await loadSource(scope.workspaceId, step.dataSourceId)
-      const watermark = step.mode === 'incremental' ? { column: step.watermarkColumn, after: watermarkAfter } : undefined
-      return readSourceRows(source, step.table, Math.min(step.maxRows, Math.max(sampleSize, 200)), { watermark })
+      const source = await sourceFor(step.dataSourceId)
+      const watermark = step.mode === 'incremental' ? { column: step.watermarkColumn, after: watermarks[step.id] ?? null } : undefined
+      const limit = plan.streamed.includes(step.id) ? Math.max(sampleSize, 200) : STAGED_SAMPLE_ROWS
+      return readSourceRows(source, step.table, Math.min(step.maxRows, limit), { watermark })
+    },
+    async readByKeys(step, column, keys, normalize) {
+      // Incremental staged lanes: only rows after the position count, so read them the usual way.
+      if (step.mode === 'incremental') return null
+      return readRowsByKeys(await sourceFor(step.dataSourceId), step.table, column, keys, normalize, Math.min(step.maxRows, STAGED_SAMPLE_ROWS))
     },
   }
   // Same business rules and lookups as a real run, so the preview matches.

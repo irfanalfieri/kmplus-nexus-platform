@@ -251,7 +251,7 @@ export const helpId: HelpContent = {
     {
       id: 'pipelines',
       title: 'Bangun pipeline',
-      summary: 'Templat, editor, langkah, pemeriksaan, tujuan, penerbitan, jadwal, persetujuan, serta lingkungan dengan promosi.',
+      summary: 'Templat, editor, langkah, beberapa sumber dengan Gabung dan Satukan, pemeriksaan, tujuan, penerbitan, jadwal, persetujuan, serta lingkungan dengan promosi.',
       screen: 'pipelines',
       sections: [
         {
@@ -269,6 +269,8 @@ export const helpId: HelpContent = {
                 ['Validasi', 'Memeriksa setiap baris. Error menahan baris; peringatan hanya mencatatnya.'],
                 ['Aturan', 'Menerapkan aturan bisnis dari layar Aturan, termasuk baris yang harus menunggu persetujuan.'],
                 ['Router', 'Mengirim baris ke cabang berbeda berdasarkan kondisi.'],
+                ['Gabung (join)', 'Menambahkan kolom dari sumber lain berdasarkan kunci, mis. gaji dari API payroll untuk setiap karyawan (lihat Beberapa sumber).'],
+                ['Satukan (union)', 'Menumpuk baris dari beberapa sumber, mis. dua sistem HR, dan mencatat asal setiap baris.'],
                 ['Tujuan', 'Menulis ke dataset atau ke sumber data tujuan seperti produk KMPlus.'],
               ],
             },
@@ -297,12 +299,42 @@ export const helpId: HelpContent = {
             {
               kind: 'list',
               items: [
-                '**Tambahkan setelah langkah terpilih** di kiri menyisipkan langkah Filter, Pemetaan & transformasi, Validasi, Aturan bisnis, Router, atau Tujuan.',
+                '**Tambahkan setelah langkah terpilih** di kiri menyisipkan langkah Filter, Pemetaan & transformasi, Validasi, Aturan bisnis, Router, Gabung, Satukan, atau Tujuan; **Sumber** menambahkan sumber lain untuk digabungkan.',
                 'Pilih langkah untuk mengeditnya di kanan; **Langkah berikutnya** menghubungkannya ke langkah selanjutnya (Router punya satu per cabang).',
                 '**Pengaturan eksekusi** mengatur pengulangan, batas waktu, ukuran batch, ambang karantina, dan kapan memberi peringatan (tidak pernah, saat gagal, atau saat gagal atau ada baris tertahan).',
                 '**Jadwal** mengatur kapan versi terbit berjalan (lihat Jadwal dan pemicu).',
               ],
             },
+          ],
+        },
+        {
+          id: 'lanes',
+          title: 'Beberapa sumber: Gabung dan Satukan',
+          blocks: [
+            { kind: 'p', text: 'Data klien jarang berada di satu tempat: ID dan nama di HRIS, gaji di API payroll, unit di tabel organisasi. Tambahkan langkah **Sumber** untuk masing-masing. Setiap sumber memulai **jalur**-nya sendiri (sumber dan langkah yang dilalui barisnya), dan jalur bertemu di langkah **Gabung** atau **Satukan**. Paling banyak 10 sumber per pipeline.' },
+            {
+              kind: 'list',
+              items: [
+                '**Penggerak**: jika ada beberapa sumber, tandai satu sebagai penggerak (kanvas memberinya label). Sumber ini dialirkan per potongan seperti satu sumber; maks. baris dan mode sinkronisasinya berlaku seperti biasa.',
+                '**Gabung**: hubungkan baris yang dipertahankan ke sisi **kiri** dan sumber yang dicari ke sisi **kanan**. Pilih satu atau beberapa pasangan kunci (`employee_code` = `employee_code`).',
+                '**Satukan**: hubungkan dua masukan atau lebih. Kolom dicocokkan berdasarkan nama, kolom yang tidak dimiliki suatu masukan dibiarkan kosong, dan kolom `_source` mencatat asal setiap baris.',
+              ],
+            },
+            {
+              kind: 'table',
+              head: ['Pengaturan Gabung', 'Pilihan (bawaan lebih dulu)'],
+              rows: [
+                ['Jenis', 'Kiri: pertahankan semua baris kiri · Dalam: hanya baris yang berpasangan · Tanpa pasangan: hanya baris yang tidak berpasangan'],
+                ['Bandingkan kunci', 'Abaikan spasi dan huruf besar/kecil (aktif) · abaikan nol di depan, sehingga `00123` = `123` (nonaktif)'],
+                ['Beberapa pasangan', 'Satu baris per pasangan (kunci yang muncul dua kali di kanan menulis baris itu dua kali) · Pasangan pertama menurut suatu kolom'],
+                ['Baris tanpa pasangan', 'Pertahankan dengan kolom kanan kosong · Buang · Karantina, untuk diputar ulang setelah pasangannya ada'],
+                ['Nama kolom yang bentrok', 'Kolom kanan yang namanya sudah ada di sisi kiri diberi awalan: nama tabel sumber kanan, mis. `payroll_name`, atau awalan Anda sendiri'],
+              ],
+            },
+            { kind: 'p', text: 'Setiap eksekusi berjalan bertahap. Pertama, sisi kanan setiap langkah Gabung dibaca penuh, melalui langkahnya sendiri, ke **penyiapan eksekusi** (paling banyak 1.000.000 baris per langkah Gabung; disimpan bertahap, sehingga eksekusi yang terhenti berlanjut dari posisinya). Lalu sumber penggerak dialirkan, setiap potongan mencari kuncinya, dan masukan Satukan dialirkan setelahnya. Penyiapan dihapus saat eksekusi selesai. Log eksekusi menyebutkan berapa baris berpasangan, berapa yang berlipat, dan berapa ruang penyiapan yang dipakai.' },
+            { kind: 'p', text: '**Uji pada sampel** membaca sampel dari sumber penggerak, lalu hanya baris sisi kanan dengan kunci sampel tersebut (dari database dan file; sumber lain membaca hingga 5.000 baris), sehingga langkah Gabung menampilkan “18 dari 25 berpasangan”.' },
+            { kind: 'note', tone: 'warning', text: 'Penggerak inkremental dengan langkah Gabung: sumber yang dicari dibaca penuh setiap eksekusi, tetapi hanya baris yang dibaca sumber penggerak (baru atau berubah) yang digabung. Perubahan di payroll baru sampai ke seorang karyawan ketika baris karyawan itu sendiri juga berubah. Setiap sumber menyimpan posisi sinkronisasinya sendiri.' },
+            { kind: 'note', tone: 'info', text: 'Baris yang ditahan di langkah Gabung atau sesudahnya diputar ulang dari langkahnya seperti biasa. Baris yang ditahan di dalam jalur yang mengisi sisi kanan langkah Gabung tidak dapat diputar ulang ke penggabungan yang sudah selesai: jalankan pipeline lagi setelah memperbaiki sumbernya.' },
           ],
         },
         {
@@ -937,6 +969,9 @@ export const helpId: HelpContent = {
     { id: 'incremental', group: 'pipelines', q: 'Apakah setiap eksekusi membaca seluruh tabel?', a: 'Tidak jika langkah sumber **inkremental**: Nexus mengingat nilai tertinggi kolom seperti `updated_at` dan hanya membaca baris yang lebih baru. Watermark hanya bergeser setelah seluruh eksekusi berhasil.' },
     { id: 'duplicates', group: 'pipelines', q: 'Bisakah eksekusi yang diulang membuat baris ganda?', a: 'Tidak. Penambahan ditulis per potongan dengan id eksekusi, sehingga potongan yang dilanjutkan menggantikan salinan sebelumnya; upsert mencocokkan kolom kunci Anda.' },
     { id: 'chain', group: 'pipelines', q: 'Bagaimana menjalankan pipeline B setelah pipeline A?', a: 'Di jadwal B pilih **Setelah pipeline lain** dan pilih A. B diantrekan setiap kali A selesai.' },
+    { id: 'join-multiplied', group: 'pipelines', q: 'Mengapa dataset saya memiliki lebih banyak baris daripada sistem HR setelah langkah Gabung?', a: 'Langkah Gabung menulis **satu baris per pasangan**: karyawan dengan dua catatan payroll menjadi dua baris. Uji dan log eksekusi menyebutkan berapa baris yang berlipat. Untuk mempertahankan satu, setel **Beberapa pasangan** ke *Hanya pasangan pertama* dan pilih kolom penentunya (mis. `valid_from` terbaru).' },
+    { id: 'join-no-match', group: 'pipelines', q: 'Baris ditahan di langkah Gabung dengan “Tidak ada pasangan di …”. Lalu bagaimana?', a: 'Kuncinya tidak ditemukan di sisi kanan langkah Gabung (sering kali unit atau catatan yang dibuat belakangan, atau kunci yang ditulis berbeda). Periksa cara membandingkan kunci, atau tunggu hingga pasangannya ada; lalu buka baris itu di Kualitas data dan pilih **Simpan & putar ulang**: baris masuk kembali di langkah Gabung dan dicocokkan lagi.' },
+    { id: 'join-incremental', group: 'pipelines', q: 'Bisakah pipeline inkremental memakai langkah Gabung?', a: 'Bisa. Sumber yang dicari dibaca penuh setiap eksekusi, sehingga baris baru dari sumber penggerak selalu menemukan pasangannya. Namun perubahan yang hanya terjadi di sisi yang dicari (gaji baru) baru sampai ke seorang karyawan ketika baris karyawan itu dibaca lagi: gunakan pembacaan penuh bila hal itu penting, atau atur ulang posisi sinkronisasi.' },
     { id: 'deleted-employees', group: 'pipelines', q: 'Bagaimana karyawan yang keluar ditangani?', a: 'Dengan tujuan upsert dan **Tandai baris yang tidak ada lagi di sumber sebagai terhapus**, baris yang hilang dari sumber ditandai terhapus alih-alih dibuang. Pembacaan mengecualikannya; riwayatnya tetap ada.' },
     { id: 'env-why', group: 'environments', q: 'Mengapa memakai Development, Staging, dan Production?', a: 'Agar pipeline bisa diubah tanpa membahayakan data produksi. Bangun dengan data uji di Development, periksa hasilnya dengan data mirip produksi di Staging, dan promosikan hanya yang berhasil ke Production, yang tidak bisa diedit langsung.' },
     { id: 'env-sources', group: 'environments', q: 'Apakah pipeline yang dipromosikan membaca database Development di Production?', a: 'Tidak. Sumber data dicocokkan **berdasarkan nama**, dan setiap lingkungan punya sumber sendiri dengan kredensialnya sendiri. Beri sumber nama yang sama di setiap lingkungan; sumber yang belum ada memblokir promosi.' },

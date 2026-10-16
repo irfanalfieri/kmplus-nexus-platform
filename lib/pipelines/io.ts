@@ -164,6 +164,63 @@ export async function readSourceRows(source: StoredDataSource, table: string, ma
   return rows
 }
 
+/**
+ * Sample tests of a Join: the rows of a source whose key column matches these
+ * normalized keys (lib/pipelines/join.ts normalizeKeyPart, mirrored in SQL),
+ * so a test shows "18 of 25 matched" instead of reading the whole lane. SQL
+ * sources and file uploads only; null for the rest (the caller reads up to
+ * 5,000 rows and filters). The caller checks each row's key exactly again.
+ */
+export async function readRowsByKeys(
+  source: StoredDataSource,
+  table: string,
+  column: string,
+  keys: string[],
+  normalize: { trim: boolean; ignoreCase: boolean; leadingZeros: boolean },
+  limit = 5000
+): Promise<Row[] | null> {
+  if (!keys.length) return []
+  if (agentOf(source)) return null
+  const pgExpr = (col: string) => {
+    let e = `${qIdent(col)}::text`
+    if (normalize.trim) e = `btrim(${e})`
+    if (normalize.ignoreCase) e = `lower(${e})`
+    if (normalize.leadingZeros) e = `regexp_replace(${e}, '^0+(?=.)', '')`
+    return e
+  }
+  const pg = pgTarget(source)
+  if (pg) {
+    const p = externalPgPool(pg.connectionString, pg.tls)
+    try {
+      const res = await p.query(`SELECT * FROM ${qIdent(pg.schema)}.${qIdent(table)} WHERE ${pgExpr(column)} = ANY($1::text[]) LIMIT $2`, [keys, limit])
+      return res.rows as Row[]
+    } finally {
+      await p.end()
+    }
+  }
+  if (source.sourceType === 'file') {
+    const { rawRel, physicalTable, ROW_COLUMN } = await import('@/lib/connectors/drivers/file')
+    const res = await nexusPool.query(`SELECT * FROM ${rawRel(physicalTable(credentialsOf(source).storageKey ?? '', table))} WHERE ${pgExpr(column)} = ANY($1::text[]) ORDER BY ${qIdent(ROW_COLUMN)} LIMIT $2`, [keys, limit])
+    return res.rows.map(({ [ROW_COLUMN]: _r, ...rest }) => rest as Row)
+  }
+  if (source.sourceType === 'mysql') {
+    let e = `CAST(${mIdent(column)} AS CHAR)`
+    if (normalize.trim) e = `TRIM(${e})`
+    if (normalize.ignoreCase) e = `LOWER(${e})`
+    if (normalize.leadingZeros) e = `TRIM(LEADING '0' FROM ${e})`
+    const conn = await mysql.createConnection(mysqlConfig(credentialsOf(source)) as mysql.ConnectionOptions)
+    try {
+      // TRIM(LEADING '0') also empties "000": compare the stripped keys, then check exactly in the caller.
+      const wanted = normalize.leadingZeros ? keys.map((k) => k.replace(/^0+/, '')) : keys
+      const [rows] = await conn.query<mysql.RowDataPacket[]>(`SELECT * FROM ${mIdent(table)} WHERE ${e} IN (?) LIMIT ?`, [wanted, limit])
+      return rows as Row[]
+    } finally {
+      await conn.end()
+    }
+  }
+  return null
+}
+
 // ── Column helpers ───────────────────────────────────────────────────────────
 
 const PG_TYPES: Record<ColumnType, string> = {

@@ -16,7 +16,7 @@ import {
   type NodeProps,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { BellRing, Database, Filter, FlaskConical, GitBranch, Link2, Loader2, OctagonAlert, Rocket, Save, Scale, ShieldCheck, Shuffle, Trash2, Upload, X } from 'lucide-react'
+import { BellRing, Database, Filter, FlaskConical, GitBranch, GitMerge, Layers, Link2, Loader2, OctagonAlert, Rocket, Save, Scale, ShieldCheck, Shuffle, Trash2, Upload, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -39,6 +39,7 @@ import {
   scheduleSchema,
   topoOrder,
   type NodeType,
+  type Port,
   type PipelineEdge,
   type PipelineNode,
   type PipelineSchedule,
@@ -49,14 +50,19 @@ import { AFTER_OUTCOMES } from '@/lib/pipelines/definition'
 import type { EngineResult, StepStat } from '@/lib/pipelines/engine'
 import { createWebhookTrigger, disableWebhookTrigger, savePipeline, testPipeline } from '@/lib/actions/pipelines'
 import { localizeCheck } from '@/lib/pipelines/check-messages'
+import { localizeStepTitle } from './step-title'
+import { isStagedStep, joinPrefix, laneLabel, planLanes, type LanePlan } from '@/lib/pipelines/lanes'
+import { joinOutputColumns } from '@/lib/pipelines/join'
 import {
   DestinationEditor,
   FilterEditor,
+  JoinEditor,
   MapEditor,
   NativeSelect,
   RouterEditor,
   RulesEditor,
   SourceEditor,
+  UnionEditor,
   ValidateEditor,
   newCondition,
   newValidationRule,
@@ -106,6 +112,8 @@ const META: Record<NodeType, { icon: typeof Database }> = {
   validate: { icon: ShieldCheck },
   rules: { icon: Scale },
   router: { icon: GitBranch },
+  join: { icon: GitMerge },
+  union: { icon: Layers },
   destination: { icon: Upload },
 }
 const kindTitle = (type: NodeType, t: Translate) => t(`editor.nodes.${type}`)
@@ -125,11 +133,15 @@ function stepLabel(n: PipelineNode, t: Translate): string {
       return t('editor.stepTitle.rules', { count: n.ruleIds.length })
     case 'router':
       return t('editor.stepTitle.router', { count: n.branches.length + 1 })
+    case 'join':
+      return t('editor.stepTitle.join', { keys: n.keys.map((k) => k.left).filter(Boolean).join(', ') || '…' })
+    case 'union':
+      return t('editor.stepTitle.union')
     case 'destination':
       return n.kind === 'dataset' ? t('editor.stepTitle.destinationDataset', { name: n.datasetName }) : n.kind === 'api' ? t('editor.stepTitle.destinationApi', { name: `${n.method} ${n.path}` }) : t('editor.stepTitle.destinationTable', { name: n.table })
   }
 }
-const ADDABLE: Exclude<NodeType, 'source'>[] = ['filter', 'map', 'validate', 'rules', 'router', 'destination']
+const ADDABLE: NodeType[] = ['source', 'filter', 'map', 'validate', 'rules', 'router', 'join', 'union', 'destination']
 
 /** Node frame and icon colour by kind: sources in, destinations out, transforms neutral. */
 const KIND_BORDER: Record<NodeType, string> = {
@@ -139,6 +151,8 @@ const KIND_BORDER: Record<NodeType, string> = {
   validate: 'border-border',
   rules: 'border-border',
   router: 'border-border',
+  join: 'border-border',
+  union: 'border-border',
   destination: 'border-live',
 }
 const KIND_ICON: Record<NodeType, string> = {
@@ -148,6 +162,8 @@ const KIND_ICON: Record<NodeType, string> = {
   validate: 'text-muted-foreground',
   rules: 'text-muted-foreground',
   router: 'text-muted-foreground',
+  join: 'text-muted-foreground',
+  union: 'text-muted-foreground',
   destination: 'text-live',
 }
 
@@ -173,10 +189,16 @@ const CANVAS_STYLE = {
   '--xy-minimap-mask-background-color': 'color-mix(in srgb, var(--background) 60%, transparent)',
 } as React.CSSProperties
 
-function newNode(type: Exclude<NodeType, 'source'>, columns: Column[], position: { x: number; y: number }, firstBranch = 'Branch 1'): PipelineNode {
+function newNode(type: NodeType, columns: Column[], position: { x: number; y: number }, firstBranch = 'Branch 1'): PipelineNode {
   const first = columns[0]?.name ?? ''
   const id = newStepId()
   switch (type) {
+    case 'source':
+      return { id, type, position, dataSourceId: '', table: '', maxRows: 10000, mode: 'full', watermarkColumn: '' }
+    case 'join':
+      return { id, type, position, joinType: 'left', keys: [{ left: first, right: '' }], normalize: { trim: true, ignoreCase: true, leadingZeros: false }, onMany: 'all', firstBy: { column: '', direction: 'desc' }, onNoMatch: 'keep', prefix: '' }
+    case 'union':
+      return { id, type, position, sourceColumn: '_source', labels: [] }
     case 'filter':
       return { id, type, position, match: 'all', conditions: [newCondition(first)], ruleId: '' }
     case 'map':
@@ -192,17 +214,26 @@ function newNode(type: Exclude<NodeType, 'source'>, columns: Column[], position:
   }
 }
 
-/** Columns flowing into each node: the union of what its inputs output. */
-function columnsPerNode(nodes: PipelineNode[], edges: PipelineEdge[], options: BuilderOptions): Map<string, Column[]> {
+/** Columns flowing into each node (a Join: its left side; `right`: its right side): what its inputs output. */
+function columnsPerNode(nodes: PipelineNode[], edges: PipelineEdge[], options: BuilderOptions, plan: LanePlan): Map<string, Column[]> & { right: Map<string, Column[]> } {
   const order = topoOrder(nodes, edges) ?? nodes
   const output = new Map<string, Column[]>()
-  const input = new Map<string, Column[]>()
-  for (const node of order) {
+  const input = Object.assign(new Map<string, Column[]>(), { right: new Map<string, Column[]>() })
+  const gather = (nodeId: string, right: boolean) => {
     const merged = new Map<string, Column>()
-    for (const e of edges) if (e.to === node.id) for (const c of output.get(e.from) ?? []) if (!merged.has(c.name)) merged.set(c.name, c)
-    const cols = [...merged.values()]
+    for (const e of edges) if (e.to === nodeId && (e.port === 'right') === right) for (const c of output.get(e.from) ?? []) if (!merged.has(c.name)) merged.set(c.name, c)
+    return [...merged.values()]
+  }
+  for (const node of order) {
+    const cols = gather(node.id, false)
     input.set(node.id, cols)
-    if (node.type === 'source') {
+    if (node.type === 'join') {
+      const right = gather(node.id, true)
+      input.right.set(node.id, right)
+      output.set(node.id, joinOutputColumns(node, cols, right, joinPrefix({ nodes, edges }, plan, node)))
+    } else if (node.type === 'union') {
+      output.set(node.id, node.sourceColumn && !cols.some((c) => c.name === node.sourceColumn) ? [...cols, { name: node.sourceColumn, type: 'text' }] : cols)
+    } else if (node.type === 'source') {
       const src = options.dataSources.find((d) => d.id === node.dataSourceId)
       output.set(node.id, src?.tables.find((t) => t.name === node.table)?.columns ?? [])
     } else if (node.type === 'map') {
@@ -220,8 +251,8 @@ function columnsPerNode(nodes: PipelineNode[], edges: PipelineEdge[], options: B
   return input
 }
 
-/** `held`: the last test held rows at this node for approval (and quarantined none). */
-type NodeData = { node: PipelineNode; stat?: StepStat; held: boolean; invalid: boolean }
+/** `held`: the last test held rows at this node for approval (and quarantined none). `driver`: the streaming Source of several. */
+type NodeData = { node: PipelineNode; stat?: StepStat; held: boolean; invalid: boolean; driver: boolean }
 
 function NexusNode({ data, selected }: NodeProps<FlowNode<NodeData>>) {
   const t = useT()
@@ -232,13 +263,26 @@ function NexusNode({ data, selected }: NodeProps<FlowNode<NodeData>>) {
   const handles = node.type === 'router' ? [...node.branches.map((b) => ({ id: b.id, label: b.label })), { id: OTHERWISE, label: t('editor.canvas.otherwise') }] : node.type === 'destination' ? [] : [{ id: '', label: '' }]
   // The last test's outcome overrides the kind colour: failed or quarantined → danger, held for approval → held.
   const border = stat?.error ? 'border-danger' : stat && stat.rejected > 0 ? (held ? 'border-held' : 'border-danger') : KIND_BORDER[node.type]
+  const targetHandle = '!h-3 !w-3 !border-2 !border-card !bg-muted-foreground'
   return (
     <div className={cn('w-52 rounded-md border-2 bg-card text-card-foreground', border, selected && 'outline-2 outline-offset-2 outline-ring')}>
-      {node.type !== 'source' && <Handle type="target" position={Position.Left} className="!h-3 !w-3 !border-2 !border-card !bg-muted-foreground" />}
+      {node.type !== 'source' && node.type !== 'join' && <Handle type="target" position={Position.Left} className={targetHandle} />}
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
         <Icon className={cn('size-4 shrink-0', KIND_ICON[node.type])} aria-hidden />
         <span className="truncate text-sm font-medium">{kindTitle(node.type, t)}</span>
+        {data.driver && (
+          <Badge variant="outline" className="ml-auto rounded-sm px-1 py-0 font-mono text-[10px] uppercase">
+            {t('editor.canvas.driver')}
+          </Badge>
+        )}
       </div>
+      {node.type === 'join' &&
+        (['left', 'right'] as const).map((side) => (
+          <div key={side} className="relative border-b border-border px-3 py-1 text-[11px] text-muted-foreground">
+            {t(`editor.canvas.${side}`)}
+            <Handle id={side} type="target" position={Position.Left} style={{ top: '50%' }} className={targetHandle} />
+          </div>
+        ))}
       <div className="px-3 py-2 text-xs text-muted-foreground">
         <div className="truncate" title={title}>
           {title}
@@ -259,6 +303,9 @@ function NexusNode({ data, selected }: NodeProps<FlowNode<NodeData>>) {
                   </span>
                 )}
                 {!!stat.flagged && <span className="text-warning-text">{t('editor.canvas.flagged', { count: stat.flagged })}</span>}
+                {node.type === 'join' && stat.rowsIn > 0 && <span>{t('editor.canvas.matched', { matched: stat.matched ?? 0, count: stat.rowsIn })}</span>}
+                {!!stat.multiplied && <span className="text-warning-text">{t('editor.canvas.multiplied', { count: stat.multiplied })}</span>}
+                {!!stat.staged && <span>{t('editor.canvas.staged', { count: stat.staged })}</span>}
               </>
             )}
           </div>
@@ -303,7 +350,10 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
   const dirty = snapshotOf(draft) !== savedSnapshot || (!draft.id && Boolean(initial.name))
 
   const definition = { nodes: draft.nodes, edges: draft.edges, settings: draft.settings }
-  const columns = useMemo(() => columnsPerNode(draft.nodes, draft.edges, options), [draft.nodes, draft.edges, options])
+  const plan = useMemo(() => planLanes({ nodes: draft.nodes, edges: draft.edges }), [draft.nodes, draft.edges])
+  const columns = useMemo(() => columnsPerNode(draft.nodes, draft.edges, options, plan), [draft.nodes, draft.edges, options, plan])
+  const sourceCount = draft.nodes.filter((n) => n.type === 'source').length
+  const deletable = (n: PipelineNode) => n.type !== 'source' || sourceCount > 1
   const validation = useMemo(() => definitionSchema.safeParse({ schemaVersion: 2, ...definition }), [draft.nodes, draft.edges, draft.settings]) // eslint-disable-line react-hooks/exhaustive-deps
   const scheduleCheck = useMemo(() => scheduleSchema.safeParse(draft.schedule), [draft.schedule])
   const upcoming = useMemo(() => (scheduleCheck.success ? nextRunTimes(scheduleCheck.data, 3) : []), [scheduleCheck])
@@ -317,11 +367,11 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
     [test],
   )
 
-  const flowNodes: FlowNode<NodeData>[] = draft.nodes.map((n) => ({ id: n.id, type: 'nexus', position: n.position, selected: n.id === selectedId, deletable: n.type !== 'source', data: { node: n, stat: statFor(n.id), held: heldAt(n.id), invalid: false } }))
+  const flowNodes: FlowNode<NodeData>[] = draft.nodes.map((n) => ({ id: n.id, type: 'nexus', position: n.position, selected: n.id === selectedId, deletable: deletable(n), data: { node: n, stat: statFor(n.id), held: heldAt(n.id), invalid: false, driver: sourceCount > 1 && plan.driver === n.id } }))
   const flowEdges: FlowEdge[] = draft.edges.map((e) => {
     const from = draft.nodes.find((n) => n.id === e.from)
     const label = from?.type === 'router' ? (e.branch === OTHERWISE ? t('editor.canvas.otherwise') : from.branches.find((b) => b.id === e.branch)?.label) : undefined
-    return { id: e.id, source: e.from, target: e.to, sourceHandle: e.branch || null, label, animated: testing }
+    return { id: e.id, source: e.from, target: e.to, sourceHandle: e.branch || null, targetHandle: e.port || null, label, animated: testing }
   })
 
   const setNode = (node: PipelineNode) => setDraft((d) => ({ ...d, nodes: d.nodes.map((n) => (n.id === node.id ? node : n)) }))
@@ -336,11 +386,17 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
       confirmLabel: nodes.length === 1 ? t('editor.modal.deleteStep') : t('editor.modal.deleteSteps'),
       tone: 'danger',
     })
-  const connect = (from: string, to: string, branch = '') =>
+  const connect = (from: string, to: string, branch = '', side: Port = '') =>
     setDraft((d) => {
       if (from === to || d.edges.some((e) => e.from === from && e.to === to && e.branch === branch)) return d
-      return { ...d, edges: [...d.edges, { id: newStepId(), from, to, branch }] }
+      const target = d.nodes.find((n) => n.id === to)
+      // A Join has one input per side: the new connection takes the side over (left if none was picked).
+      const port: Port = target?.type === 'join' ? side || (d.edges.some((e) => e.to === to && e.port === 'left') ? 'right' : 'left') : ''
+      const edges = target?.type === 'join' ? d.edges.filter((e) => !(e.to === to && e.port === port)) : d.edges
+      return { ...d, edges: [...edges, { id: newStepId(), from, to, branch, ...(port ? { port } : {}) }] }
     })
+  /** Several sources: exactly one is the driver. */
+  const makeDriver = (id: string) => setDraft((d) => ({ ...d, nodes: d.nodes.map((n) => (n.type === 'source' ? { ...n, driver: n.id === id } : n)) }))
 
   const onNodesChange = (changes: NodeChange<FlowNode<NodeData>>[]) => {
     for (const c of changes) {
@@ -350,7 +406,7 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
       } else if (c.type === 'select' && c.selected) setSelectedId(c.id)
       else if (c.type === 'remove') {
         const n = draft.nodes.find((x) => x.id === c.id)
-        if (n && n.type !== 'source') removeNode(c.id)
+        if (n && deletable(n)) removeNode(c.id)
       }
     }
   }
@@ -358,9 +414,19 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
     const removed = new Set(changes.filter((c) => c.type === 'remove').map((c) => c.id))
     if (removed.size) setDraft((d) => ({ ...d, edges: d.edges.filter((e) => !removed.has(e.id)) }))
   }
-  const onConnect = (c: Connection) => c.source && c.target && connect(c.source, c.target, c.sourceHandle ?? '')
+  const onConnect = (c: Connection) => c.source && c.target && connect(c.source, c.target, c.sourceHandle ?? '', c.targetHandle === 'left' || c.targetHandle === 'right' ? c.targetHandle : '')
 
-  const addNode = (type: Exclude<NodeType, 'source'>) => {
+  const addSource = () => {
+    const sources = draft.nodes.filter((n) => n.type === 'source')
+    const lowest = Math.max(...draft.nodes.map((n) => n.position.y), 0)
+    const node = newNode('source', [], { x: sources[0]?.position.x ?? 40, y: lowest + 160 })
+    // The first source stays the driver; the new one is looked up or added after it.
+    setDraft((d) => ({ ...d, nodes: [...d.nodes.map((n) => (n.type === 'source' && !d.nodes.some((x) => x.type === 'source' && x.driver) && n.id === sources[0]?.id ? { ...n, driver: true } : n)), node] }))
+    setSelectedId(node.id)
+  }
+
+  const addNode = (type: NodeType) => {
+    if (type === 'source') return addSource()
     const anchor = selected ?? draft.nodes[0]
     const position = { x: (anchor?.position.x ?? 0) + 260, y: (anchor?.position.y ?? 0) + (draft.nodes.filter((n) => Math.abs(n.position.x - ((anchor?.position.x ?? 0) + 260)) < 40).length * 140) }
     const node = newNode(type, anchor ? columns.get(anchor.id) ?? [] : [], position, t('editor.canvas.firstBranch'))
@@ -371,9 +437,12 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
         if (anchor.type === 'router') branch = anchor.branches.find((b) => !d.edges.some((e) => e.from === anchor.id && e.branch === b.id))?.id ?? OTHERWISE
         // Inserting before the anchor's single next step keeps the chain: anchor → new → next.
         const outgoing = d.edges.filter((e) => e.from === anchor.id && e.branch === branch)
+        // A new Join takes the anchor's rows on its left (driving) side; the right side is connected by hand.
+        const port: Port = type === 'join' ? 'left' : ''
+        const into = { id: newStepId(), from: anchor.id, to: node.id, branch, ...(port ? { port } : {}) }
         if (anchor.type !== 'router' && outgoing.length === 1 && type !== 'destination') {
-          edges = [...d.edges.filter((e) => e !== outgoing[0]), { id: newStepId(), from: anchor.id, to: node.id, branch }, { id: newStepId(), from: node.id, to: outgoing[0].to, branch: '' }]
-        } else edges = [...d.edges, { id: newStepId(), from: anchor.id, to: node.id, branch }]
+          edges = [...d.edges.filter((e) => e !== outgoing[0]), into, { id: newStepId(), from: node.id, to: outgoing[0].to, branch: '', ...(outgoing[0].port ? { port: outgoing[0].port } : {}) }]
+        } else edges = [...d.edges, into]
       }
       return { ...d, nodes: [...d.nodes, node], edges }
     })
@@ -435,6 +504,8 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
   const targets = draft.nodes.filter((n) => selected && n.id !== selected.id && n.type !== 'source')
   const [linkTo, setLinkTo] = useState('')
   const [linkBranch, setLinkBranch] = useState('')
+  const [linkSide, setLinkSide] = useState<Port>('')
+  const linkTarget = draft.nodes.find((n) => n.id === linkTo)
   const selectedStat = selected ? statFor(selected.id) : undefined
 
   // The canvas shares the height with the panel below it: fit the steps again when its size changes.
@@ -542,7 +613,7 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
             onBeforeDelete={async ({ nodes }) => {
-              const steps = draft.nodes.filter((n) => n.type !== 'source' && nodes.some((x) => x.id === n.id))
+              const steps = draft.nodes.filter((n) => deletable(n) && nodes.some((x) => x.id === n.id))
               return steps.length === 0 || confirmRemove(steps)
             }}
             onPaneClick={() => setSelectedId(null)}
@@ -570,7 +641,7 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
                   return <Icon className={cn('size-4', KIND_ICON[selected.type])} aria-hidden />
                 })()}
                 <h3 className="flex-1 font-medium">{kindTitle(selected.type, t)}</h3>
-                {selected.type !== 'source' && (
+                {deletable(selected) && (
                   <Button
                     size="icon-sm"
                     variant="ghost"
@@ -583,7 +654,35 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
                   </Button>
                 )}
               </div>
-              {selected.type === 'source' && <SourceEditor step={selected} options={options} onChange={setNode} />}
+              {selected.type === 'source' && (
+                <SourceEditor
+                  step={selected}
+                  options={options}
+                  lane={{ several: sourceCount > 1, driver: plan.driver === selected.id, staged: isStagedStep(plan, selected.id), hasJoins: plan.joins.length > 0 }}
+                  onMakeDriver={() => makeDriver(selected.id)}
+                  onChange={setNode}
+                />
+              )}
+              {selected.type === 'join' && (
+                <JoinEditor
+                  step={selected}
+                  left={columns.get(selected.id) ?? []}
+                  right={columns.right.get(selected.id) ?? []}
+                  defaultPrefix={joinPrefix({ nodes: draft.nodes, edges: draft.edges }, plan, { ...selected, prefix: '' })}
+                  connected={plan.joins.some((j) => j.id === selected.id)}
+                  onChange={setNode}
+                />
+              )}
+              {selected.type === 'union' && (
+                <UnionEditor
+                  step={selected}
+                  inputs={draft.edges.filter((e) => e.to === selected.id).map((e) => {
+                    const from = draft.nodes.find((n) => n.id === e.from)
+                    return { from: e.from, name: from ? stepLabel(from, t) : e.from, defaultLabel: laneLabel({ nodes: draft.nodes, edges: draft.edges }, plan, e.from) }
+                  })}
+                  onChange={setNode}
+                />
+              )}
               {selected.type === 'filter' && <FilterEditor step={selected} columns={columns.get(selected.id) ?? []} options={options} onChange={setNode} />}
               {selected.type === 'map' && <MapEditor step={selected} columns={columns.get(selected.id) ?? []} options={options} source={sourceRef} onChange={setNode} />}
               {selected.type === 'validate' && <ValidateEditor step={selected} columns={columns.get(selected.id) ?? []} options={options} onChange={setNode} />}
@@ -614,6 +713,7 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
                         <span className="flex-1 truncate">
                           {branch && <span className="text-muted-foreground">{branch} → </span>}
                           {name}
+                          {e.port && <span className="text-muted-foreground"> ({t(`editor.canvas.${e.port}`)})</span>}
                         </span>
                         <Button size="icon-sm" variant="ghost" onClick={() => setDraft((d) => ({ ...d, edges: d.edges.filter((x) => x.id !== e.id) }))} aria-label={t('editor.modal.removeConnection', { name })}>
                           <X aria-hidden />
@@ -633,7 +733,7 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
                         <option value={OTHERWISE}>{t('editor.canvas.otherwise')}</option>
                       </NativeSelect>
                     )}
-                    <NativeSelect className="min-w-0 flex-1" value={linkTo} onChange={setLinkTo} aria-label={t('editor.modal.connectTo')}>
+                    <NativeSelect className="min-w-0 flex-1" value={linkTo} onChange={(v) => (setLinkTo(v), setLinkSide(''))} aria-label={t('editor.modal.connectTo')}>
                       <option value="">{t('editor.modal.connectPlaceholder')}</option>
                       {targets.map((n) => (
                         <option key={n.id} value={n.id}>
@@ -641,13 +741,21 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
                         </option>
                       ))}
                     </NativeSelect>
+                    {linkTarget?.type === 'join' && (
+                      <NativeSelect className="w-40" value={linkSide} onChange={(v) => setLinkSide(v as Port)} aria-label={t('editor.modal.side')}>
+                        <option value="">{t('editor.modal.side')}</option>
+                        <option value="left">{t('editor.modal.sideLeft')}</option>
+                        <option value="right">{t('editor.modal.sideRight')}</option>
+                      </NativeSelect>
+                    )}
                     <Button
                       size="sm"
                       variant="outline"
-                      disabled={!linkTo || (selected.type === 'router' && !linkBranch)}
+                      disabled={!linkTo || (selected.type === 'router' && !linkBranch) || (linkTarget?.type === 'join' && !linkSide)}
                       onClick={() => {
-                        connect(selected.id, linkTo, selected.type === 'router' ? linkBranch : '')
+                        connect(selected.id, linkTo, selected.type === 'router' ? linkBranch : '', linkTarget?.type === 'join' ? linkSide : '')
                         setLinkTo('')
+                        setLinkSide('')
                       }}
                     >
                       {t('editor.modal.connect')}
@@ -741,6 +849,15 @@ function TestSummary({ test, testing, draft }: { test: EngineResult | null; test
         {!!test.flaggedCount && t('editor.test.flagged', { count: test.flaggedCount })}
         {t('editor.test.nothingWritten')}
       </p>
+      {test.steps
+        .filter((s) => s.type === 'join' && s.rowsIn > 0)
+        .map((s) => (
+          <p key={s.id} className="text-xs text-muted-foreground tabular-nums">
+            {t('editor.test.join', { step: localizeStepTitle(s.label, t), matched: s.matched ?? 0, count: s.rowsIn })}
+            {!!s.multiplied && t('editor.test.joinMultiplied', { count: s.multiplied })}
+            {!!s.staged && t('editor.test.joinSample', { staged: s.staged })}
+          </p>
+        ))}
       {test.rejects.length > 0 && (
         <ul className="list-disc space-y-0.5 pl-5 text-xs text-muted-foreground">
           {test.rejects.slice(0, 8).map((r, k) => (

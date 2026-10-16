@@ -1,16 +1,23 @@
-import { OTHERWISE, stepTitle, topoOrder, type DestinationStep, type PipelineDefinition, type PipelineNode, type Severity, type SourceStep } from './definition'
+import { OTHERWISE, stepTitle, topoOrder, type DestinationStep, type JoinStep, type PipelineDefinition, type PipelineNode, type Severity, type SourceStep } from './definition'
 import { checkText } from './check-messages'
 import { applyMap, matchesFilter, validateRow, type LookupTables, type Row } from './transforms'
 import { evalGroup } from './conditions'
 import { compareWatermarks, inferColumns, maxWatermark, type OutputColumn, type TypeHints } from './columns'
 import type { BusinessRule } from '@/lib/rules/definition'
 import { applyRules } from '@/lib/rules/evaluate'
+import { describeKey, joinKey, joinRows } from './join'
+import { joinPrefix, lanePlan, laneLabel, passNodes, unionLabel, type LanePlan } from './lanes'
 
 /**
  * Pipeline engine (pure). Runs the definition graph over a batch of rows:
  * nodes in dependency order, rows following edges, a Router splitting them by
  * branch, several Destinations each getting their own rows and columns.
  * Used for chunks of real runs (jobs.ts), test runs and quarantine replays.
+ *
+ * Several sources (lanes, lib/pipelines/lanes.ts): a chunk enters at one
+ * Source; a Join looks up the staged partners of the chunk's keys through
+ * `EngineContext.joinPartners` (the only I/O, injected); rows reaching a Join's
+ * right side are handed back in `toStage` for the caller to stage.
  */
 
 export interface StepStat {
@@ -23,6 +30,10 @@ export interface StepStat {
   rejected: number
   /** Rows passed with a warning/info flag. */
   flagged?: number
+  /** Join: left rows that found a partner, extra rows from several matches, rows staged on the right side. */
+  matched?: number
+  multiplied?: number
+  staged?: number
   durationMs: number
   /** First rows after this node (test runs only). */
   sample?: Row[]
@@ -50,6 +61,13 @@ export interface EngineContext {
   approved?: boolean
   /** Lookup tables for Map "lookup" transforms (MP-6). */
   lookupTables?: LookupTables
+  /** Join lookups: the staged rows of these (normalized) keys, grouped by key, and the staged side's columns. */
+  joinPartners?: (join: JoinStep, keys: string[]) => Promise<StagedPartners>
+}
+
+export interface StagedPartners {
+  partners: Map<string, Row[]>
+  columns: string[]
 }
 
 export function emptyContext(): EngineContext {
@@ -82,10 +100,16 @@ export interface EngineResult {
   destinations?: DestinationResult[]
   /** Incremental sync: highest watermark value read this run (null if no rows). */
   watermark?: { column: string; value: string | null }
+  /** Per incremental Source, by step id (several sources). */
+  watermarks?: Record<string, { column: string; value: string | null }>
+  /** Rows read into run staging (lanes on the right side of a Join). */
+  stagedRows?: number
 }
 
 export interface EngineIO {
   read(step: SourceStep): Promise<Row[]>
+  /** Test runs: only the rows whose key column matches these normalized keys (null when the source can't filter). */
+  readByKeys?(step: SourceStep, column: string, keys: string[], normalize: JoinStep['normalize']): Promise<Row[] | null>
   /** Omitted for test runs. */
   write?(step: DestinationStep, rows: Row[], columns: OutputColumn[]): Promise<{ written: number; target: string; rowCount?: number }>
 }
@@ -109,7 +133,12 @@ export interface RunTotals {
   writtenByDest: Record<string, number>
   /** "ruleId:then" / "ruleId:otherwise" → rows that took that branch (notify / trigger at the end). */
   ruleHits: Record<string, number>
+  /** The driver's incremental watermark (older UI and pipeline state). */
   watermark?: { column: string; value: string | null }
+  /** Every incremental Source's watermark, by step id. */
+  watermarks?: Record<string, { column: string; value: string | null }>
+  /** Rows read into run staging (not counted in rowsRead). */
+  stagedRows?: number
 }
 
 export function newRunTotals(def: PipelineDefinition): RunTotals {
@@ -160,6 +189,8 @@ function nearestMap(def: PipelineDefinition, destId?: string) {
       if (e.to !== id || seen.has(e.from)) continue
       const n = byId.get(e.from)
       if (n?.type === 'map') return n
+      // Rows past a Join or Union carry columns no single Map declares: infer them.
+      if (n?.type === 'join' || n?.type === 'union') return undefined
       seen.add(e.from)
       queue.push(e.from)
     }
@@ -199,28 +230,34 @@ export interface ChunkOutput {
   flags: Reject[]
   /** manager-rule pairs to check once the run has every row. */
   managerPairs: { nodeId: string; key: string; manager: string; field: string; keyField: string }[]
+  /** Rows that reached a Join's right side, by Join id (staged by the caller in a stage pass, else ignored). */
+  toStage: Map<string, Row[]>
   /** @deprecated rows of the first destination */
   rows: Row[]
 }
 
 /**
  * Runs the graph on one chunk of source rows, adding to `totals`.
- * `startNodeId` (quarantine replay): rows enter at that node instead of the Source.
+ * `entry`: the Source the rows were read from (default: the driver).
+ * `startNodeId` (quarantine replay): rows enter at that node instead.
+ * `stage`: a stage pass (rows read for a Join's right side, counted as staged).
  * Throws (retryable: false) when a Validate node set to abort fails.
  */
-export function transformChunk(
+export async function transformChunk(
   def: PipelineDefinition,
   input: Row[],
   totals: RunTotals,
   ctxOrSeen: EngineContext | Map<string, Set<string>>,
   hints: TypeHints = {},
-  opts: { startNodeId?: string; sample?: number } = {}
-): ChunkOutput {
+  opts: { startNodeId?: string; sample?: number; entry?: string; stage?: boolean } = {}
+): Promise<ChunkOutput> {
   const ctx: EngineContext = ctxOrSeen instanceof Map ? { ...emptyContext(), seen: ctxOrSeen } : ctxOrSeen
   const order = topoOrder(def.nodes, def.edges) ?? def.nodes
-  const active = opts.startNodeId ? descendants(def, opts.startNodeId) : null
+  const plan = lanePlan(def)
+  const entry = opts.startNodeId ?? opts.entry ?? plan.driver ?? order.find((n) => n.type === 'source')?.id ?? ''
+  const active = passNodes(def, entry)
   const outputs = new Map<string, Map<string, Row[]>>()
-  const result: ChunkOutput = { byDestination: new Map(), rejects: [], flags: [], managerPairs: [], rows: [] }
+  const result: ChunkOutput = { byDestination: new Map(), rejects: [], flags: [], managerPairs: [], rows: [], toStage: new Map() }
   const statOf = (id: string) => {
     let s = totals.steps.find((x) => x.id === id)
     if (!s) {
@@ -231,16 +268,18 @@ export function transformChunk(
     return s
   }
   const take = (rows: Row[]) => (opts.sample ? rows.slice(0, opts.sample) : undefined)
+  const inputsOf = (nodeId: string, side: 'right' | 'other') => def.edges.filter((e) => e.to === nodeId && active.has(e.from) && (e.port === 'right') === (side === 'right'))
+  const rowsFrom = (e: { from: string; branch?: string }) => outputs.get(e.from)?.get(e.branch || '') ?? []
 
   for (const node of order) {
-    if (active && !active.has(node.id)) continue
+    if (!active.has(node.id)) continue
     const stat = statOf(node.id)
     const started = Date.now()
     let rows: Row[]
-    if (node.type === 'source' || node.id === opts.startNodeId) rows = input
+    if (node.id === entry) rows = input
     else {
       rows = []
-      for (const e of def.edges) if (e.to === node.id) rows.push(...(outputs.get(e.from)?.get(e.branch || '') ?? []))
+      for (const e of inputsOf(node.id, 'other')) rows.push(...rowsFrom(e))
     }
     const out = new Map<string, Row[]>()
     stat.rowsIn += node.type === 'source' ? 0 : rows.length
@@ -248,16 +287,21 @@ export function transformChunk(
     switch (node.type) {
       case 'source': {
         stat.rowsOut += rows.length
-        totals.rowsRead += rows.length
-        if (node.mode === 'incremental') totals.watermark ??= { column: node.watermarkColumn, value: null }
-        if (node.mode === 'incremental' && rows.length) {
-          if (!(node.watermarkColumn in rows[0])) {
-            throw Object.assign(new Error(`Watermark column "${node.watermarkColumn}" is not in ${node.table}.`), { retryable: false })
+        if (opts.stage) totals.stagedRows = (totals.stagedRows ?? 0) + rows.length
+        else totals.rowsRead += rows.length
+        if (node.mode === 'incremental') {
+          totals.watermarks ??= {}
+          const prev = totals.watermarks[node.id]?.value ?? null
+          let value = prev
+          if (rows.length) {
+            if (!(node.watermarkColumn in rows[0])) {
+              throw Object.assign(new Error(`Watermark column "${node.watermarkColumn}" is not in ${node.table}.`), { retryable: false })
+            }
+            const chunkMax = maxWatermark(rows, node.watermarkColumn)
+            value = prev === null ? chunkMax : chunkMax === null ? prev : compareWatermarks(chunkMax, prev) > 0 ? chunkMax : prev
           }
-          const chunkMax = maxWatermark(rows, node.watermarkColumn)
-          const prev = totals.watermark?.value ?? null
-          const value = prev === null ? chunkMax : chunkMax === null ? prev : compareWatermarks(chunkMax, prev) > 0 ? chunkMax : prev
-          totals.watermark = { column: node.watermarkColumn, value }
+          totals.watermarks[node.id] = { column: node.watermarkColumn, value }
+          if (node.id === plan.driver) totals.watermark = { column: node.watermarkColumn, value }
         }
         out.set('', rows)
         break
@@ -351,6 +395,30 @@ export function transformChunk(
         stat.rowsOut += rows.length
         break
       }
+      case 'join': {
+        // Right side: handed back for staging (ignored outside a stage pass).
+        const right: Row[] = []
+        for (const e of inputsOf(node.id, 'right')) right.push(...rowsFrom(e))
+        if (right.length) {
+          result.toStage.set(node.id, [...(result.toStage.get(node.id) ?? []), ...right.map(stripInternal)])
+          stat.staged = (stat.staged ?? 0) + right.length
+        }
+        out.set('', await joinChunk(def, plan, node, rows, ctx, totals, stat, result))
+        break
+      }
+      case 'union': {
+        const next: Row[] = []
+        if (node.id === entry) next.push(...rows)
+        else {
+          for (const e of inputsOf(node.id, 'other')) {
+            const label = node.sourceColumn ? unionLabel(def, plan, node, e.from) : ''
+            for (const r of rowsFrom(e)) next.push(node.sourceColumn ? { ...r, [node.sourceColumn]: label } : r)
+          }
+        }
+        stat.rowsOut += next.length
+        out.set('', next)
+        break
+      }
       case 'destination': {
         const clean = rows.map(stripInternal)
         if (clean.length) {
@@ -365,10 +433,33 @@ export function transformChunk(
       }
     }
     outputs.set(node.id, out)
-    if (opts.sample) stat.sample = take([...out.values()].flat())
+    if (opts.sample && !stat.sample?.length) stat.sample = take([...out.values()].flat())
     stat.durationMs += Date.now() - started
   }
   return result
+}
+
+/** A Join's left rows: look up the staged partners of their keys, then join (pure, lib/pipelines/join.ts). */
+async function joinChunk(def: PipelineDefinition, plan: LanePlan, node: JoinStep, rows: Row[], ctx: EngineContext, totals: RunTotals, stat: StepStat, result: ChunkOutput): Promise<Row[]> {
+  if (!rows.length) return []
+  if (!ctx.joinPartners) throw Object.assign(new Error(`${stepTitle(node)}: the right side was not staged.`), { retryable: false })
+  const leftCols = node.keys.map((k) => k.left)
+  const keys = [...new Set(rows.map((r) => joinKey(r, leftCols, node.normalize)).filter((k): k is string => k !== null))]
+  const { partners, columns } = keys.length ? await ctx.joinPartners(node, keys) : { partners: new Map<string, Row[]>(), columns: [] as string[] }
+  const res = joinRows(node, rows, partners, { prefix: joinPrefix(def, plan, node), rightColumns: columns })
+  stat.matched = (stat.matched ?? 0) + res.matched
+  stat.multiplied = (stat.multiplied ?? 0) + res.multiplied
+  stat.rowsOut += res.rows.length
+  if (res.unmatched.length) {
+    const staged = plan.joins.find((j) => j.id === node.id)
+    const lane = staged ? laneLabel(def, plan, staged.rightFrom) : 'the right side'
+    for (const u of res.unmatched) {
+      stat.rejected++
+      totals.rejectedCount++
+      result.rejects.push({ stepId: node.id, row: u, errors: [checkText('joinNoMatch', { lane, keys: describeKey(u, leftCols) })], severity: 'error', kind: 'invalid' })
+    }
+  }
+  return res.rows
 }
 
 export function firstDestination(def: PipelineDefinition) {
@@ -392,16 +483,20 @@ export function totalsStatus(totals: RunTotals): 'success' | 'partial' {
 }
 
 /**
- * Test runs (and single-batch runs in tests): reads the source once, runs the
- * graph, optionally writes. Failures in I/O nodes are retryable; transforms
- * are deterministic.
+ * Test runs (and single-batch runs in tests): reads every streamed source once,
+ * runs the graph, optionally writes. A Join's right side is read when the first
+ * left keys reach it: only the rows of those keys when the source can filter
+ * (`readByKeys`, test runs), else the whole lane, through its own steps.
+ * Failures in I/O nodes are retryable; transforms are deterministic.
  */
 export async function runEngine(def: PipelineDefinition, io: EngineIO, opts: { sampleSize?: number; context?: Partial<EngineContext> } = {}): Promise<EngineResult> {
   const totals = newRunTotals(def)
-  const ctx: EngineContext = { ...emptyContext(), ...opts.context }
-  const source = def.nodes.find((n): n is SourceStep => n.type === 'source')!
+  const plan = lanePlan(def)
   const sample = io.write ? undefined : (opts.sampleSize ?? 25)
   const destinations: DestinationResult[] = []
+  const sourceOf = (id: string) => def.nodes.find((n): n is SourceStep => n.type === 'source' && n.id === id)!
+  const ctx: EngineContext = { ...emptyContext(), ...opts.context }
+  ctx.joinPartners ??= stagedLookup(def, plan, io, totals, ctx, sample)
   const fail = (step: PipelineNode, err: unknown, ioStep: boolean, rejects: Reject[] = []): EngineResult => {
     const stat = totals.steps.find((s) => s.id === step.id)
     const message = err instanceof Error ? err.message : String(err)
@@ -413,35 +508,44 @@ export async function runEngine(def: PipelineDefinition, io: EngineIO, opts: { s
     }
   }
 
-  let rows: Row[]
-  const readStarted = Date.now()
-  try {
-    rows = await io.read(source)
-  } catch (err) {
-    return fail(source, err, true)
-  }
-  const sourceStat = totals.steps.find((s) => s.id === source.id)
-  if (sourceStat) sourceStat.durationMs += Date.now() - readStarted
+  const byDestination = new Map<string, Row[]>()
+  const rejects: Reject[] = []
+  const flags: Reject[] = []
+  for (const sourceId of plan.streamed) {
+    const source = sourceOf(sourceId)
+    let rows: Row[]
+    const readStarted = Date.now()
+    try {
+      rows = await io.read(source)
+    } catch (err) {
+      return fail(source, err, true)
+    }
+    const sourceStat = totals.steps.find((s) => s.id === source.id)
+    if (sourceStat) sourceStat.durationMs += Date.now() - readStarted
 
-  let out: ChunkOutput
-  try {
-    out = transformChunk(def, rows, totals, ctx, {}, { sample })
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    const failing = def.nodes.find((n) => msg.startsWith(stepTitle(n))) ?? def.nodes.find((n) => n.type === 'validate') ?? source
-    const stat = totals.steps.find((s) => s.id === failing.id)
-    if (stat) stat.error = msg
-    return { status: 'failed', steps: totals.steps, rejects: [], rejectedCount: totals.rejectedCount, rowsRead: totals.rowsRead, rowsWritten: 0, columns: totals.columns, error: msg, retryable: false, watermark: totals.watermark }
+    try {
+      const out = await transformChunk(def, rows, totals, ctx, {}, { sample, entry: sourceId })
+      for (const [id, destRows] of out.byDestination) byDestination.set(id, [...(byDestination.get(id) ?? []), ...destRows])
+      rejects.push(...out.rejects)
+      flags.push(...out.flags)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      const failing = def.nodes.find((n) => msg.startsWith(stepTitle(n))) ?? def.nodes.find((n) => n.type === 'validate') ?? source
+      const stat = totals.steps.find((s) => s.id === failing.id)
+      if (stat) stat.error = msg
+      const ioFailure = (err as { retryable?: boolean }).retryable !== false && failing.type === 'source'
+      return { status: 'failed', steps: totals.steps, rejects: [], rejectedCount: totals.rejectedCount, rowsRead: totals.rowsRead, rowsWritten: 0, columns: totals.columns, error: msg, retryable: ioFailure, watermark: totals.watermark }
+    }
   }
 
   for (const dest of def.nodes.filter((n): n is DestinationStep => n.type === 'destination')) {
-    const destRows = out.byDestination.get(dest.id) ?? []
+    const destRows = byDestination.get(dest.id) ?? []
     const columns = totals.columnsByDest[dest.id] ?? outputColumns(def, [], {}, dest.id)
     try {
       if (destRows.length) checkDestination(def, columns, dest)
       if (dest.mode === 'upsert' && !destRows.length) checkDestination(def, columns.length ? columns : [{ name: '_', type: 'text' }], { ...dest, keys: [] })
     } catch (err) {
-      return fail(dest, err, false, out.rejects)
+      return fail(dest, err, false, rejects)
     }
     if (io.write) {
       const started = Date.now()
@@ -450,7 +554,7 @@ export async function runEngine(def: PipelineDefinition, io: EngineIO, opts: { s
         totals.rowsWritten += res.written
         destinations.push({ id: dest.id, kind: dest.kind, target: res.target, rowCount: res.rowCount, written: res.written })
       } catch (err) {
-        return fail(dest, err, true, out.rejects)
+        return fail(dest, err, true, rejects)
       }
       const stat = totals.steps.find((s) => s.id === dest.id)
       if (stat) stat.durationMs += Date.now() - started
@@ -462,7 +566,7 @@ export async function runEngine(def: PipelineDefinition, io: EngineIO, opts: { s
   return {
     status: totalsStatus(totals),
     steps: totals.steps,
-    rejects: [...out.rejects, ...out.flags].slice(0, MAX_REJECTS_KEPT),
+    rejects: [...rejects, ...flags].slice(0, MAX_REJECTS_KEPT),
     rejectedCount: totals.rejectedCount,
     flaggedCount: totals.flaggedCount,
     heldCount: totals.heldCount,
@@ -472,5 +576,77 @@ export async function runEngine(def: PipelineDefinition, io: EngineIO, opts: { s
     destination: destinations[0],
     destinations,
     watermark: totals.watermark,
+    watermarks: totals.watermarks,
+    stagedRows: totals.stagedRows,
   }
+}
+
+/**
+ * A Join's right side for runEngine, read on demand through the lane's own
+ * steps. A lane whose key column reaches the Join unchanged (no Map, Rules,
+ * Join or Union on the way) reads only the rows of the asked keys when the
+ * source can filter; otherwise the whole lane is read once and indexed.
+ */
+function stagedLookup(def: PipelineDefinition, plan: LanePlan, io: EngineIO, totals: RunTotals, ctx: EngineContext, sample?: number) {
+  const whole = new Map<string, Promise<StagedPartners>>()
+  const sourceOf = (id: string) => def.nodes.find((n): n is SourceStep => n.type === 'source' && n.id === id)!
+  const readLane = async (join: JoinStep, sourceId: string, keys?: string[]): Promise<Row[]> => {
+    const source = sourceOf(sourceId)
+    let rows: Row[] | null = null
+    try {
+      const column = keys && io.readByKeys ? pushdownColumn(def, join, sourceId) : null
+      if (column && keys) rows = await io.readByKeys!(source, column, keys, join.normalize)
+      rows ??= await io.read(source)
+    } catch (err) {
+      throw Object.assign(new Error(`${stepTitle(source)}: ${err instanceof Error ? err.message : String(err)}`), { retryable: (err as { retryable?: boolean }).retryable })
+    }
+    const out = await transformChunk(def, rows, totals, ctx, {}, { entry: sourceId, stage: true, sample })
+    return out.toStage.get(join.id) ?? []
+  }
+  const index = (join: JoinStep, rows: Row[]): StagedPartners => {
+    const partners = new Map<string, Row[]>()
+    const cols = new Set<string>()
+    const rightCols = join.keys.map((k) => k.right)
+    for (const r of rows) {
+      for (const c of Object.keys(r)) cols.add(c)
+      const k = joinKey(r, rightCols, join.normalize)
+      if (k !== null) partners.set(k, [...(partners.get(k) ?? []), r])
+    }
+    return { partners, columns: [...cols] }
+  }
+  return async (join: JoinStep, keys: string[]): Promise<StagedPartners> => {
+    const staged = plan.joins.find((j) => j.id === join.id)
+    if (!staged) throw Object.assign(new Error(`${stepTitle(join)}: connect exactly one input to each side (left and right).`), { retryable: false })
+    const byKeys = Boolean(io.readByKeys) && staged.sources.every((s) => pushdownColumn(def, join, s))
+    let found: StagedPartners
+    if (byKeys) {
+      const rows: Row[] = []
+      for (const s of staged.sources) rows.push(...(await readLane(join, s, keys)))
+      found = index(join, rows)
+    } else {
+      if (!whole.has(join.id)) whole.set(join.id, (async () => {
+        const rows: Row[] = []
+        for (const s of staged.sources) rows.push(...(await readLane(join, s)))
+        return index(join, rows)
+      })())
+      found = await whole.get(join.id)!
+    }
+    const wanted = new Set(keys)
+    return { partners: new Map([...found.partners].filter(([k]) => wanted.has(k))), columns: found.columns }
+  }
+}
+
+/**
+ * The source column a sample test can filter a staged lane by: the Join's first
+ * right key, when it reaches the Join unchanged (only Filter, Validate or Router
+ * steps between the Source and the Join). Null otherwise.
+ */
+export function pushdownColumn(def: PipelineDefinition, join: JoinStep, sourceId: string): string | null {
+  const path = passNodes(def, sourceId)
+  for (const id of path) {
+    const n = def.nodes.find((x) => x.id === id)
+    if (!n || id === sourceId || id === join.id) continue
+    if (n.type !== 'filter' && n.type !== 'validate' && n.type !== 'router') return null
+  }
+  return path.has(join.id) ? (join.keys[0]?.right ?? null) : null
 }

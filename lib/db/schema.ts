@@ -304,6 +304,20 @@ export const pipelineJobs = pgTable('pipeline_jobs', {
   uniqueIndex('pipeline_jobs_one_active_idx').on(t.pipelineId).where(sql`${t.status} <> 'done'`),
 ])
 
+// Run staging tables in the nexus_stage schema (several sources: a Join's right side, lib/pipelines/stage.ts).
+// Dropped when the run finishes; the cron tick drops any left behind after 48 h.
+export const pipelineStageTables = pgTable('pipeline_stage_tables', {
+  tableName: text('tableName').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  runId: text('runId').notNull(),
+  nodeId: text('nodeId').notNull(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  index('pipeline_stage_tables_workspace_idx').on(t.workspaceId),
+  index('pipeline_stage_tables_run_idx').on(t.runId),
+  index('pipeline_stage_tables_created_idx').on(t.createdAt),
+])
+
 // Values already seen by Validate unique rules in earlier chunks of a running job (hashed).
 export const pipelineJobSeen = pgTable('pipeline_job_seen', {
   jobId: text('jobId').notNull(),

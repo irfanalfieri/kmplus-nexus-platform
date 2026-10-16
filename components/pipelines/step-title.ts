@@ -14,6 +14,8 @@ export function localizeStepTitle(text: string, t: Translate): string {
   if ((m = /^Validate \((\d+) rules?\)$/.exec(text))) return t('editor.stepTitle.validate', { count: Number(m[1]) })
   if ((m = /^Business rules \((\d+)\)$/.exec(text))) return t('editor.stepTitle.rules', { count: Number(m[1]) })
   if ((m = /^Route \((\d+) branches\)$/.exec(text))) return t('editor.stepTitle.router', { count: Number(m[1]) })
+  if ((m = /^Join on (.+)$/.exec(text))) return t('editor.stepTitle.join', { keys: m[1] })
+  if (text === 'Union') return t('editor.stepTitle.union')
   if ((m = /^Write dataset (.+)$/.exec(text))) return t('editor.stepTitle.destinationDataset', { name: m[1] })
   if ((m = /^Write (.+)$/.exec(text))) return t('editor.stepTitle.destinationTable', { name: m[1] })
   return text

@@ -469,6 +469,7 @@ async function resetSyncPositionImpl(rawId: string) {
   const existing = await getOwned(ctx, id)
   const state = { ...((existing.state as Record<string, unknown> | null) ?? {}) }
   delete state.watermark
+  delete state.watermarks
   await db.update(pipelines).set({ state, updatedAt: new Date() }).where(and(eq(pipelines.id, id), eq(pipelines.workspaceId, ctx.workspaceId)))
   await audit(ctx, 'RESET_SYNC', id)
   revalidatePath('/dashboard', 'layout')

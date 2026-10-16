@@ -10,6 +10,7 @@ import type { AddressInfo } from 'node:net'
  *   PUT  /employees/:code         same body                            → 200 (upsert by code); 404 for code "missing"
  *   POST /employees/batch         { batch_id, records: [{ code, email }] } → 200 { errors: [{ index, message }] } for records without email
  *   POST /echo                    anything (JSON, form, XML)           → 200 { received: <bytes> }
+ *   GET  /payroll                 → 200 { items: payroll }  (a listing a pipeline reads as a source; set `payroll`)
  *
  * Every route needs `Authorization: Bearer <token>` (401 otherwise).
  * `failNext(n, status, retryAfter, skip)` answers n requests (after `skip` normal ones) with `status`.
@@ -26,6 +27,7 @@ export interface ReceivedRequest {
 export async function startRestWriteMock(token = 'rest-token', port = 0) {
   const received: ReceivedRequest[] = []
   const employees = new Map<string, Record<string, unknown>>()
+  const payroll: Record<string, unknown>[] = []
   let failing: { skip: number; left: number; status: number; retryAfter?: string } | null = null
 
   const server = createServer((req, res) => {
@@ -54,6 +56,7 @@ export async function startRestWriteMock(token = 'rest-token', port = 0) {
         }
       }
       if (url.pathname === '/echo' && req.method === 'POST') return send(200, { received: raw.length })
+      if (url.pathname === '/payroll' && req.method === 'GET') return send(200, { items: payroll })
       if (url.pathname === '/employees/batch' && req.method === 'POST') {
         const records = (body.records as Record<string, unknown>[] | undefined) ?? []
         const errors: { index: number; message: string }[] = []
@@ -86,6 +89,7 @@ export async function startRestWriteMock(token = 'rest-token', port = 0) {
     token,
     received,
     employees,
+    payroll,
     /** After `skip` normal answers, the next `count` requests get `status`. */
     failNext(count: number, status = 503, retryAfter?: string, skip = 0) {
       failing = { skip, left: count, status, retryAfter }

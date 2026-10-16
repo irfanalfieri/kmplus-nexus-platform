@@ -19,11 +19,13 @@ import {
   type Condition,
   type DestinationStep,
   type FilterStep,
+  type JoinStep,
   type MapStep,
   type RouterStep,
   type RulesStep,
   type SourceStep,
   type TransformName,
+  type UnionStep,
   type ValidateStep,
   type ValidationRuleSpec,
 } from '@/lib/pipelines/definition'
@@ -77,12 +79,25 @@ export { columnTypeFromSql, newValidationRule }
 
 // ── Source ───────────────────────────────────────────────────────────────────
 
-export function SourceEditor({ step, options, onChange }: { step: SourceStep; options: BuilderOptions; onChange: (s: SourceStep) => void }) {
+/** Where a Source sits among several (lanes): the driver, looked up by a Join (staged), or neither. */
+export type SourceLane = { several: boolean; driver: boolean; staged: boolean; hasJoins: boolean }
+
+export function SourceEditor({ step, options, lane, onMakeDriver, onChange }: { step: SourceStep; options: BuilderOptions; lane?: SourceLane; onMakeDriver?: () => void; onChange: (s: SourceStep) => void }) {
   const t = useT()
   const source = options.dataSources.find((d) => d.id === step.dataSourceId)
   const columns = source?.tables.find((tb) => tb.name === step.table)?.columns ?? []
   return (
     <div className="grid gap-3">
+      {lane?.several && (
+        <div className="space-y-1">
+          <label className="flex items-center gap-2 text-sm font-medium">
+            <input type="radio" className="size-4 accent-primary" checked={lane.driver} onChange={() => onMakeDriver?.()} />
+            {t('steps.source.driver')}
+          </label>
+          <p className="text-xs text-muted-foreground">{t('steps.source.driverHelp')}</p>
+          {lane.staged && <Notice tone="info">{t('steps.source.stagedNote')}</Notice>}
+        </div>
+      )}
       <Field label={t('steps.source.dataSource')}>
         <NativeSelect value={step.dataSourceId} onChange={(v) => onChange({ ...step, dataSourceId: v, table: '' })}>
           <option value="">{t('steps.source.chooseSource')}</option>
@@ -141,6 +156,8 @@ export function SourceEditor({ step, options, onChange }: { step: SourceStep; op
             {t('steps.source.watermarkHelp')}
             {source && !['postgres', 'mysql', 'sqlserver', 'supabase'].includes(source.sourceType) && t('steps.source.watermarkPostFilter')}
           </p>
+          {lane?.staged && <Notice tone="warning" className="mt-2">{t('steps.source.stagedIncremental')}</Notice>}
+          {lane?.driver && lane.hasJoins && <Notice tone="warning" className="mt-2">{t('steps.source.driverIncrementalJoin')}</Notice>}
         </div>
       )}
     </div>
@@ -812,6 +829,127 @@ export function DestinationEditor({
           )}
         </fieldset>
       )}
+    </div>
+  )
+}
+
+// ── Join ─────────────────────────────────────────────────────────────────────
+
+export function JoinEditor({ step, left, right, defaultPrefix, connected, onChange }: { step: JoinStep; left: Column[]; right: Column[]; defaultPrefix: string; connected: boolean; onChange: (s: JoinStep) => void }) {
+  const t = useT()
+  const setKey = (i: number, patch: Partial<JoinStep['keys'][number]>) => onChange({ ...step, keys: step.keys.map((k, j) => (j === i ? { ...k, ...patch } : k)) })
+  const check = (key: keyof JoinStep['normalize'], label: string) => (
+    <label className="flex items-center gap-2 text-sm">
+      <input type="checkbox" className="size-4 accent-primary" checked={step.normalize[key]} onChange={(e) => onChange({ ...step, normalize: { ...step.normalize, [key]: e.target.checked } })} />
+      {label}
+    </label>
+  )
+  const setType = (v: string) => {
+    const joinType = v as JoinStep['joinType']
+    // Inner joins can't keep rows without a partner; left joins keep them by default.
+    const onNoMatch = joinType === 'inner' && step.onNoMatch === 'keep' ? 'drop' : joinType === 'left' && step.onNoMatch === 'drop' ? 'keep' : step.onNoMatch
+    onChange({ ...step, joinType, onNoMatch })
+  }
+  return (
+    <div className="grid gap-3">
+      <p className="text-xs text-muted-foreground">{t('steps.join.help')}</p>
+      {!connected && <Notice tone="warning">{t('steps.join.connectBoth')}</Notice>}
+      <Field label={t('steps.join.type')}>
+        <NativeSelect value={step.joinType} onChange={setType}>
+          <option value="left">{t('steps.join.typeLeft')}</option>
+          <option value="inner">{t('steps.join.typeInner')}</option>
+          <option value="no_match">{t('steps.join.typeNoMatch')}</option>
+        </NativeSelect>
+      </Field>
+      <fieldset className="space-y-1.5">
+        <legend className="text-xs font-medium text-muted-foreground">{t('steps.join.keys')}</legend>
+        {step.keys.map((k, i) => (
+          <div key={i} className="grid grid-cols-[1fr_1fr_auto] items-center gap-1.5">
+            <ColumnPicker columns={left} value={k.left} onChange={(v) => setKey(i, { left: v, right: k.right || (right.some((c) => c.name === v) ? v : '') })} label={t('steps.join.leftKey', { n: i + 1 })} />
+            <ColumnPicker columns={right} value={k.right} onChange={(v) => setKey(i, { right: v })} label={t('steps.join.rightKey', { n: i + 1 })} />
+            <Button size="icon-sm" variant="ghost" disabled={step.keys.length === 1} onClick={() => onChange({ ...step, keys: step.keys.filter((_, j) => j !== i) })} aria-label={t('steps.join.removeKey', { n: i + 1 })}>
+              <X aria-hidden />
+            </Button>
+          </div>
+        ))}
+        <Button size="sm" variant="outline" disabled={step.keys.length >= 5} onClick={() => onChange({ ...step, keys: [...step.keys, { left: '', right: '' }] })}>
+          <Plus aria-hidden /> {t('steps.join.addKey')}
+        </Button>
+      </fieldset>
+      <fieldset className="space-y-1">
+        <legend className="text-xs font-medium text-muted-foreground">{t('steps.join.normalize')}</legend>
+        {check('trim', t('steps.join.trim'))}
+        {check('ignoreCase', t('steps.join.ignoreCase'))}
+        {check('leadingZeros', t('steps.join.leadingZeros'))}
+      </fieldset>
+      {step.joinType !== 'no_match' && (
+        <>
+          <Field label={t('steps.join.many')}>
+            <NativeSelect value={step.onMany} onChange={(v) => onChange({ ...step, onMany: v as JoinStep['onMany'] })}>
+              <option value="all">{t('steps.join.manyAll')}</option>
+              <option value="first">{t('steps.join.manyFirst')}</option>
+            </NativeSelect>
+          </Field>
+          {step.onMany === 'all' ? (
+            <p className="text-xs text-muted-foreground">{t('steps.join.multiplyNote')}</p>
+          ) : (
+            <div className="grid grid-cols-2 gap-1.5">
+              <Field label={t('steps.join.firstBy')}>
+                <NativeSelect value={step.firstBy.column} onChange={(v) => onChange({ ...step, firstBy: { ...step.firstBy, column: v } })}>
+                  <option value="">{t('steps.join.firstByStaged')}</option>
+                  {right.map((c) => (
+                    <option key={c.name} value={c.name}>
+                      {c.name}
+                    </option>
+                  ))}
+                </NativeSelect>
+              </Field>
+              <Field label={<span className="sr-only">{t('steps.join.firstBy')}</span>}>
+                <NativeSelect value={step.firstBy.direction} disabled={!step.firstBy.column} onChange={(v) => onChange({ ...step, firstBy: { ...step.firstBy, direction: v as 'asc' | 'desc' } })}>
+                  <option value="desc">{t('steps.join.desc')}</option>
+                  <option value="asc">{t('steps.join.asc')}</option>
+                </NativeSelect>
+              </Field>
+            </div>
+          )}
+          <Field label={t('steps.join.noMatch')}>
+            <NativeSelect value={step.onNoMatch} onChange={(v) => onChange({ ...step, onNoMatch: v as JoinStep['onNoMatch'] })}>
+              {step.joinType === 'left' && <option value="keep">{t('steps.join.noMatchKeep')}</option>}
+              <option value="drop">{t('steps.join.noMatchDrop')}</option>
+              <option value="quarantine">{t('steps.join.noMatchQuarantine')}</option>
+            </NativeSelect>
+          </Field>
+          <Field label={t('steps.join.prefix')}>
+            <Input value={step.prefix} placeholder={t('steps.join.prefixDefault', { prefix: defaultPrefix })} onChange={(e) => onChange({ ...step, prefix: e.target.value.trim() })} className="font-mono" />
+          </Field>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ── Union ────────────────────────────────────────────────────────────────────
+
+export function UnionEditor({ step, inputs, onChange }: { step: UnionStep; inputs: { from: string; name: string; defaultLabel: string }[]; onChange: (s: UnionStep) => void }) {
+  const t = useT()
+  const labelOf = (from: string) => step.labels.find((l) => l.from === from)?.label ?? ''
+  const setLabel = (from: string, label: string) => onChange({ ...step, labels: [...step.labels.filter((l) => l.from !== from), ...(label ? [{ from, label }] : [])] })
+  return (
+    <div className="grid gap-3">
+      <p className="text-xs text-muted-foreground">{t('steps.union.help')}</p>
+      {inputs.length < 2 && <Notice tone="warning">{t('steps.union.noInputs')}</Notice>}
+      <div>
+        <Field label={t('steps.union.sourceColumn')}>
+          <Input value={step.sourceColumn} onChange={(e) => onChange({ ...step, sourceColumn: e.target.value.trim() })} className="font-mono" />
+        </Field>
+        <p className="mt-1 text-xs text-muted-foreground">{t('steps.union.sourceColumnHelp')}</p>
+      </div>
+      {step.sourceColumn &&
+        inputs.map((i) => (
+          <Field key={i.from} label={t('steps.union.labelFor', { name: i.name })}>
+            <Input value={labelOf(i.from)} placeholder={i.defaultLabel} onChange={(e) => setLabel(i.from, e.target.value)} />
+          </Field>
+        ))}
     </div>
   )
 }

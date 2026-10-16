@@ -186,6 +186,7 @@ export const id: Messages = {
     webhook: 'pemicu webhook',
     noSource: 'Tanpa sumber',
     noDestination: 'Tanpa tujuan',
+    moreSources: '{name} + {count} lainnya',
     datasetsTitle: 'Dataset Nexus',
     datasetsBody: 'Keluaran yang ditulis oleh pipeline Anda.',
     colDataset: 'Dataset',

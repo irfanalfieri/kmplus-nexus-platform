@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { and, eq, inArray, like } from 'drizzle-orm'
 import { db, pool } from '@/lib/db'
-import { agentTasks as agentTaskTable, agents as agentTable, apiKeys, apiRateLimits, auditLogs, businessRuleVersions, businessRules, catalogEntries, connectorInstalls, dashboards, dataSources, datasetPolicies, datasetQualitySnapshots, domainMappings, mappingTemplates, notifications, pipelineApprovals, scimGroups, scimTokens, scimUsers, ssoProvider, webhookDeliveries, webhooks, workspaceSso, executionLogs, nexusDatasets, pipelineJobs, pipelineRunRejects, pipelines, pipelineVersions, session, user, verification, workspaceInvites, workspaceMembers, workspaces } from '@/lib/db/schema'
+import { agentTasks as agentTaskTable, agents as agentTable, apiKeys, apiRateLimits, auditLogs, businessRuleVersions, businessRules, catalogEntries, connectorInstalls, dashboards, dataSources, datasetPolicies, datasetQualitySnapshots, domainMappings, mappingTemplates, notifications, pipelineApprovals, scimGroups, scimTokens, scimUsers, ssoProvider, webhookDeliveries, webhooks, workspaceSso, executionLogs, nexusDatasets, pipelineJobs, pipelineRunRejects, pipelines, pipelineStageTables, pipelineVersions, session, user, verification, workspaceInvites, workspaceMembers, workspaces } from '@/lib/db/schema'
 import { acceptInvite, changeMemberRole, createAccountFromInvite, createInvite, describeInvite, getWorkspaceContext, listMembers, resetMemberTwoFactor, switchWorkspace } from '@/lib/actions/workspaces'
 import { installConnector } from '@/lib/actions/connectors'
 import { createDataSource, deleteDataSource, getDataSources, getEditableCredentials, listSecretManagers, listSecretNames, renameDataSource, setDataSourceRole, testConnection, updateDataSourceCredentials } from '@/lib/actions/data-sources'
@@ -22,7 +22,7 @@ import { writeDataset } from '@/lib/pipelines/io'
 import { startKmplusMock } from './test/kmplus-mock'
 import { startRestWriteMock } from './test/rest-write-mock'
 import { autoBindBody, bodyLeaves, parseBodySample, setRowsArray, updateBodyNode } from '@/lib/pipelines/body-template'
-import { cancelPipelineRun, createWebhookTrigger, discardDraft, getBuilderOptions, getDatasetPreview, getRunStatus, listPipelines, listRuns, publishPipeline, retryPipelineRun, runPipelineNow, savePipeline, sendApiTestRequest } from '@/lib/actions/pipelines'
+import { cancelPipelineRun, createWebhookTrigger, discardDraft, getBuilderOptions, getDatasetPreview, getRunStatus, listPipelines, listRuns, publishPipeline, retryPipelineRun, runPipelineNow, savePipeline, sendApiTestRequest, testPipeline } from '@/lib/actions/pipelines'
 import { createSamlProvider, createSsoProvider, deleteSsoProvider, listSsoProviders, setSamlIdp, updateSsoProvider, verifySsoDomain } from '@/lib/actions/sso'
 import { approveRequest, listApprovals, rejectRequest } from '@/lib/actions/approvals'
 import { listPromotionStatus, previewPromotion, promotePipeline, setApprovalPolicy, setupEnvironments, unlinkEnvironment } from '@/lib/actions/environments'
@@ -63,6 +63,7 @@ import { eraseRecords, findErasureMatches, getGovernanceOverview, saveDatasetPol
 import { getDashboardData, listDashboards, previewWidget, saveDashboard } from '@/lib/actions/analytics'
 import { listAuditLogs } from '@/lib/actions/audit'
 import { processJobs, CHUNK_ROWS } from '@/lib/pipelines/jobs'
+import { createStageTable, sweepStageTables } from '@/lib/pipelines/stage'
 import { setTestUser, takeAfterCallbacks, type TestUser } from './test/stubs'
 
 const RUN = `it${Date.now().toString(36)}`
@@ -1055,6 +1056,145 @@ async function main() {
       }
     })
 
+    await test('several sources: HRIS ⋈ payroll API ∪ second HRIS ⋈ org table; resumes mid-stage after a forced stop; a no-match row replays once its partner exists', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const prevFlag = process.env.NEXUS_ALLOW_PRIVATE_URLS
+      process.env.NEXUS_ALLOW_PRIVATE_URLS = 'true'
+      const api = await startRestWriteMock()
+      try {
+        const S = `"${FIXTURE_SCHEMA}"`
+        // HRIS: 1,200 employees; E0007 belongs to a unit the org table doesn't have yet.
+        await pool.query(`CREATE TABLE ${S}.lane_hris (employee_code text PRIMARY KEY, full_name text, org_code text)`)
+        await pool.query(`INSERT INTO ${S}.lane_hris SELECT 'E' || lpad(g::text, 4, '0'), 'Employee ' || g, CASE WHEN g = 7 THEN 'ORG_NEW' ELSE 'ORG' || (g % 100) END FROM generate_series(1, 1200) g`)
+        // A second HRIS (contractors), unioned after the first.
+        await pool.query(`CREATE TABLE ${S}.lane_hris2 (employee_code text PRIMARY KEY, full_name text, org_code text)`)
+        await pool.query(`INSERT INTO ${S}.lane_hris2 SELECT 'C' || lpad(g::text, 3, '0'), 'Contractor ' || g, 'ORG1' FROM generate_series(1, 30) g`)
+        // Org table: 100 units plus filler, so staging it takes three chunks of 500.
+        await pool.query(`CREATE TABLE ${S}.lane_orgs (org_code text PRIMARY KEY, org_name text)`)
+        await pool.query(`INSERT INTO ${S}.lane_orgs SELECT 'ORG' || g, 'Unit ' || g FROM generate_series(0, 99) g UNION ALL SELECT 'ZZ' || g, 'Old unit ' || g FROM generate_series(1, 1000) g`)
+        // Payroll API: lower-case codes (keys compared ignoring case), E0002 paid twice, nobody after E1000.
+        api.payroll.push(...Array.from({ length: 1000 }, (_, i) => ({ employee_code: `e${String(i + 1).padStart(4, '0')}`, salary: 1000 + i, full_name: `PAYROLL ${i + 1}` })), { employee_code: 'e0002', salary: 5, full_name: 'BONUS' })
+        await installConnector('rest')
+        const payrollId = await createDataSource({ name: `${RUN} payroll API`, type: 'rest', sourceType: 'rest', config: { role: 'source' }, credentials: { baseUrl: api.baseUrl, resourcePath: '/payroll', dataPath: 'items', authMethod: 'bearer', bearerToken: api.token } })
+
+        const dataset = `${RUN}_lanes`
+        const definition = {
+          schemaVersion: 2,
+          nodes: [
+            { id: 'hris', type: 'source', position: { x: 0, y: 0 }, dataSourceId: sourceId, table: 'lane_hris', maxRows: 100_000, driver: true },
+            { id: 'pay', type: 'source', position: { x: 0, y: 200 }, dataSourceId: payrollId, table: 'payroll', maxRows: 100_000 },
+            { id: 'hris2', type: 'source', position: { x: 0, y: 400 }, dataSourceId: sourceId, table: 'lane_hris2' },
+            { id: 'org', type: 'source', position: { x: 0, y: 600 }, dataSourceId: sourceId, table: 'lane_orgs', maxRows: 100_000 },
+            { id: 'j_pay', type: 'join', position: { x: 300, y: 0 }, keys: [{ left: 'employee_code', right: 'employee_code' }] },
+            { id: 'u', type: 'union', position: { x: 600, y: 0 } },
+            { id: 'j_org', type: 'join', position: { x: 900, y: 0 }, keys: [{ left: 'org_code', right: 'org_code' }], onNoMatch: 'quarantine' },
+            { id: 'dst', type: 'destination', position: { x: 1200, y: 0 }, kind: 'dataset', datasetName: dataset, mode: 'replace', keys: ['employee_code'] },
+          ],
+          edges: [
+            { id: 'e1', from: 'hris', to: 'j_pay', port: 'left' },
+            { id: 'e2', from: 'pay', to: 'j_pay', port: 'right' },
+            { id: 'e3', from: 'j_pay', to: 'u' },
+            { id: 'e4', from: 'hris2', to: 'u' },
+            { id: 'e5', from: 'u', to: 'j_org', port: 'left' },
+            { id: 'e6', from: 'org', to: 'j_org', port: 'right' },
+            { id: 'e7', from: 'j_org', to: 'dst' },
+          ],
+          settings: { batchSize: 500, retries: 2, retryDelaySeconds: 5 },
+        }
+
+        // Test on sample: the org lane is read by the sample's keys, the API lane in full (up to 5,000).
+        const sample = await testPipeline(definition)
+        assert.ok(sample.ok, sample.ok ? '' : sample.message)
+        const sampleStat = (id: string) => sample.ok ? sample.result.steps.find((s) => s.id === id)! : null!
+        assert.equal(sampleStat('j_pay').rowsIn, 200)
+        assert.equal(sampleStat('j_pay').matched, 200, 'every sampled employee has payroll')
+        assert.equal(sampleStat('j_pay').multiplied, 1)
+        assert.equal(sampleStat('j_org').matched, sampleStat('j_org').rowsIn - 1, 'only E0007 has no unit')
+        assert.ok(sampleStat('org').rowsOut < 200, 'the org table was filtered by the sample keys, not read whole')
+
+        const saved = await savePipeline({ publish: true, name: `${RUN} lanes`, definition, schedule: { type: 'manual' } as never })
+        const run = await runPipelineNow(saved.id)
+        takeAfterCallbacks()
+        const job = async () => (await db.select().from(pipelineJobs).where(eq(pipelineJobs.id, run.runId)))[0]
+        type Progress = { phase?: string; stage?: Record<string, { offset: number; done: boolean; rows: number }> }
+        // One chunk per invocation until the org table is half staged.
+        for (let i = 0; i < 10; i++) {
+          await processJobs({ maxChunksPerSlice: 1, maxJobs: 1 })
+          if (((await job()).progress as Progress).stage?.['j_org:org']?.offset) break
+        }
+        const mid = (await job()).progress as Progress
+        assert.equal(mid.phase, 'stage')
+        assert.deepEqual(mid.stage?.['j_pay:pay'], { offset: 1001, done: true, rows: 1001, chunks: 3 })
+        assert.equal(mid.stage?.['j_org:org']?.offset, 500)
+        const [registered] = await db.select().from(pipelineStageTables).where(eq(pipelineStageTables.runId, run.runId)).limit(1)
+        assert.ok(registered, 'staging tables are registered for cleanup')
+
+        // Forced stop: the org table disappears mid-stage; the attempt fails and retries from its checkpoint.
+        await pool.query(`ALTER TABLE ${S}.lane_orgs RENAME TO lane_orgs_gone`)
+        await processJobs({ maxJobs: 1 })
+        const failed = await job()
+        assert.equal(failed.status, 'queued', 'retrying')
+        assert.equal(failed.attempts, 1)
+        assert.equal((failed.progress as Progress).stage?.['j_org:org']?.offset, 500, 'resumes mid-stage, not from the start')
+        await pool.query(`ALTER TABLE ${S}.lane_orgs_gone RENAME TO lane_orgs`)
+        await db.update(pipelineJobs).set({ availableAt: new Date() }).where(eq(pipelineJobs.id, run.runId))
+        for (let i = 0; i < 10 && (await job()).status !== 'done'; i++) await processJobs({})
+        const done = await getRunStatus(run.runId)
+        assert.equal(done.status, 'partial', done.errorMessage ?? '')
+        const details = (await db.select({ d: executionLogs.executionDetails }).from(executionLogs).where(eq(executionLogs.id, run.runId)))[0].d as { stagedRows: number; steps: { id: string; matched?: number; multiplied?: number; rowsIn: number; rejected: number }[]; log: { message: string }[] }
+        assert.equal(details.stagedRows, 1001 + 1100, 'the resumed chunk replaced its earlier copy: nothing staged twice')
+        assert.equal(done.recordsProcessed, 1200 + 30)
+        const jOrg = details.steps.find((s) => s.id === 'j_org')!
+        assert.deepEqual([jOrg.rowsIn, jOrg.matched, jOrg.rejected], [1231, 1230, 1])
+        assert.equal(details.steps.find((s) => s.id === 'j_pay')!.multiplied, 1)
+        assert.ok(details.log.some((l) => /rows multiplied: 1/.test(l.message)), 'the run log names multiplied rows')
+        assert.ok(details.log.some((l) => /Staging done: 2,101 rows/.test(l.message)))
+        assert.equal((await db.select().from(pipelineStageTables).where(eq(pipelineStageTables.runId, run.runId))).length, 0, 'staging dropped at the end')
+        assert.equal((await pool.query(`SELECT 1 FROM pg_tables WHERE schemaname = 'nexus_stage' AND tablename = $1`, [registered.tableName])).rowCount, 0)
+
+        const [ds] = await db.select().from(nexusDatasets).where(and(eq(nexusDatasets.workspaceId, adminWs), eq(nexusDatasets.name, dataset)))
+        assert.equal(ds.rowCount, 1200 + 1 - 1 + 30, 'E0002 twice (one row per match), E0007 held, contractors added')
+        const rel = `"nexus_data"."${ds.tableName}"`
+        const one = async (code: string) => (await pool.query(`SELECT * FROM ${rel} WHERE employee_code = $1 ORDER BY salary`, [code])).rows
+        const e1 = (await one('E0001'))[0]
+        assert.deepEqual([e1.full_name, Number(e1.salary), e1.payroll_full_name, e1.org_name, e1._source], ['Employee 1', 1000, 'PAYROLL 1', 'Unit 1', 'lane_hris'])
+        assert.deepEqual((await one('E0002')).map((r) => Number(r.salary)), [5, 1001])
+        const late = (await one('E1100'))[0]
+        assert.equal(late.salary, null, 'no payroll record: kept with empty values')
+        const c1 = (await one('C001'))[0]
+        assert.deepEqual([c1._source, c1.org_name], ['lane_hris2', 'Unit 1'])
+        assert.equal((await one('E0007')).length, 0)
+
+        // The unit now exists: the held row replays from the Join (staging is rebuilt for the replay).
+        const [held] = (await listQuarantine({ pipelineId: saved.id, kind: 'invalid' })).rows.filter((r) => r.row.employee_code === 'E0007')
+        assert.ok(held, 'the no-match row is in the quarantine')
+        assert.match(held.messages.join(' '), /No match in lane_orgs for org_code "ORG_NEW"/)
+        await pool.query(`INSERT INTO ${S}.lane_orgs VALUES ('ORG_NEW', 'New unit')`)
+        await fixRow({ id: held.id, row: held.row })
+        const [outcome] = await replayRows([held.id])
+        assert.equal(outcome.status, 'queued', outcome.message)
+        takeAfterCallbacks()
+        await processJobs({})
+        const replay = await getRunStatus(outcome.runId)
+        assert.equal(replay.status, 'success', replay.errorMessage ?? '')
+        assert.equal(replay.recordsSuccess, 1)
+        const e7 = (await one('E0007'))[0]
+        assert.deepEqual([e7?.org_name, Number(e7?.salary)], ['New unit', 1006])
+        assert.equal((await db.select().from(pipelineStageTables).where(eq(pipelineStageTables.runId, outcome.runId))).length, 0)
+
+        // The sweep drops staging left behind by a run that never finished.
+        const stale = await createStageTable({ workspaceId: adminWs, runId: `${RUN}_stale`, nodeId: 'j' })
+        await db.update(pipelineStageTables).set({ createdAt: new Date(Date.now() - 49 * 3_600_000) }).where(eq(pipelineStageTables.tableName, stale))
+        assert.ok((await sweepStageTables()) >= 1)
+        assert.equal((await pool.query(`SELECT to_regclass($1) AS r`, [`nexus_stage.${stale}`])).rows[0].r, null)
+      } finally {
+        await api.stop()
+        if (prevFlag === undefined) delete process.env.NEXUS_ALLOW_PRIVATE_URLS
+        else process.env.NEXUS_ALLOW_PRIVATE_URLS = prevFlag
+      }
+    })
+
     await test('TD-24: a full run supersedes older quarantine (fixes carry over); replays into a replace dataset replace by key', async () => {
       setTestUser(admin)
       await switchWorkspace(adminWs)
@@ -1765,6 +1905,8 @@ async function cleanup(userIds: string[]) {
   const ws = [...new Set([...wsIds, ...userIds.map((id) => `ws_${id}`)])]
   const datasets = await db.select({ tableName: nexusDatasets.tableName }).from(nexusDatasets).where(inArray(nexusDatasets.workspaceId, ws))
   for (const d of datasets) await pool.query(`DROP TABLE IF EXISTS "nexus_data"."${d.tableName}"`)
+  const staged = await db.select({ tableName: pipelineStageTables.tableName }).from(pipelineStageTables).where(inArray(pipelineStageTables.workspaceId, ws))
+  for (const t of staged) await pool.query(`DROP TABLE IF EXISTS "nexus_stage"."${t.tableName}"`)
   await db.delete(session).where(inArray(session.userId, userIds))
   await db.delete(verification).where(inArray(verification.value, userIds))
   const keyIds = (await db.select({ id: apiKeys.id }).from(apiKeys).where(inArray(apiKeys.workspaceId, ws))).map((k) => `key:${k.id}`)
@@ -1773,7 +1915,7 @@ async function cleanup(userIds: string[]) {
   if (pipeIds.length) await db.delete(apiRateLimits).where(inArray(apiRateLimits.bucket, pipeIds))
   const sso = await db.select({ providerId: workspaceSso.providerId }).from(workspaceSso).where(inArray(workspaceSso.workspaceId, ws))
   if (sso.length) await db.delete(ssoProvider).where(inArray(ssoProvider.providerId, sso.map((x) => x.providerId)))
-  for (const t of [agentTaskTable, agentTable, pipelineApprovals, scimTokens, scimUsers, scimGroups, notifications, workspaceSso, webhookDeliveries, webhooks, mappingTemplates, datasetQualitySnapshots, apiKeys, catalogEntries, domainMappings, businessRuleVersions, businessRules, datasetPolicies, dashboards, nexusDatasets, pipelineRunRejects, executionLogs, pipelineJobs, pipelineVersions, pipelines, dataSources, connectorInstalls, workspaceInvites, auditLogs, workspaceMembers]) {
+  for (const t of [agentTaskTable, agentTable, pipelineApprovals, scimTokens, scimUsers, scimGroups, notifications, workspaceSso, webhookDeliveries, webhooks, mappingTemplates, datasetQualitySnapshots, apiKeys, catalogEntries, domainMappings, businessRuleVersions, businessRules, datasetPolicies, dashboards, nexusDatasets, pipelineRunRejects, executionLogs, pipelineStageTables, pipelineJobs, pipelineVersions, pipelines, dataSources, connectorInstalls, workspaceInvites, auditLogs, workspaceMembers]) {
     await db.delete(t).where(inArray(t.workspaceId, ws))
   }
   await db.delete(auditLogs).where(inArray(auditLogs.userId, userIds))

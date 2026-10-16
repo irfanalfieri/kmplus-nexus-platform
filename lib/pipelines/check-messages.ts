@@ -47,6 +47,8 @@ const CHECKS = {
   apiPathValue: { en: "{field} \"{value}\" can't be used in the request path", id: '{field} "{value}" tidak dapat dipakai di path permintaan' },
   apiRefused: { en: 'The API refused the request (HTTP {status}): {message}', id: 'API menolak permintaan (HTTP {status}): {message}' },
   apiItemRejected: { en: 'The API rejected this item: {message}', id: 'API menolak item ini: {message}' },
+  // Join steps (several sources).
+  joinNoMatch: { en: 'No match in {lane} for {keys}', id: 'Tidak ada pasangan di {lane} untuk {keys}' },
 } as const satisfies Record<string, { en: string; id: string }>
 
 /** Comparison words used inside `compare` ("less than" etc.). */

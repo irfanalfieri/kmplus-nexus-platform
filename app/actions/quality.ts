@@ -10,6 +10,7 @@ import { can } from '@/lib/auth/permissions'
 import { recordAudit } from '@/lib/audit'
 import { definitionSchema, destinationTarget, stepTitle } from '@/lib/pipelines/definition'
 import { REPLAY_MAX_ROWS, enqueueRun } from '@/lib/pipelines/jobs'
+import { isStagedStep, lanePlan } from '@/lib/pipelines/lanes'
 import { startWorker } from '@/lib/pipelines/worker'
 import { applyMasks, masksFor } from '@/lib/governance/masking'
 import type { Mask } from '@/lib/governance/definition'
@@ -271,8 +272,9 @@ async function replayRowsImpl(rawIds: string[]) {
   const byPipeline = new Map<string, string[]>()
   for (const r of rows) byPipeline.set(r.pipelineId, [...(byPipeline.get(r.pipelineId) ?? []), r.id])
   const outcomes: { pipelineId: string; runId: string; status: string; message: string; rows: number }[] = []
-  for (const [pipelineId, rejectIds] of byPipeline) {
-    const [pipeline] = await db.select({ version: pipelines.version }).from(pipelines).where(and(eq(pipelines.id, pipelineId), eq(pipelines.workspaceId, ctx.workspaceId))).limit(1)
+  for (const [pipelineId, heldIds] of byPipeline) {
+    let rejectIds = heldIds
+    const [pipeline] = await db.select({ version: pipelines.version, config: pipelines.config }).from(pipelines).where(and(eq(pipelines.id, pipelineId), eq(pipelines.workspaceId, ctx.workspaceId))).limit(1)
     if (!pipeline) {
       outcomes.push({ pipelineId, runId: '', status: 'skipped', message: 'The pipeline was deleted.', rows: rejectIds.length })
       continue
@@ -280,6 +282,17 @@ async function replayRowsImpl(rawIds: string[]) {
     if (!pipeline.version) {
       outcomes.push({ pipelineId, runId: '', status: 'skipped', message: 'The pipeline has no published version.', rows: rejectIds.length })
       continue
+    }
+    // Rows held in a lane that feeds a Join's right side were looked up in a finished run: a new run brings them in.
+    const def = definitionSchema.safeParse(pipeline.config)
+    if (def.success) {
+      const plan = lanePlan(def.data)
+      const staged = rows.filter((r) => r.pipelineId === pipelineId && r.nodeId && isStagedStep(plan, r.nodeId)).map((r) => r.id)
+      if (staged.length) {
+        outcomes.push({ pipelineId, runId: '', status: 'skipped', message: 'These rows were held in a lane that feeds a Join. Run the pipeline again to include them.', rows: staged.length })
+        rejectIds = rejectIds.filter((id) => !staged.includes(id))
+        if (!rejectIds.length) continue
+      }
     }
     const outcome = await enqueueRun(pipelineId, { workspaceId: ctx.workspaceId, actorId: ctx.userId }, 'replay', { replayIds: rejectIds })
     outcomes.push({ pipelineId, ...outcome, rows: rejectIds.length })

@@ -251,7 +251,7 @@ export const helpEn: HelpContent = {
     {
       id: 'pipelines',
       title: 'Build pipelines',
-      summary: 'Templates, the editor, steps, checks, destinations, publishing, schedules, approvals, and environments with promotion.',
+      summary: 'Templates, the editor, steps, several sources with Join and Union, checks, destinations, publishing, schedules, approvals, and environments with promotion.',
       screen: 'pipelines',
       sections: [
         {
@@ -269,6 +269,8 @@ export const helpEn: HelpContent = {
                 ['Validate', 'Checks each row. Errors hold the row; warnings only note it.'],
                 ['Rules', 'Applies business rules from the Rules screen, including rows that must wait for approval.'],
                 ['Router', 'Sends rows down different branches by condition.'],
+                ['Join', 'Adds the columns of another source by key, e.g. salary from the payroll API for each employee (see Several sources).'],
+                ['Union', 'Stacks the rows of several sources, e.g. two HR systems, and records which one each row came from.'],
                 ['Destination', 'Writes to a dataset or to a destination data source such as a KMPlus product.'],
               ],
             },
@@ -297,12 +299,42 @@ export const helpEn: HelpContent = {
             {
               kind: 'list',
               items: [
-                '**Add after the selected step** on the left inserts Filter, Map & transform, Validate, Business rules, Router or Destination steps.',
+                '**Add after the selected step** on the left inserts Filter, Map & transform, Validate, Business rules, Router, Join, Union or Destination steps; **Source** adds another source to combine.',
                 'Select a step to edit it on the right; **Next steps** connects it to the following steps (a Router has one per branch).',
                 '**Run settings** sets retries, timeout, batch size, the quarantine threshold and when to alert (never, on failure, or on failure or held rows).',
                 '**Schedule** sets when the published version runs (see Schedules and triggers).',
               ],
             },
+          ],
+        },
+        {
+          id: 'lanes',
+          title: 'Several sources: Join and Union',
+          blocks: [
+            { kind: 'p', text: 'Client data rarely lives in one place: IDs and names in the HRIS, salaries in a payroll API, units in an org table. Add a **Source** step for each. Every source starts its own **lane** (the source and the steps its rows pass through), and lanes meet in a **Join** or a **Union**. Up to 10 sources per pipeline.' },
+            {
+              kind: 'list',
+              items: [
+                '**Driver**: with several sources, mark one as the driver (the canvas labels it). It streams in chunks like a single source; its max rows and sync mode apply as usual.',
+                '**Join**: connect the rows to keep to its **left** side and the source to look up to its **right** side. Pick one or more key pairs (`employee_code` = `employee_code`).',
+                '**Union**: connect two or more inputs. Columns are matched by name, a column one input lacks stays empty, and the `_source` column says which input each row came from.',
+              ],
+            },
+            {
+              kind: 'table',
+              head: ['Join setting', 'Choices (default first)'],
+              rows: [
+                ['Type', 'Left: keep every left row · Inner: only rows with a partner · No match: only rows without a partner'],
+                ['Compare keys', 'Ignore spaces and upper/lower case (on) · ignore leading zeros, so `00123` = `123` (off)'],
+                ['Several matches', 'One row per match (a key found twice on the right writes the row twice) · First match by a column'],
+                ['Rows without a partner', 'Keep with empty right columns · Drop · Quarantine, to replay once the partner exists'],
+                ['Clashing column names', 'Right columns whose name the left side already has get a prefix: the right source’s table, e.g. `payroll_name`, or your own'],
+              ],
+            },
+            { kind: 'p', text: 'Each run works in phases. First every Join’s right side is read in full, through its own steps, into **run staging** (up to 1,000,000 rows per Join; checkpointed, so a stopped run resumes where it was). Then the driver streams, each chunk looks up its keys, and Union partners stream after it. Staging is removed when the run ends. The run log says how many rows matched, how many multiplied and how much staging was used.' },
+            { kind: 'p', text: '**Test on sample** reads a sample of the driver, then only the right-side rows with the sample’s keys (from databases and files; other sources read up to 5,000 rows), so a Join shows “18 of 25 matched”.' },
+            { kind: 'note', tone: 'warning', text: 'Incremental driver with a Join: the looked-up sources are read in full every run, but only the rows the driver reads (new or changed) are joined. A change in payroll reaches an employee only when that employee’s own row changes too. Each source keeps its own sync position.' },
+            { kind: 'note', tone: 'info', text: 'Rows held at a Join or after it replay from their step as usual. Rows held inside a lane that feeds a Join’s right side can’t be replayed into a finished join: run the pipeline again after fixing the source.' },
           ],
         },
         {
@@ -937,6 +969,9 @@ export const helpEn: HelpContent = {
     { id: 'incremental', group: 'pipelines', q: 'Does every run read the whole table?', a: 'Not if the source step is **incremental**: Nexus remembers the highest value of a column such as `updated_at` and reads only newer rows. The watermark moves only after the whole run succeeds.' },
     { id: 'duplicates', group: 'pipelines', q: 'Can a retried run create duplicate rows?', a: 'No. Appends are written per chunk with the run id, so a resumed chunk replaces its earlier copy; upserts match on your key columns.' },
     { id: 'chain', group: 'pipelines', q: 'How do I run pipeline B after pipeline A?', a: 'In B’s schedule choose **After another pipeline** and pick A. B is queued each time A finishes.' },
+    { id: 'join-multiplied', group: 'pipelines', q: 'Why does my dataset have more rows than the HR system after a Join?', a: 'A Join writes **one row per match**: an employee with two payroll records becomes two rows. The test and the run log say how many rows multiplied. To keep one, set **Several matches** to *First match* and pick the column that decides (e.g. the latest `valid_from`).' },
+    { id: 'join-no-match', group: 'pipelines', q: 'Rows were held at a Join with “No match in …”. What now?', a: 'Their key wasn’t found on the Join’s right side (often a unit or record created later, or a key typed differently). Check the key normalization, or wait until the partner exists; then open the row in Data quality and choose **Save & replay**: it re-enters at the Join and is matched again.' },
+    { id: 'join-incremental', group: 'pipelines', q: 'Can an incremental pipeline use a Join?', a: 'Yes. The looked-up sources are read in full every run, so new rows of the driver always find their partners. But a change only on the looked-up side (a new salary) reaches an employee only when that employee’s row is read again: use a full read when that matters, or reset the sync position.' },
     { id: 'deleted-employees', group: 'pipelines', q: 'How are people who left the company handled?', a: 'With an upsert destination and **Mark rows missing from the source as deleted**, rows that disappear from the source are marked deleted instead of removed. Reads exclude them; the history stays.' },
     { id: 'env-why', group: 'environments', q: 'Why use Development, Staging and Production?', a: 'To change pipelines without risking production data. Build against test data in Development, check the result with production-like data in Staging, and promote only what works to Production, which can’t be edited directly.' },
     { id: 'env-sources', group: 'environments', q: 'Does a promoted pipeline read Development’s database in Production?', a: 'No. Data sources are matched **by name**, and each environment has its own source with its own credentials. Give the source the same name in every environment; a missing one blocks the promotion.' },
