@@ -13,6 +13,7 @@ export async function startKmplusMock(token = 'mock-token', port = 0) {
   const entities = [
     { name: 'employee', key: 'employee_code', fields: [{ name: 'employee_code', type: 'text', required: true }, { name: 'full_name', type: 'text' }, { name: 'email', type: 'text', required: true }, { name: 'org_code', type: 'text' }] },
     { name: 'organization', key: 'org_code', fields: [{ name: 'org_code', type: 'text', required: true }, { name: 'name', type: 'text' }] },
+    { name: 'org_headcount', key: 'org_month', fields: [{ name: 'org_month', type: 'text', required: true }, { name: 'org_code', type: 'text' }, { name: 'month', type: 'date' }, { name: 'headcount', type: 'integer' }, { name: 'active_headcount', type: 'integer' }] },
   ]
   const server = createServer((req, res) => {
     const send = (status: number, body: unknown) => {

@@ -16,6 +16,9 @@ export function localizeStepTitle(text: string, t: Translate): string {
   if ((m = /^Route \((\d+) branches\)$/.exec(text))) return t('editor.stepTitle.router', { count: Number(m[1]) })
   if ((m = /^Join on (.+)$/.exec(text))) return t('editor.stepTitle.join', { keys: m[1] })
   if (text === 'Union') return t('editor.stepTitle.union')
+  if (text === 'Aggregate by all rows') return t('editor.stepTitle.aggregateAll')
+  if ((m = /^Aggregate by (.+)$/.exec(text))) return t('editor.stepTitle.aggregate', { groups: m[1] })
+  if ((m = /^Deduplicate on (.+)$/.exec(text))) return t('editor.stepTitle.dedupe', { keys: m[1] })
   if ((m = /^Write dataset (.+)$/.exec(text))) return t('editor.stepTitle.destinationDataset', { name: m[1] })
   if ((m = /^Write (.+)$/.exec(text))) return t('editor.stepTitle.destinationTable', { name: m[1] })
   return text

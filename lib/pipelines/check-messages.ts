@@ -49,6 +49,10 @@ const CHECKS = {
   apiItemRejected: { en: 'The API rejected this item: {message}', id: 'API menolak item ini: {message}' },
   // Join steps (several sources).
   joinNoMatch: { en: 'No match in {lane} for {keys}', id: 'Tidak ada pasangan di {lane} untuk {keys}' },
+  // Deduplicate steps (removed rows are listed as flags).
+  duplicateRemovedRecent: { en: 'Duplicate of {keys} removed; kept the one with {column} {value}', id: 'Duplikat {keys} dihapus; yang dipertahankan memiliki {column} {value}' },
+  duplicateRemovedFirst: { en: 'Duplicate of {keys} removed; kept the first one read', id: 'Duplikat {keys} dihapus; yang dipertahankan adalah yang pertama dibaca' },
+  duplicateRemovedLast: { en: 'Duplicate of {keys} removed; kept the last one read', id: 'Duplikat {keys} dihapus; yang dipertahankan adalah yang terakhir dibaca' },
 } as const satisfies Record<string, { en: string; id: string }>
 
 /** Comparison words used inside `compare` ("less than" etc.). */

@@ -251,7 +251,7 @@ export const helpEn: HelpContent = {
     {
       id: 'pipelines',
       title: 'Build pipelines',
-      summary: 'Templates, the editor, steps, several sources with Join and Union, checks, destinations, publishing, schedules, approvals, and environments with promotion.',
+      summary: 'Templates, the editor, steps, several sources with Join and Union, Aggregate and Deduplicate, checks, destinations, publishing, schedules, approvals, and environments with promotion.',
       screen: 'pipelines',
       sections: [
         {
@@ -271,6 +271,8 @@ export const helpEn: HelpContent = {
                 ['Router', 'Sends rows down different branches by condition.'],
                 ['Join', 'Adds the columns of another source by key, e.g. salary from the payroll API for each employee (see Several sources).'],
                 ['Union', 'Stacks the rows of several sources, e.g. two HR systems, and records which one each row came from.'],
+                ['Aggregate', 'One row per group with counts, sums, averages and more, e.g. headcount per unit per month.'],
+                ['Deduplicate', 'Keeps one row per key, e.g. the latest record of each employee, and lists the rest in Data quality.'],
                 ['Destination', 'Writes to a dataset or to a destination data source such as a KMPlus product.'],
               ],
             },
@@ -299,7 +301,7 @@ export const helpEn: HelpContent = {
             {
               kind: 'list',
               items: [
-                '**Add after the selected step** on the left inserts Filter, Map & transform, Validate, Business rules, Router, Join, Union or Destination steps; **Source** adds another source to combine.',
+                '**Add after the selected step** on the left inserts Filter, Map & transform, Validate, Business rules, Router, Join, Union, Aggregate, Deduplicate or Destination steps; **Source** adds another source to combine.',
                 'Select a step to edit it on the right; **Next steps** connects it to the following steps (a Router has one per branch).',
                 '**Run settings** sets retries, timeout, batch size, the quarantine threshold and when to alert (never, on failure, or on failure or held rows).',
                 '**Schedule** sets when the published version runs (see Schedules and triggers).',
@@ -335,6 +337,31 @@ export const helpEn: HelpContent = {
             { kind: 'p', text: '**Test on sample** reads a sample of the driver, then only the right-side rows with the sample’s keys (from databases and files; other sources read up to 5,000 rows), so a Join shows “18 of 25 matched”.' },
             { kind: 'note', tone: 'warning', text: 'Incremental driver with a Join: the looked-up sources are read in full every run, but only the rows the driver reads (new or changed) are joined. A change in payroll reaches an employee only when that employee’s own row changes too. Each source keeps its own sync position.' },
             { kind: 'note', tone: 'info', text: 'Rows held at a Join or after it replay from their step as usual. Rows held inside a lane that feeds a Join’s right side can’t be replayed into a finished join: run the pipeline again after fixing the source.' },
+          ],
+        },
+        {
+          id: 'blocking',
+          title: 'Aggregate and Deduplicate',
+          blocks: [
+            { kind: 'p', text: 'These two steps need every row before they can answer, so a run first reads its sources, holds the rows that reach them, then answers group by group and sends the result on to the next steps.' },
+            {
+              kind: 'table',
+              head: ['Step', 'Settings'],
+              rows: [
+                ['Aggregate', 'Group by columns and, optionally, a time bucket on a date column (day, week from Monday, month, quarter, year). Measures: count, count distinct, sum, average, minimum, maximum, first / last by a column, join as text, collect as a list; each can count only rows matching a condition (e.g. `active_headcount` = count where status = Active).'],
+                ['Deduplicate', 'Key columns (compared ignoring spaces and case, like Join keys). Keep the most recent row by a date column (the default when there is one), the first one read, or the last one read.'],
+              ],
+            },
+            {
+              kind: 'list',
+              items: [
+                'Removed duplicates are listed in **Data quality** as flags, each naming the row that was kept. Nothing is held; flags don’t make a run partial.',
+                'An Aggregate needs a **full read** of the sources feeding it: an incremental read would count only the changed rows, so the editor refuses it.',
+                'Rows held earlier in the lane (failed checks) are not counted; the run log says how many. Fix them and run the pipeline again rather than replaying them.',
+                'An Aggregate can also prepare a Join’s looked-up side, e.g. sum allowances per employee, then join them to each employee.',
+                '**Test on sample** aggregates the sample only; the test says so.',
+              ],
+            },
           ],
         },
         {
@@ -972,6 +999,8 @@ export const helpEn: HelpContent = {
     { id: 'join-multiplied', group: 'pipelines', q: 'Why does my dataset have more rows than the HR system after a Join?', a: 'A Join writes **one row per match**: an employee with two payroll records becomes two rows. The test and the run log say how many rows multiplied. To keep one, set **Several matches** to *First match* and pick the column that decides (e.g. the latest `valid_from`).' },
     { id: 'join-no-match', group: 'pipelines', q: 'Rows were held at a Join with “No match in …”. What now?', a: 'Their key wasn’t found on the Join’s right side (often a unit or record created later, or a key typed differently). Check the key normalization, or wait until the partner exists; then open the row in Data quality and choose **Save & replay**: it re-enters at the Join and is matched again.' },
     { id: 'join-incremental', group: 'pipelines', q: 'Can an incremental pipeline use a Join?', a: 'Yes. The looked-up sources are read in full every run, so new rows of the driver always find their partners. But a change only on the looked-up side (a new salary) reaches an employee only when that employee’s row is read again: use a full read when that matters, or reset the sync position.' },
+    { id: 'dedupe-which', group: 'pipelines', q: 'An employee appears twice in the source. Which record is kept?', a: 'Add a **Deduplicate** step on the employee key. By default it keeps the most recent record by a date column such as `updated_at`; you can keep the first or last one read instead. Each removed record is listed in Data quality, naming the one kept. Duplicates across runs are handled by an upsert destination with the same key.' },
+    { id: 'aggregate-incremental', group: 'pipelines', q: 'Why can’t an Aggregate read incrementally?', a: 'An incremental read only brings new or changed rows, so a headcount would count just those. Set the sources feeding the Aggregate to **Full**; if they are large, schedule the pipeline less often.' },
     { id: 'deleted-employees', group: 'pipelines', q: 'How are people who left the company handled?', a: 'With an upsert destination and **Mark rows missing from the source as deleted**, rows that disappear from the source are marked deleted instead of removed. Reads exclude them; the history stays.' },
     { id: 'env-why', group: 'environments', q: 'Why use Development, Staging and Production?', a: 'To change pipelines without risking production data. Build against test data in Development, check the result with production-like data in Staging, and promote only what works to Production, which can’t be edited directly.' },
     { id: 'env-sources', group: 'environments', q: 'Does a promoted pipeline read Development’s database in Production?', a: 'No. Data sources are matched **by name**, and each environment has its own source with its own credentials. Give the source the same name in every environment; a missing one blocks the promotion.' },

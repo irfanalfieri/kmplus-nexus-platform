@@ -845,7 +845,7 @@ async function main() {
         const destId = await createDataSource({ name: `${RUN} LMS`, type: 'kmplus', sourceType: 'kmplus', config: { role: 'destination' }, credentials: { product: 'LMS', baseUrl: mock.baseUrl, apiToken: mock.token } })
         await testConnection(destId)
         const scanned = (await getDataSources()).find((s) => s.id === destId)!.config as { schemaScan: { tables: { name: string }[] } }
-        assert.deepEqual(scanned.schemaScan.tables.map((t) => t.name), ['employee', 'organization'])
+        assert.deepEqual(scanned.schemaScan.tables.map((t) => t.name), ['employee', 'organization', 'org_headcount'])
         const saved = await savePipeline({
           publish: true,
           name: `${RUN} to LMS`,
@@ -1117,16 +1117,16 @@ async function main() {
         const run = await runPipelineNow(saved.id)
         takeAfterCallbacks()
         const job = async () => (await db.select().from(pipelineJobs).where(eq(pipelineJobs.id, run.runId)))[0]
-        type Progress = { phase?: string; stage?: Record<string, { offset: number; done: boolean; rows: number }> }
+        type Progress = { passes?: Record<string, { offset: number; done: boolean; rows: number; chunks: number }> }
         // One chunk per invocation until the org table is half staged.
         for (let i = 0; i < 10; i++) {
           await processJobs({ maxChunksPerSlice: 1, maxJobs: 1 })
-          if (((await job()).progress as Progress).stage?.['j_org:org']?.offset) break
+          if (((await job()).progress as Progress).passes?.org?.offset) break
         }
         const mid = (await job()).progress as Progress
-        assert.equal(mid.phase, 'stage')
-        assert.deepEqual(mid.stage?.['j_pay:pay'], { offset: 1001, done: true, rows: 1001, chunks: 3 })
-        assert.equal(mid.stage?.['j_org:org']?.offset, 500)
+        assert.deepEqual(mid.passes?.pay, { offset: 1001, cursor: null, done: true, rows: 1001, chunks: 3 }, 'the payroll lane is staged first')
+        assert.equal(mid.passes?.org?.offset, 500)
+        assert.equal(mid.passes?.hris?.chunks, 0, 'the driver waits until its lookups are staged')
         const [registered] = await db.select().from(pipelineStageTables).where(eq(pipelineStageTables.runId, run.runId)).limit(1)
         assert.ok(registered, 'staging tables are registered for cleanup')
 
@@ -1136,7 +1136,7 @@ async function main() {
         const failed = await job()
         assert.equal(failed.status, 'queued', 'retrying')
         assert.equal(failed.attempts, 1)
-        assert.equal((failed.progress as Progress).stage?.['j_org:org']?.offset, 500, 'resumes mid-stage, not from the start')
+        assert.equal((failed.progress as Progress).passes?.org?.offset, 500, 'resumes mid-stage, not from the start')
         await pool.query(`ALTER TABLE ${S}.lane_orgs_gone RENAME TO lane_orgs`)
         await db.update(pipelineJobs).set({ availableAt: new Date() }).where(eq(pipelineJobs.id, run.runId))
         for (let i = 0; i < 10 && (await job()).status !== 'done'; i++) await processJobs({})
@@ -1190,6 +1190,93 @@ async function main() {
         assert.equal((await pool.query(`SELECT to_regclass($1) AS r`, [`nexus_stage.${stale}`])).rows[0].r, null)
       } finally {
         await api.stop()
+        if (prevFlag === undefined) delete process.env.NEXUS_ALLOW_PRIVATE_URLS
+        else process.env.NEXUS_ALLOW_PRIVATE_URLS = prevFlag
+      }
+    })
+
+    await test('blocking steps: headcount per org per month to a dataset and a KMPlus product; dedupe keeps the latest record and flags the rest; aggregates refuse incremental reads', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const prevFlag = process.env.NEXUS_ALLOW_PRIVATE_URLS
+      process.env.NEXUS_ALLOW_PRIVATE_URLS = 'true'
+      const mock = await startKmplusMock()
+      try {
+        const S = `"${FIXTURE_SCHEMA}"`
+        // 600 HR records for 500 people: E001–E100 appear twice; the later record moves them to another unit.
+        await pool.query(`CREATE TABLE ${S}.hr_records (id int PRIMARY KEY, employee_code text, org_code text, status text, hired date, updated_at timestamptz)`)
+        await pool.query(
+          `INSERT INTO ${S}.hr_records
+           SELECT g, CASE WHEN g > 500 THEN lower('E' || lpad((g - 500)::text, 3, '0')) ELSE 'E' || lpad(g::text, 3, '0') END,
+                  'ORG' || (CASE WHEN g > 500 THEN g + 1 ELSE g END % 5),
+                  CASE WHEN g % 4 = 0 THEN 'Inactive' ELSE 'Active' END,
+                  date '2026-01-01' + ((g % 180) * interval '1 day'),
+                  timestamptz '2026-10-01' + g * interval '1 minute'
+           FROM generate_series(1, 600) g`
+        )
+        const kmplusId = await createDataSource({ name: `${RUN} PMS`, type: 'kmplus', sourceType: 'kmplus', config: { role: 'destination' }, credentials: { product: 'PMS', baseUrl: mock.baseUrl, apiToken: mock.token } })
+        const definition = (mode: 'full' | 'incremental') => ({
+          schemaVersion: 2,
+          nodes: [
+            { id: 's', type: 'source', position: { x: 0, y: 0 }, dataSourceId: sourceId, table: 'hr_records', maxRows: 100_000, mode, watermarkColumn: mode === 'incremental' ? 'updated_at' : '' },
+            { id: 'dd', type: 'dedupe', position: { x: 300, y: 0 }, keys: ['employee_code'], keep: 'most_recent', recentBy: 'updated_at' },
+            { id: 'agg', type: 'aggregate', position: { x: 600, y: 0 }, groupBy: ['org_code'], timeGrain: { column: 'hired', grain: 'month', as: 'month' }, measures: [
+              { name: 'headcount', fn: 'count' },
+              { name: 'active_headcount', fn: 'count', condition: { match: 'all', conditions: [{ field: 'status', operator: 'equals', value: 'Active' }] } },
+            ] },
+            { id: 'ds', type: 'destination', position: { x: 900, y: 0 }, kind: 'dataset', datasetName: `${RUN}_headcount`, mode: 'replace', keys: [] },
+            { id: 'm', type: 'map', position: { x: 900, y: 200 }, keepUnmapped: true, fields: [{ from: 'org_code', to: 'org_month', type: 'text', transforms: [{ fn: 'concat', args: ['{org_code}-{month}'] }] }] },
+            { id: 'pms', type: 'destination', position: { x: 1200, y: 200 }, kind: 'datasource', dataSourceId: kmplusId, table: 'org_headcount', mode: 'upsert', keys: ['org_month'] },
+          ],
+          edges: [{ id: 'e1', from: 's', to: 'dd' }, { id: 'e2', from: 'dd', to: 'agg' }, { id: 'e3', from: 'agg', to: 'ds' }, { id: 'e4', from: 'agg', to: 'm' }, { id: 'e5', from: 'm', to: 'pms' }],
+          settings: { batchSize: 500, retries: 0 },
+        })
+        await rejectsWith(() => savePipeline({ publish: true, name: `${RUN} headcount (incremental)`, definition: definition('incremental'), schedule: { type: 'manual' } as never }), /needs a full read/)
+
+        const saved = await savePipeline({ publish: true, name: `${RUN} headcount`, definition: definition('full'), schedule: { type: 'manual' } as never })
+        const run = await runPipelineNow(saved.id)
+        takeAfterCallbacks()
+        // One chunk per invocation: two source chunks, then the finish passes of Deduplicate and Aggregate.
+        for (let i = 0; i < 20; i++) {
+          const [job] = await db.select({ status: pipelineJobs.status }).from(pipelineJobs).where(eq(pipelineJobs.id, run.runId))
+          if (job.status === 'done') break
+          await processJobs({ maxChunksPerSlice: 1, maxJobs: 1 })
+        }
+        const done = await getRunStatus(run.runId)
+        assert.equal(done.status, 'success', done.errorMessage ?? '')
+        assert.equal(done.recordsProcessed, 600)
+
+        const { rows: expected } = await pool.query<{ org_code: string; month: string; headcount: number; active_headcount: number }>(
+          `WITH latest AS (SELECT DISTINCT ON (lower(btrim(employee_code))) * FROM ${S}.hr_records ORDER BY lower(btrim(employee_code)), updated_at DESC)
+           SELECT org_code, to_char(date_trunc('month', hired), 'YYYY-MM-DD') AS month, count(*)::int AS headcount, (count(*) FILTER (WHERE status = 'Active'))::int AS active_headcount
+             FROM latest GROUP BY 1, 2 ORDER BY 1, 2`
+        )
+        const [ds] = await db.select().from(nexusDatasets).where(and(eq(nexusDatasets.workspaceId, adminWs), eq(nexusDatasets.name, `${RUN}_headcount`)))
+        assert.deepEqual((ds.columns as { name: string; type: string }[]).map((c) => `${c.name}:${c.type}`), ['org_code:text', 'month:date', 'headcount:integer', 'active_headcount:integer'])
+        const { rows: written } = await pool.query(`SELECT org_code, to_char(month, 'YYYY-MM-DD') AS month, headcount::int, active_headcount::int FROM "nexus_data"."${ds.tableName}" ORDER BY 1, 2`)
+        assert.deepEqual(written, expected, 'headcount per org per month, counted over the latest record of each person')
+        assert.equal(expected.reduce((n, r) => n + r.headcount, 0), 500)
+        const product = mock.store.get('org_headcount')!
+        assert.equal(product.size, expected.length, 'every group sent to the KMPlus product')
+        assert.deepEqual(product.get(`${expected[0].org_code}-${expected[0].month}`)?.headcount, expected[0].headcount)
+
+        // 100 removed duplicates are listed as flags (nothing held), each naming the record kept.
+        const flags = await listQuarantine({ pipelineId: saved.id, kind: 'flag' })
+        assert.equal(flags.total, 100)
+        const e001 = flags.rows.find((r) => r.row.employee_code === 'E001')!
+        assert.match(e001.messages[0], /^Duplicate of employee_code "E001" removed; kept the one with updated_at /)
+        assert.equal(done.recordsError, 0, 'flags are not errors')
+        const details = (await db.select({ d: executionLogs.executionDetails }).from(executionLogs).where(eq(executionLogs.id, run.runId)))[0].d as { steps: { id: string; rowsIn: number; rowsOut: number; flagged?: number }[] }
+        const dd = details.steps.find((s) => s.id === 'dd')!
+        assert.deepEqual([dd.rowsIn, dd.rowsOut, dd.flagged], [600, 500, 100])
+        assert.equal(details.steps.find((s) => s.id === 'agg')!.rowsOut, expected.length)
+        assert.equal((await db.select().from(pipelineStageTables).where(eq(pipelineStageTables.runId, run.runId))).length, 0, 'staging dropped')
+
+        // Test on sample: aggregated over the sample only.
+        const sample = await testPipeline(definition('full'))
+        assert.ok(sample.ok && sample.result.steps.find((s) => s.id === 'agg')!.rowsOut > 0)
+      } finally {
+        await mock.stop()
         if (prevFlag === undefined) delete process.env.NEXUS_ALLOW_PRIVATE_URLS
         else process.env.NEXUS_ALLOW_PRIVATE_URLS = prevFlag
       }

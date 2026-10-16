@@ -9,8 +9,14 @@ import type { JoinStep, PipelineNode, SourceStep } from './definition'
  * The driver streams in chunks. A lane that ends at the right side of a Join is
  * staged: read in full first, through its own steps, into a run staging table.
  * Other lanes that reach the Destinations (Union partners) stream after the
- * driver, one after another. A run therefore has phases: stage every Join's
- * right side (dependencies first), then stream the streamed lanes.
+ * driver, one after another. Blocking steps (Aggregate, Deduplicate keeping the
+ * last or most recent row) need every row first: rows reaching one are staged,
+ * and a finish pass answers each group and sends the result on.
+ *
+ * A run is a list of passes (`planPasses`): one per Source and one per blocking
+ * step, each running once the Joins it looks up and the blocking step it
+ * finishes are complete. Passes that only prepare a lookup run first, then the
+ * driver, Union partners and finish passes.
  *
  * Only value imports from nothing in ./definition: definition.ts validates with
  * planLanes, so this module must not depend on it at load time.
@@ -42,8 +48,27 @@ export interface LanePlan {
   lanes: Map<string, Set<string>>
   /** Per source: where its rows end up: 'stream' (Destinations) or `join:<id>` (a Join's right side). */
   targets: Map<string, Set<string>>
+  /** The run's passes in order (sources and blocking steps). */
+  passes: Pass[]
   issues: string[]
 }
+
+export interface Pass {
+  /** The Source the pass reads, or the blocking step it finishes (rows enter after it). */
+  id: string
+  kind: 'source' | 'finish'
+  /** Steps the pass touches. */
+  nodes: Set<string>
+  /** Joins (right side) and blocking steps the pass stages rows into. */
+  sinks: string[]
+  /** Joins it looks up and, for a finish pass, its own step: complete before it runs. */
+  needs: string[]
+  /** Only prepares a lookup for a Join (rows never reach a Destination directly). */
+  staged: boolean
+}
+
+/** Steps that need every row before they answer: Aggregate, Deduplicate keeping the last or most recent row. */
+export const isBlocking = (n: GraphNode | undefined) => n?.type === 'aggregate' || (n?.type === 'dedupe' && n.keep !== 'first')
 
 export const STREAM = 'stream'
 const portOf = (e: GraphEdge) => e.port ?? ''
@@ -132,7 +157,45 @@ export function planLanes(def: Graph): LanePlan {
   }
 
   const streamed = [...(driver ? [driver] : []), ...sources.filter((s) => s.id !== driver && targets.get(s.id)?.has(STREAM)).map((s) => s.id)]
-  return { driver, sources: sources.map((s) => s.id), streamed, joins, lanes, targets, issues }
+  const partial = { driver, sources: sources.map((s) => s.id), streamed, joins, lanes, targets, passes: [] as Pass[], issues }
+  partial.passes = planPasses(def, partial, order)
+  return partial
+}
+
+/**
+ * The run's passes in a valid order: a pass runs once every Join it looks up
+ * (its right side) and, for a finish pass, its own blocking step have all
+ * their rows. Among the passes ready, lookups are prepared first, then the
+ * driver, the other streamed sources and the finish passes, in step order.
+ */
+function planPasses(def: Graph, plan: Omit<LanePlan, 'passes'>, order: GraphNode[]): Pass[] {
+  const entries: Pass[] = []
+  for (const n of order) {
+    if (n.type !== 'source' && !isBlocking(n)) continue
+    const nodes = passNodes(def, n.id, { blocking: true })
+    const sinks = new Set<string>()
+    const needs = new Set<string>(n.type === 'source' ? [] : [n.id])
+    for (const e of def.edges) {
+      if (!nodes.has(e.from) || !nodes.has(e.to)) continue
+      if (portOf(e) === 'right') sinks.add(e.to)
+      else if (def.nodes.find((x) => x.id === e.to)?.type === 'join') needs.add(e.to)
+    }
+    for (const id of nodes) if (id !== n.id && isBlocking(def.nodes.find((x) => x.id === id))) sinks.add(id)
+    entries.push({ id: n.id, kind: n.type === 'source' ? 'source' : 'finish', nodes, sinks: [...sinks], needs: [...needs], staged: isStagedStep(plan as LanePlan, n.id) })
+  }
+  const rank = (p: Pass) => (p.staged ? 0 : p.id === plan.driver ? 1 : p.kind === 'source' ? 2 : 3)
+  const pending = [...entries].sort((a, b) => rank(a) - rank(b))
+  const done: Pass[] = []
+  const complete = (sink: string) => entries.every((p) => !p.sinks.includes(sink) || done.includes(p))
+  while (pending.length) {
+    const i = pending.findIndex((p) => p.needs.every(complete))
+    if (i < 0) {
+      plan.issues.push('Steps wait on each other in a loop (a Join or blocking step needs rows that come after it). Rearrange the lanes.')
+      return [...done, ...pending]
+    }
+    done.push(pending.splice(i, 1)[0])
+  }
+  return done
 }
 
 const cache = new WeakMap<object, LanePlan>()
@@ -148,7 +211,7 @@ export function lanePlan(def: Graph): LanePlan {
  * quarantined row replays from): everything downstream, stopping at the right
  * side of a Join (that Join is included; its right input is staged there).
  */
-export function passNodes(def: Graph, startId: string): Set<string> {
+export function passNodes(def: Graph, startId: string, opts: { blocking?: boolean } = {}): Set<string> {
   const out = new Set([startId])
   const stack = [startId]
   while (stack.length) {
@@ -156,10 +219,18 @@ export function passNodes(def: Graph, startId: string): Set<string> {
     for (const e of def.edges) {
       if (e.from !== id || out.has(e.to)) continue
       out.add(e.to)
-      if (portOf(e) !== 'right') stack.push(e.to)
+      // `blocking`: rows stop at a blocking step too (it is finished in its own pass).
+      if (portOf(e) !== 'right' && !(opts.blocking && isBlocking(def.nodes.find((n) => n.id === e.to)))) stack.push(e.to)
     }
   }
   return out
+}
+
+/** Rows held at this step can't be replayed into a finished run: they feed a Join's right side or a blocking step. */
+export function replayBlocked(def: Graph, plan: LanePlan, nodeId: string): boolean {
+  if (isStagedStep(plan, nodeId)) return true
+  for (const id of passNodes(def, nodeId)) if (id !== nodeId && isBlocking(def.nodes.find((n) => n.id === id))) return true
+  return false
 }
 
 /** True when the step only carries rows that end up staged (a lane that feeds a Join's right side). */

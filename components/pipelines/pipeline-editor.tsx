@@ -16,7 +16,7 @@ import {
   type NodeProps,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { BellRing, Database, Filter, FlaskConical, GitBranch, GitMerge, Layers, Link2, Loader2, OctagonAlert, Rocket, Save, Scale, ShieldCheck, Shuffle, Trash2, Upload, X } from 'lucide-react'
+import { BellRing, CopyMinus, Database, Filter, FlaskConical, GitBranch, GitMerge, Layers, Sigma, Link2, Loader2, OctagonAlert, Rocket, Save, Scale, ShieldCheck, Shuffle, Trash2, Upload, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -38,6 +38,7 @@ import {
   newStepId,
   scheduleSchema,
   topoOrder,
+  type ColumnType,
   type NodeType,
   type Port,
   type PipelineEdge,
@@ -53,8 +54,11 @@ import { localizeCheck } from '@/lib/pipelines/check-messages'
 import { localizeStepTitle } from './step-title'
 import { isStagedStep, joinPrefix, laneLabel, planLanes, type LanePlan } from '@/lib/pipelines/lanes'
 import { joinOutputColumns } from '@/lib/pipelines/join'
+import { aggregateOutputTypes, recencyColumn } from '@/lib/pipelines/aggregate'
 import {
   DestinationEditor,
+  AggregateEditor,
+  DedupeEditor,
   FilterEditor,
   JoinEditor,
   MapEditor,
@@ -114,6 +118,8 @@ const META: Record<NodeType, { icon: typeof Database }> = {
   router: { icon: GitBranch },
   join: { icon: GitMerge },
   union: { icon: Layers },
+  aggregate: { icon: Sigma },
+  dedupe: { icon: CopyMinus },
   destination: { icon: Upload },
 }
 const kindTitle = (type: NodeType, t: Translate) => t(`editor.nodes.${type}`)
@@ -137,11 +143,17 @@ function stepLabel(n: PipelineNode, t: Translate): string {
       return t('editor.stepTitle.join', { keys: n.keys.map((k) => k.left).filter(Boolean).join(', ') || '…' })
     case 'union':
       return t('editor.stepTitle.union')
+    case 'aggregate': {
+      const groups = [...n.groupBy, ...(n.timeGrain ? [`${n.timeGrain.column} (${t(`steps.aggregate.grains.${n.timeGrain.grain}`)})`] : [])]
+      return groups.length ? t('editor.stepTitle.aggregate', { groups: groups.join(', ') }) : t('editor.stepTitle.aggregateAll')
+    }
+    case 'dedupe':
+      return t('editor.stepTitle.dedupe', { keys: n.keys.join(', ') || '…' })
     case 'destination':
       return n.kind === 'dataset' ? t('editor.stepTitle.destinationDataset', { name: n.datasetName }) : n.kind === 'api' ? t('editor.stepTitle.destinationApi', { name: `${n.method} ${n.path}` }) : t('editor.stepTitle.destinationTable', { name: n.table })
   }
 }
-const ADDABLE: NodeType[] = ['source', 'filter', 'map', 'validate', 'rules', 'router', 'join', 'union', 'destination']
+const ADDABLE: NodeType[] = ['source', 'filter', 'map', 'validate', 'rules', 'router', 'join', 'union', 'aggregate', 'dedupe', 'destination']
 
 /** Node frame and icon colour by kind: sources in, destinations out, transforms neutral. */
 const KIND_BORDER: Record<NodeType, string> = {
@@ -153,6 +165,8 @@ const KIND_BORDER: Record<NodeType, string> = {
   router: 'border-border',
   join: 'border-border',
   union: 'border-border',
+  aggregate: 'border-border',
+  dedupe: 'border-border',
   destination: 'border-live',
 }
 const KIND_ICON: Record<NodeType, string> = {
@@ -164,6 +178,8 @@ const KIND_ICON: Record<NodeType, string> = {
   router: 'text-muted-foreground',
   join: 'text-muted-foreground',
   union: 'text-muted-foreground',
+  aggregate: 'text-muted-foreground',
+  dedupe: 'text-muted-foreground',
   destination: 'text-live',
 }
 
@@ -199,6 +215,13 @@ function newNode(type: NodeType, columns: Column[], position: { x: number; y: nu
       return { id, type, position, joinType: 'left', keys: [{ left: first, right: '' }], normalize: { trim: true, ignoreCase: true, leadingZeros: false }, onMany: 'all', firstBy: { column: '', direction: 'desc' }, onNoMatch: 'keep', prefix: '' }
     case 'union':
       return { id, type, position, sourceColumn: '_source', labels: [] }
+    case 'aggregate':
+      return { id, type, position, groupBy: [], measures: [{ name: 'row_count', fn: 'count', column: '', sortBy: '', separator: ', ' }] }
+    case 'dedupe': {
+      // Decided default: most recent by a date or timestamp column when there is one, else the first one read.
+      const recent = recencyColumn(columns)
+      return { id, type, position, keys: first ? [first] : [], normalize: { trim: true, ignoreCase: true, leadingZeros: false }, keep: recent ? 'most_recent' : 'first', recentBy: recent?.name ?? '', flagRemoved: true }
+    }
     case 'filter':
       return { id, type, position, match: 'all', conditions: [newCondition(first)], ruleId: '' }
     case 'map':
@@ -231,6 +254,9 @@ function columnsPerNode(nodes: PipelineNode[], edges: PipelineEdge[], options: B
       const right = gather(node.id, true)
       input.right.set(node.id, right)
       output.set(node.id, joinOutputColumns(node, cols, right, joinPrefix({ nodes, edges }, plan, node)))
+    } else if (node.type === 'aggregate') {
+      const types = aggregateOutputTypes(node, Object.fromEntries(cols.map((c) => [c.name, c.type as ColumnType])))
+      output.set(node.id, Object.entries(types).map(([name, type]) => ({ name, type })))
     } else if (node.type === 'union') {
       output.set(node.id, node.sourceColumn && !cols.some((c) => c.name === node.sourceColumn) ? [...cols, { name: node.sourceColumn, type: 'text' }] : cols)
     } else if (node.type === 'source') {
@@ -673,6 +699,8 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
                   onChange={setNode}
                 />
               )}
+              {selected.type === 'aggregate' && <AggregateEditor step={selected} columns={columns.get(selected.id) ?? []} onChange={setNode} />}
+              {selected.type === 'dedupe' && <DedupeEditor step={selected} columns={columns.get(selected.id) ?? []} onChange={setNode} />}
               {selected.type === 'union' && (
                 <UnionEditor
                   step={selected}
@@ -856,6 +884,13 @@ function TestSummary({ test, testing, draft }: { test: EngineResult | null; test
             {t('editor.test.join', { step: localizeStepTitle(s.label, t), matched: s.matched ?? 0, count: s.rowsIn })}
             {!!s.multiplied && t('editor.test.joinMultiplied', { count: s.multiplied })}
             {!!s.staged && t('editor.test.joinSample', { staged: s.staged })}
+          </p>
+        ))}
+      {test.steps
+        .filter((s) => s.type === 'aggregate' && s.rowsIn > 0)
+        .map((s) => (
+          <p key={s.id} className="text-xs text-muted-foreground">
+            {t('editor.test.aggregatedSample', { step: localizeStepTitle(s.label, t) })}
           </p>
         ))}
       {test.rejects.length > 0 && (

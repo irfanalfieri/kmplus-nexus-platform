@@ -32,6 +32,7 @@ import { localizeServerError } from '@/lib/i18n/server-errors'
 import { checkCatalogAnswer, checkConnectorAnswer, detectConnectors, rankCatalog, scrubPasted } from '@/lib/ai/discovery'
 import { serverErrorTemplates } from './test/server-error-sources'
 import { laneTests } from './test/lane-tests'
+import { blockingTests } from './test/blocking-tests'
 import { localizeStepTitle } from '@/components/pipelines/step-title'
 import { alertEmail, inviteEmail, passwordChangedEmail, resetPasswordEmail } from '@/lib/email-templates'
 import { BUILTIN_MAPPING_TEMPLATES, PIPELINE_TEMPLATES, applyMappingTemplate, buildPipelineTemplate, mapToEntity } from '@/lib/pipelines/templates'
@@ -1515,6 +1516,7 @@ async function main() {
   })
 
   await laneTests(test)
+  await blockingTests(test)
 
   console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`)
 }

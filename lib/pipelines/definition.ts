@@ -243,6 +243,55 @@ const unionNode = z.object({
   labels: z.array(z.object({ from: z.string().min(1), label: z.string().trim().max(60) })).max(MAX_SOURCES).default([]),
 })
 
+// ── Blocking steps (they need every row before they can answer): Aggregate, Deduplicate ──
+
+export const AGGREGATE_FNS = ['count', 'count_distinct', 'sum', 'avg', 'min', 'max', 'first', 'last', 'join', 'list'] as const
+export type AggregateFn = (typeof AGGREGATE_FNS)[number]
+export const TIME_GRAINS = ['day', 'week', 'month', 'quarter', 'year'] as const
+export type TimeGrain = (typeof TIME_GRAINS)[number]
+const outputName = z.string().trim().min(1, 'Name every output column').max(63).regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'Use letters, numbers and underscores')
+
+export const aggregateMeasureSchema = z.object({
+  name: outputName,
+  fn: z.enum(AGGREGATE_FNS).default('count'),
+  /** Column the measure reads; count without a column counts rows. */
+  column: z.string().default(''),
+  /** first / last: the column that orders the group (empty = the order rows were read). */
+  sortBy: z.string().default(''),
+  /** join: text between values. */
+  separator: z.string().max(10).default(', '),
+  /** Conditional measure: only rows matching this count (e.g. count where status = Active). */
+  condition: conditionGroupSchema.optional(),
+})
+export type AggregateMeasure = z.infer<typeof aggregateMeasureSchema>
+
+/** One row per group: the group-by values, an optional time bucket and named measures. */
+const aggregateNode = z.object({
+  id: z.string(),
+  type: z.literal('aggregate'),
+  position,
+  groupBy: z.array(z.string().min(1)).max(10).default([]),
+  /** A date or timestamp column bucketed by day … year (the bucket's first day). */
+  timeGrain: z.object({ column: z.string().min(1), grain: z.enum(TIME_GRAINS).default('month'), as: z.string().trim().max(63).regex(/^([A-Za-z_][A-Za-z0-9_]*)?$/, 'Use letters, numbers and underscores').default('') }).optional(),
+  measures: z.array(aggregateMeasureSchema).min(1, 'Add at least one measure').max(30),
+})
+
+export const DEDUPE_KEEP = ['first', 'last', 'most_recent'] as const
+/** Keeps one row per key; removed duplicates are listed in Data quality as flags. */
+const dedupeNode = z.object({
+  id: z.string(),
+  type: z.literal('dedupe'),
+  position,
+  keys: z.array(z.string().min(1)).min(1, 'Choose the key columns').max(5),
+  normalize: z.object({ trim: z.boolean().default(true), ignoreCase: z.boolean().default(true), leadingZeros: z.boolean().default(false) }).default({}),
+  /** first: the first one read (streams); last / most_recent: need every row (finish phase). */
+  keep: z.enum(DEDUPE_KEEP).default('first'),
+  /** most_recent: the date or timestamp column that decides. */
+  recentBy: z.string().default(''),
+  /** List each removed duplicate in Data quality (as a flag; nothing is blocked). */
+  flagRemoved: z.boolean().default(true),
+})
+
 const datasetDestination = z.object({
   id: z.string(),
   type: z.literal('destination'),
@@ -445,7 +494,7 @@ export function apiDestinationIssues(spec: Pick<ApiDestinationSpec, 'body' | 'pa
   return issues
 }
 
-export const nodeSchema = z.union([sourceNode, filterNode, mapNode, validateNode, rulesNode, routerNode, joinNode, unionNode, destinationNode])
+export const nodeSchema = z.union([sourceNode, filterNode, mapNode, validateNode, rulesNode, routerNode, joinNode, unionNode, aggregateNode, dedupeNode, destinationNode])
 export type PipelineNode = z.infer<typeof nodeSchema>
 /** @deprecated name kept for v1 call sites; a node is a step. */
 export type PipelineStep = PipelineNode
@@ -457,6 +506,8 @@ export type RulesStep = z.infer<typeof rulesNode>
 export type RouterStep = z.infer<typeof routerNode>
 export type JoinStep = z.infer<typeof joinNode>
 export type UnionStep = z.infer<typeof unionNode>
+export type AggregateStep = z.infer<typeof aggregateNode>
+export type DedupeStep = z.infer<typeof dedupeNode>
 export type DestinationStep = z.infer<typeof destinationNode>
 export type NodeType = PipelineNode['type']
 
@@ -567,6 +618,19 @@ export const definitionSchema = z.preprocess(
     }
     for (const n of def.nodes) {
       if (n.type === 'union' && def.edges.filter((e) => e.to === n.id).length < 2) issue(`${stepTitle(n)}: connect at least two inputs.`)
+      if (n.type === 'aggregate') {
+        const names = new Set<string>([...n.groupBy, ...(n.timeGrain ? [timeGrainColumn(n.timeGrain)] : [])])
+        for (const m of n.measures) {
+          if (names.has(m.name)) issue(`${stepTitle(n)}: the output column "${m.name}" appears twice.`)
+          names.add(m.name)
+          if (m.fn !== 'count' && !m.column.trim()) issue(`${stepTitle(n)}: "${m.name}" needs a column.`)
+        }
+        // An aggregate over an incremental read would count only the changed rows.
+        for (const s of sources) {
+          if (s.mode === 'incremental' && plan?.lanes.get(n.id)?.has(s.id)) issue(`${stepTitle(n)} needs a full read: set "${stepTitle(s)}" to Full.`)
+        }
+      }
+      if (n.type === 'dedupe' && n.keep === 'most_recent' && !n.recentBy.trim()) issue(`${stepTitle(n)}: choose the date or timestamp column that decides the most recent row.`)
     }
     // Soft deletes need every streamed row (driver and Union partners); staged lanes only add values.
     const streamedIncremental = sources.some((s) => s.mode === 'incremental' && (!plan || plan.streamed.includes(s.id)))
@@ -625,9 +689,23 @@ export function stepTitle(n: PipelineNode): string {
       return `Join on ${n.keys.map((k) => k.left).filter(Boolean).join(', ') || 'keys'}`
     case 'union':
       return 'Union'
+    case 'aggregate':
+      return `Aggregate by ${[...n.groupBy, ...(n.timeGrain ? [`${n.timeGrain.column} (${n.timeGrain.grain})`] : [])].join(', ') || 'all rows'}`
+    case 'dedupe':
+      return `Deduplicate on ${n.keys.join(', ')}`
     case 'destination':
       return n.kind === 'dataset' ? `Write dataset ${n.datasetName}` : n.kind === 'api' ? `Send ${n.method} ${n.path}` : `Write ${n.table}`
   }
+}
+
+/** Name of an Aggregate's time bucket column: its own name, else "<column>_<grain>". */
+export function timeGrainColumn(t: NonNullable<AggregateStep['timeGrain']>) {
+  return t.as || `${t.column}_${t.grain}`.slice(0, 63)
+}
+
+/** Steps that need every row before they answer (run in the finish phase). */
+export function isBlockingStep(n: PipelineNode): boolean {
+  return n.type === 'aggregate' || (n.type === 'dedupe' && n.keep !== 'first')
 }
 
 /** What a data source destination writes to: its table, or "POST /employees" for an API. */

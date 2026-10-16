@@ -4,14 +4,15 @@ import { db, pool } from '@/lib/db'
 import { executionLogs, pipelineJobPairs, pipelineJobSeen, pipelineJobs, pipelineRunRejects, pipelines } from '@/lib/db/schema'
 import { newId } from '@/lib/auth/session'
 import { recordAudit } from '@/lib/audit'
-import { MAX_STAGED_ROWS, destinationTarget, scheduleSchema, stepTitle, type ColumnType, type DestinationStep, type JoinStep, type PipelineDefinition, type SourceStep } from './definition'
+import { MAX_STAGED_ROWS, destinationTarget, scheduleSchema, stepTitle, type AggregateStep, type ColumnType, type DedupeStep, type DestinationStep, type JoinStep, type PipelineDefinition, type PipelineNode, type SourceStep } from './definition'
 import { apiChunkRows } from './body-template'
-import { checkDestination, newRunTotals, outputColumns, totalsStatus, transformChunk, upgradeTotals, type ChunkOutput, type DestinationResult, type EngineResult, type Reject, type RunTotals } from './engine'
+import { checkDestination, dedupeSeenField, newRunTotals, outputColumns, totalsStatus, transformChunk, upgradeTotals, type ChunkOutput, type DestinationResult, type EngineResult, type Reject, type RunTotals } from './engine'
 import { NonRetryableError, dropDatasetTable, finalizeDatasetReplace, readSourceChunk, softDeleteDataSourceMissing, softDeleteDatasetMissing, stagingTableName, writeDataset, writeToDataSource, type ReadCache, type StoredDataSource } from './io'
 import { inferColumns, type TypeHints } from './columns'
 import { joinKey } from './join'
-import { isStagedStep, joinPrefix, lanePlan, passNodes, type LanePlan, type StagedJoin } from './lanes'
-import { createStageTable, dropStageTables, lookupStage, stageSize, stageTableName, writeStageChunk } from './stage'
+import { joinPrefix, lanePlan, passNodes, replayBlocked, type LanePlan, type Pass } from './lanes'
+import { aggregateGroup, aggregateKey, aggregateOutputTypes, dedupeKey, duplicateMessage, pickSurvivor } from './aggregate'
+import { createStageTable, dropStageTables, lookupStage, stageGroups, stageKeys, stageSize, stageTableName, writeStageChunk } from './stage'
 import { checkManagers, type Row } from './transforms'
 import { loadRules, loadRunContext } from './context'
 import { notifyRule } from '@/lib/notifications'
@@ -71,22 +72,23 @@ interface JobProgress {
   errorStack?: string
   /** Quarantine replay (DQ-3): these quarantined rows re-enter the graph at the step that held them, instead of reading the source. */
   replay?: { rejectIds: string[] }
-  /** Several sources: the run's phase (stage every Join's right side, then stream). */
-  phase?: 'stage' | 'stream'
-  /** Stage passes by `<join id>:<source id>`; absent until the run starts. */
-  stage?: Record<string, StagePass>
-  /** Column types of each Join's staged side (hints for the joined columns). */
+  /** The run's passes by entry step (a Source or a blocking step it finishes); absent until the run starts. */
+  passes?: Record<string, PassProgress>
+  /** Column types of the rows staged for each Join or blocking step (hints for the columns they add). */
   stageTypes?: Record<string, Record<string, ColumnType>>
-  /** Streamed source being read (index into the lane plan's streamed list); offset/exhausted are its cursor. */
-  streamIndex?: number
+  /** Rows staged per Join or blocking step (capped at MAX_STAGED_ROWS). */
+  stageRows?: Record<string, number>
   /** Incremental sync per Source: rows after these values (fixed for the whole run). */
   watermarksAfter?: Record<string, string | null>
 }
 
-interface StagePass {
+interface PassProgress {
+  /** Source passes: rows read so far. */
   offset: number
+  /** Finish passes: the last group key answered. */
+  cursor: string | null
   done: boolean
-  /** Rows staged so far (after the lane's own steps) and chunks written. */
+  /** Rows read (source) or produced (finish), and chunks done. */
   rows: number
   chunks: number
   /** The read stopped at the source's max-rows cap. */
@@ -262,6 +264,8 @@ class HashedSet extends Set<string> {
 async function loadSeen(jobId: string, def: PipelineDefinition) {
   const fields = new Set(def.nodes.flatMap((s) => (s.type === 'validate' ? s.rules.filter((r) => r.rule === 'unique').map((r) => r.field) : [])))
   for (const d of def.nodes) if (d.type === 'destination' && d.kind === 'datasource' && d.softDeleteMissing) fields.add(destKeyField(d.id))
+  // Deduplicate keeping the first row: keys already kept in earlier chunks.
+  for (const d of def.nodes) if (d.type === 'dedupe' && d.keep === 'first') fields.add(dedupeSeenField(d.id))
   const seen = new Map<string, Set<string>>()
   if (!fields.size) return { seen, sets: [] as [string, HashedSet][] }
   const rows = await db.select({ field: pipelineJobSeen.field, hash: pipelineJobSeen.hash }).from(pipelineJobSeen).where(eq(pipelineJobSeen.jobId, jobId))
@@ -291,18 +295,17 @@ function log(progress: JobProgress, level: LogLine['level'], message: string) {
   if (progress.log.length > MAX_LOG_LINES) progress.log.splice(1, progress.log.length - MAX_LOG_LINES)
 }
 
-/** Joins a replay must stage: every Join, when one is downstream of a step the replayed rows re-enter at. */
-async function replayJoins(def: PipelineDefinition, plan: LanePlan, workspaceId: string, rejectIds: string[]): Promise<string[]> {
-  if (!plan.joins.length || !rejectIds.length) return []
+/** Whether replayed rows re-enter before a Join: then the passes that prepare its lookup run first. */
+async function replayNeedsLookups(def: PipelineDefinition, plan: LanePlan, workspaceId: string, rejectIds: string[]): Promise<boolean> {
+  if (!plan.joins.length || !rejectIds.length) return false
   const rows = await db
     .selectDistinct({ nodeId: pipelineRunRejects.nodeId })
     .from(pipelineRunRejects)
     .where(and(eq(pipelineRunRejects.workspaceId, workspaceId), inArray(pipelineRunRejects.id, rejectIds)))
-  const reaches = rows.some((r) => r.nodeId && !isStagedStep(plan, r.nodeId) && plan.joins.some((j) => passNodes(def, r.nodeId!).has(j.id)))
-  return reaches ? plan.joins.map((j) => j.id) : []
+  return rows.some((r) => r.nodeId && !replayBlocked(def, plan, r.nodeId) && plan.joins.some((j) => passNodes(def, r.nodeId!).has(j.id)))
 }
 
-/** Column types of the staged sides, as hints for the streamed chunks (also under the clash prefix). */
+/** Column types of the staged sides, as hints for the joined columns (also under the clash prefix). */
 function stagedHints(def: PipelineDefinition, plan: LanePlan, progress: JobProgress): TypeHints {
   const hints: TypeHints = {}
   for (const j of plan.joins) {
@@ -318,7 +321,17 @@ function stagedHints(def: PipelineDefinition, plan: LanePlan, progress: JobProgr
   return hints
 }
 
-const passKey = (joinId: string, sourceId: string) => `${joinId}:${sourceId}`
+/** The key a staged row is grouped or looked up by: a Join's right key, an Aggregate's group, a Deduplicate key. */
+function stageKey(node: PipelineNode | undefined, row: Row, unique: string): string | null {
+  if (node?.type === 'join') return joinKey(row, node.keys.map((k) => k.right), node.normalize)
+  if (node?.type === 'aggregate') return aggregateKey(row, node)
+  // Rows without a key are never duplicates: each gets a group of its own.
+  if (node?.type === 'dedupe') return dedupeKey(row, node) ?? `\u0002${unique}`
+  return null
+}
+
+/** Groups a finish pass answers per chunk. */
+const FINISH_GROUPS = 1000
 
 /** Runs chunks of one job until it finishes, fails, or the invocation runs out of time. */
 async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promise<string> {
@@ -333,6 +346,7 @@ async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promi
   if (job.status === 'cancelling') return finishJob(job, progress, def, { cancelled: true })
 
   const plan = lanePlan(def)
+  const nodeOf = (id: string) => def!.nodes.find((n) => n.id === id)
   const sourceStep = (id: string) => def!.nodes.find((n): n is SourceStep => n.type === 'source' && n.id === id)!
   const destinations = def.nodes.filter((n): n is DestinationStep => n.type === 'destination')
   // Runs queued before several sources read one Source with one watermark.
@@ -343,7 +357,7 @@ async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promi
     log(progress, 'info', `Run started (v${progress.version}, ${job.trigger})`)
     await db.update(executionLogs).set({ status: 'running', startTime: new Date(progress.startedAt), updatedAt: new Date() }).where(eq(executionLogs.id, job.id))
   } else {
-    log(progress, 'info', progress.phase === 'stage' ? 'Resumed staging' : `Resumed at row ${progress.offset.toLocaleString()}`)
+    log(progress, 'info', `Resumed at row ${progress.offset.toLocaleString()}`)
   }
   const totals = upgradeTotals(progress.totals ?? newRunTotals(def))
   progress.totals = totals
@@ -351,12 +365,19 @@ async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promi
   const chunkRows = Math.min(def.settings.batchSize ?? CHUNK_ROWS, ...destinations.flatMap((d) => (d.kind === 'api' ? [apiChunkRows(d)] : [])))
 
   try {
-    // Phases: stage every Join's right side, then replay or stream.
-    if (!progress.stage) {
-      const joins = progress.replay ? await replayJoins(def, plan, scope.workspaceId, progress.replay.rejectIds) : plan.joins.map((j) => j.id)
-      progress.stage = {}
-      for (const j of plan.joins) if (joins.includes(j.id)) for (const s of j.sources) progress.stage[passKey(j.id, s)] = { offset: 0, done: false, rows: 0, chunks: 0 }
-      progress.phase = Object.keys(progress.stage).length ? 'stage' : 'stream'
+    // The run's passes (lib/pipelines/lanes.ts planPasses): lookups first, then the driver,
+    // Union partners and the finish passes of blocking steps. A replay only prepares lookups.
+    if (!progress.passes) {
+      const prepare = progress.replay ? await replayNeedsLookups(def, plan, scope.workspaceId, progress.replay.rejectIds) : true
+      progress.passes = {}
+      for (const p of plan.passes) {
+        if (progress.replay && !(prepare && p.staged)) continue
+        progress.passes[p.id] = { offset: 0, cursor: null, done: false, rows: 0, chunks: 0 }
+      }
+      // A run queued before passes existed may already have read part of its only source.
+      if (!progress.replay && plan.driver && progress.offset > 0 && progress.passes[plan.driver]) {
+        Object.assign(progress.passes[plan.driver], { offset: progress.offset, done: progress.exhausted, chunks: progress.chunks })
+      }
     }
 
     const loaded = new Map<string, StoredDataSource>()
@@ -366,14 +387,14 @@ async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promi
     }
     // Destination targets: dataset table (+ staging for replace) or data source.
     const targets = new Map<string, { node: DestinationStep; table?: string; staging?: string | null; ds?: StoredDataSource }>()
-    const firstStream = progress.offset === 0 && !progress.streamIndex && !totals.rowsRead
+    const wroteAny = Object.entries(progress.passes).some(([id, p]) => p.chunks > 0 && !plan.passes.find((x) => x.id === id)?.staged)
     for (const d of destinations) {
       if (d.kind === 'dataset') {
         const table = await datasetTable(scope.workspaceId, d.datasetName)
         // A replay adds rows to the live table; only a full run stages and swaps.
         const staging = d.mode === 'replace' && !progress.replay ? stagingTableName(table, `${job.id}:${d.id}`) : null
-        // A replace run that starts over (nothing streamed yet) discards what an earlier attempt staged.
-        if (staging && firstStream) await dropDatasetTable(staging)
+        // A replace run that starts over (nothing written yet) discards what an earlier attempt staged.
+        if (staging && !wroteAny) await dropDatasetTable(staging)
         targets.set(d.id, { node: d, table, staging })
       } else {
         targets.set(d.id, { node: d, ds: await dataSource(d.dataSourceId) })
@@ -454,40 +475,93 @@ async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promi
       }
     }
 
-    /** Stage phase: one chunk of a staged lane into its Join's staging table. */
-    const stageChunk = async (join: StagedJoin, sourceId: string, pass: StagePass) => {
-      const started = Date.now()
-      const node = def!.nodes.find((n): n is JoinStep => n.type === 'join' && n.id === join.id)!
-      const src = sourceStep(sourceId)
-      const table = await createStageTable({ workspaceId: scope.workspaceId, runId: job.id, nodeId: join.id })
-      const read = await readSourceChunk(await dataSource(src.dataSourceId), src.table, { offset: pass.offset, limit: def!.settings.batchSize ?? CHUNK_ROWS, maxRows: src.maxRows, watermark: watermarkFor(src), cache })
-      const out = await transformChunk(def!, read.rows, totals, ctx, read.types, { entry: sourceId, stage: true })
-      const staged = out.toStage.get(join.id) ?? []
-      const types = (progress.stageTypes ??= {})[join.id] ?? {}
-      for (const c of inferColumns(staged, read.types)) types[c.name] ??= c.type
-      progress.stageTypes[join.id] = types
-      const rightCols = node.keys.map((k) => k.right)
-      await writeStageChunk(table, sourceId, pass.chunks, staged.map((row) => ({ key: joinKey(row, rightCols, node.normalize), row })))
-      pass.rows += staged.length
-      const laneRows = join.sources.reduce((n, s) => n + (progress.stage![passKey(join.id, s)]?.rows ?? 0), 0)
-      if (laneRows > MAX_STAGED_ROWS) {
-        throw new NonRetryableError(`The right side of "${stepTitle(node)}" has more than ${MAX_STAGED_ROWS.toLocaleString('en-US')} rows. Filter that lane, or make it the driver.`)
+    /** Rows that reached a Join's right side or a blocking step: into that step's staging table (exactly once per pass and chunk). */
+    const created = new Set<string>()
+    const stageOutputs = async (pass: Pass, chunk: number, out: ChunkOutput, types?: TypeHints) => {
+      for (const [sink, rows] of out.toStage) {
+        const node = nodeOf(sink)
+        if (!created.has(sink)) (await createStageTable({ workspaceId: scope.workspaceId, runId: job.id, nodeId: sink }), created.add(sink))
+        const known = (progress.stageTypes ??= {})[sink] ?? {}
+        for (const c of inferColumns(rows, types)) known[c.name] ??= c.type
+        progress.stageTypes[sink] = known
+        await writeStageChunk(stageTableName(job.id, sink), pass.id, chunk, rows.map((row, i) => ({ key: stageKey(node, row, `${pass.id}:${chunk}:${i}`), row })))
+        const total = ((progress.stageRows ??= {})[sink] ?? 0) + rows.length
+        progress.stageRows[sink] = total
+        if (total > MAX_STAGED_ROWS) {
+          throw new NonRetryableError(`"${node ? stepTitle(node) : sink}" has more than ${MAX_STAGED_ROWS.toLocaleString('en-US')} rows to hold. Filter that lane, or make it the driver.`)
+        }
       }
-      pass.offset += read.rows.length
-      pass.chunks++
-      pass.done = read.exhausted
-      if (read.exhausted && pass.offset >= src.maxRows) {
-        pass.capped = true
-        log(progress, 'warn', `${src.table}: staging stopped at the ${src.maxRows.toLocaleString('en-US')}-row cap; rows past it have no partner in "${stepTitle(node)}"`)
+    }
+
+    /** One chunk of a Source pass: read, run the lane, write Destinations, stage what stops at a Join or blocking step. */
+    const sourceChunk = async (pass: Pass, state: PassProgress) => {
+      const started = Date.now()
+      const src = sourceStep(pass.id)
+      const limit = pass.staged ? (def!.settings.batchSize ?? CHUNK_ROWS) : chunkRows
+      const read = await readSourceChunk(await dataSource(src.dataSourceId), src.table, { offset: state.offset, limit, maxRows: src.maxRows, watermark: watermarkFor(src), cache })
+      const readMs = Date.now() - started
+      const out = await transformChunk(def!, read.rows, totals, ctx, { ...stagedHints(def!, plan, progress), ...read.types }, { entry: pass.id, stage: pass.staged })
+      const srcStat = totals.steps.find((s) => s.id === src.id)
+      if (srcStat) srcStat.durationMs += readMs
+      await writeOutputs(out)
+      await stageOutputs(pass, state.chunks, out, read.types)
+      state.offset += read.rows.length
+      state.rows += read.rows.length
+      state.chunks++
+      state.done = read.exhausted
+      progress.offset = state.offset
+      if (read.exhausted && state.offset >= src.maxRows) {
+        state.capped = true
+        if (pass.staged) log(progress, 'warn', `${src.table}: read stopped at the ${src.maxRows.toLocaleString('en-US')}-row cap; rows past it have no partner`)
+        else progress.capped = true
       }
       progress.chunks++
-      log(progress, 'info', `Staging ${src.table} for "${stepTitle(node)}": ${read.rows.length.toLocaleString('en-US')} rows read, ${staged.length.toLocaleString('en-US')} staged in ${Date.now() - started} ms`)
-      if (Object.values(progress.stage!).every((p) => p.done)) {
-        progress.phase = 'stream'
-        const bytes = await stageSize(job.id).catch(() => 0)
-        log(progress, 'info', `Staging done: ${(totals.stagedRows ?? 0).toLocaleString('en-US')} rows, ${(bytes / 1_048_576).toFixed(1)} MB`)
+      log(progress, 'info', `${pass.staged ? 'Staging' : 'Chunk'} ${progress.chunks}: read ${read.rows.length.toLocaleString('en-US')} rows of ${src.table} in ${readMs} ms; ${out.rejects.length} quarantined, ${out.flags.length} flagged`)
+      await checkpoint(job, progress, scope, [...out.rejects, ...out.flags, ...destRejects], sets, out.managerPairs, Date.now() - started)
+      destRejects = []
+    }
+
+    /** One chunk of a finish pass: answer the next groups of a blocking step and send the result on. */
+    const finishChunk = async (pass: Pass, state: PassProgress) => {
+      const started = Date.now()
+      const node = nodeOf(pass.id) as AggregateStep | DedupeStep
+      const table = stageTableName(job.id, pass.id)
+      if (!state.chunks && node.type === 'aggregate') {
+        // Rows held back earlier in this lane aren't in the aggregate; a re-run counts them once fixed.
+        const upstream = [...(plan.lanes.get(node.id) ?? [])].flatMap((s) => [...passNodes(def!, s, { blocking: true })]).filter((id) => id !== node.id)
+        const held = totals.steps.filter((s) => upstream.includes(s.id)).reduce((n, s) => n + s.rejected, 0)
+        if (held) log(progress, 'warn', `${stepTitle(node)}: ${held.toLocaleString('en-US')} rows held back earlier are not counted`)
       }
-      await checkpoint(job, progress, scope, [...out.rejects, ...out.flags], sets, out.managerPairs, Date.now() - started)
+      const keys = await stageKeys(table, state.cursor, FINISH_GROUPS)
+      const groups = await stageGroups(table, keys)
+      const rows: Row[] = []
+      const removed: Reject[] = []
+      const stat = totals.steps.find((s) => s.id === node.id)
+      for (const group of groups.values()) {
+        if (!group.length) continue
+        if (node.type === 'aggregate') rows.push(aggregateGroup(node, group))
+        else {
+          const { kept, removed: gone } = pickSurvivor(node, group)
+          rows.push(kept)
+          if (node.flagRemoved) for (const r of gone) removed.push({ stepId: node.id, row: r, errors: [duplicateMessage(node, r, kept)], severity: 'info', kind: 'flag' })
+        }
+      }
+      if (removed.length) {
+        totals.flaggedCount += removed.length
+        if (stat) stat.flagged = (stat.flagged ?? 0) + removed.length
+      }
+      const hints = node.type === 'aggregate' ? aggregateOutputTypes(node, progress.stageTypes?.[node.id]) : { ...(progress.stageTypes?.[node.id] ?? {}) }
+      const out = await transformChunk(def!, rows, totals, ctx, { ...stagedHints(def!, plan, progress), ...hints }, { startNodeId: node.id, finish: true })
+      await writeOutputs(out)
+      await stageOutputs(pass, state.chunks, out, hints)
+      state.cursor = keys.length ? keys[keys.length - 1] : state.cursor
+      state.rows += rows.length
+      state.chunks++
+      state.done = keys.length < FINISH_GROUPS
+      progress.chunks++
+      log(progress, 'info', `${stepTitle(node)}: ${keys.length.toLocaleString('en-US')} groups answered${removed.length ? `, ${removed.length.toLocaleString('en-US')} duplicates removed` : ''}`)
+      await checkpoint(job, progress, scope, [...removed, ...out.rejects, ...out.flags, ...destRejects], sets, out.managerPairs, Date.now() - started)
+      destRejects = []
     }
 
     /** Quarantine replay (DQ-3): the held rows re-enter the graph at the step that held them. */
@@ -511,9 +585,9 @@ async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promi
           log(progress, 'warn', `${rows.length} row(s) skipped: the step that held them no longer exists in the published pipeline`)
           continue
         }
-        if (isStagedStep(plan, nodeId)) {
-          // Their lane was looked up by a Join in a finished run: only a new run brings them in.
-          log(progress, 'warn', `${rows.length} row(s) skipped: they were held in a lane that feeds a Join; run the pipeline again to include them`)
+        if (replayBlocked(def!, plan, nodeId)) {
+          // A finished Join lookup or Aggregate can't take one more row: only a new run brings them in.
+          log(progress, 'warn', `${rows.length} row(s) skipped: they were held before a Join's looked-up side or an Aggregate / Deduplicate step; run the pipeline again to include them`)
           continue
         }
         // Approved rows pass require_approval; corrected rows are checked again from the same step.
@@ -537,47 +611,22 @@ async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promi
       destRejects = []
     }
 
-    /** Stream phase: one chunk of the current streamed source (driver first, then Union partners). */
-    const streamChunk = async () => {
-      const started = Date.now()
-      const sourceId = plan.streamed[progress.streamIndex ?? 0]
-      const src = sourceStep(sourceId)
-      const read = await readSourceChunk(await dataSource(src.dataSourceId), src.table, { offset: progress.offset, limit: chunkRows, maxRows: src.maxRows, watermark: watermarkFor(src), cache })
-      const readMs = Date.now() - started
-      const out = await transformChunk(def!, read.rows, totals, ctx, { ...stagedHints(def!, plan, progress), ...read.types }, { entry: sourceId })
-      const srcStat = totals.steps.find((s) => s.id === src.id)
-      if (srcStat) srcStat.durationMs += readMs
-      await writeOutputs(out)
-
-      progress.offset += read.rows.length
-      if (read.exhausted) {
-        if (progress.offset >= src.maxRows) progress.capped = true
-        const next = (progress.streamIndex ?? 0) + 1
-        if (next < plan.streamed.length) {
-          progress.streamIndex = next
-          progress.offset = 0
-          log(progress, 'info', `${src.table} read; now reading ${sourceStep(plan.streamed[next]).table}`)
-        } else progress.exhausted = true
-      }
-      progress.chunks++
-      log(progress, 'info', `Chunk ${progress.chunks}: read ${read.rows.length.toLocaleString('en-US')} rows of ${src.table} in ${readMs} ms; ${out.rejects.length} quarantined, ${out.flags.length} flagged`)
-      await checkpoint(job, progress, scope, [...out.rejects, ...out.flags, ...destRejects], sets, out.managerPairs, Date.now() - started)
-      destRejects = []
-      return Date.now() - started
-    }
-
     let sliceChunks = 0
     // A slow chunk (e.g. a slow API) means the next one needs as much time.
     let lastChunkMs = 0
+    let lookupsReady = Object.entries(progress.passes).every(([id, p]) => p.done || !plan.passes.find((x) => x.id === id)?.staged)
     for (;;) {
-      const stagePass = plan.joins.flatMap((j) => j.sources.map((s) => ({ join: j, sourceId: s, pass: progress.stage![passKey(j.id, s)] }))).find((p) => p.pass && !p.pass.done)
-      if (!stagePass && progress.exhausted) break
+      const next = plan.passes.find((p) => progress.passes![p.id] && !progress.passes![p.id].done)
+      if (!next && (progress.exhausted || !progress.replay)) {
+        progress.exhausted = true
+        break
+      }
       if (await isCancelling(job.id)) return finishJob(job, progress, def, { cancelled: true })
       if (Date.now() > timeoutAt) throw Object.assign(new Error(`The run passed its ${def.settings.timeoutMinutes}-minute timeout.`), { retryable: false })
       // Every slice makes progress (one chunk at least), then stops near the deadline.
       if (sliceChunks >= maxChunks || (sliceChunks > 0 && Date.now() > deadline - Math.max(CHUNK_HEADROOM_MS, lastChunkMs * 1.25))) {
         // Out of time: release the job; the next tick (or page poll) resumes it. Never overwrite a cancel request.
-        log(progress, 'info', stagePass ? `Paused while staging ${sourceStep(stagePass.sourceId).table} at row ${stagePass.pass.offset.toLocaleString('en-US')} (function time limit); continues in the next invocation` : `Paused at row ${progress.offset.toLocaleString()} (function time limit); continues in the next invocation`)
+        log(progress, 'info', `Paused${next ? ` in ${stepTitle(nodeOf(next.id)!)}` : ''} (function time limit); continues in the next invocation`)
         const released = await db
           .update(pipelineJobs)
           .set({ status: 'queued', leaseUntil: null, availableAt: new Date(), progress, updatedAt: new Date() })
@@ -586,15 +635,22 @@ async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promi
         return released.length ? 'paused' : finishJob(job, progress, def, { cancelled: true })
       }
       const started = Date.now()
-      if (stagePass) await stageChunk(stagePass.join, stagePass.sourceId, stagePass.pass)
-      else if (progress.replay) await replayRows()
-      else await streamChunk()
+      if (next) {
+        const state = progress.passes[next.id]
+        if (next.kind === 'source') await sourceChunk(next, state)
+        else await finishChunk(next, state)
+      } else await replayRows()
       sliceChunks++
       lastChunkMs = Date.now() - started
+      if (!lookupsReady && Object.entries(progress.passes).every(([id, p]) => p.done || !plan.passes.find((x) => x.id === id)?.staged)) {
+        lookupsReady = true
+        const bytes = await stageSize(job.id).catch(() => 0)
+        if (bytes) log(progress, 'info', `Staging done: ${(totals.stagedRows ?? 0).toLocaleString('en-US')} rows, ${(bytes / 1_048_576).toFixed(1)} MB`)
+      }
 
       // PD-10: error-rate threshold.
       const maxPct = def.settings.maxErrorPercent
-      if (!stagePass && maxPct !== null && maxPct !== undefined && totals.rowsRead >= 100) {
+      if (!next?.staged && maxPct !== null && maxPct !== undefined && totals.rowsRead >= 100) {
         const pct = (totals.rejectedCount / totals.rowsRead) * 100
         if (pct > maxPct) throw Object.assign(new Error(`${pct.toFixed(1)}% of rows were quarantined, above this pipeline's ${maxPct}% limit.`), { retryable: false })
       }

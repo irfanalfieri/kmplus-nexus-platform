@@ -11,6 +11,8 @@ export const editor: Messages['editor'] = {
     router: 'Router',
     join: 'Gabung (join)',
     union: 'Satukan (union)',
+    aggregate: 'Agregasi',
+    dedupe: 'Hapus duplikat',
     destination: 'Tujuan',
   },
   hints: {
@@ -22,6 +24,8 @@ export const editor: Messages['editor'] = {
     router: 'Arahkan baris ke cabang',
     join: 'Tambahkan kolom dari sumber lain berdasarkan kunci',
     union: 'Tumpuk baris dari beberapa sumber',
+    aggregate: 'Hitung, jumlahkan, atau rata-ratakan per kelompok',
+    dedupe: 'Pertahankan satu baris per kunci',
     destination: 'Tempat hasil ditulis',
   },
   stepTitle: {
@@ -35,6 +39,9 @@ export const editor: Messages['editor'] = {
     router: 'Rute ({count} cabang)',
     join: 'Gabung berdasarkan {keys}',
     union: 'Satukan',
+    aggregate: 'Agregasi per {groups}',
+    aggregateAll: 'Agregasi semua baris',
+    dedupe: 'Hapus duplikat berdasarkan {keys}',
     destinationDataset: 'Tulis dataset {name}',
     destinationTable: 'Tulis {name}',
     destinationApi: 'Kirim {name}',
@@ -125,6 +132,7 @@ export const editor: Messages['editor'] = {
     join: '{step}: {matched} dari {count} baris berpasangan',
     joinMultiplied: '; baris berlipat: {count}',
     joinSample: ' (mencari {staged, plural, one {# baris} other {# baris}} dari sumber lain untuk sampel ini)',
+    aggregatedSample: '{step}: diagregasi atas sampel saja; eksekusi menghitung semua baris.',
     severity: {
       error: 'galat',
       warning: 'peringatan',

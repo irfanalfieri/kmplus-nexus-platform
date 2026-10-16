@@ -10,6 +10,8 @@ export const editor = {
     router: 'Router',
     join: 'Join',
     union: 'Union',
+    aggregate: 'Aggregate',
+    dedupe: 'Deduplicate',
     destination: 'Destination',
   },
   hints: {
@@ -21,6 +23,8 @@ export const editor = {
     router: 'Send rows down branches',
     join: 'Add columns from another source by key',
     union: 'Stack rows of several sources',
+    aggregate: 'Count, sum or average per group',
+    dedupe: 'Keep one row per key',
     destination: 'Where results are written',
   },
   /** One-line summary of a step (mirrors stepTitle in lib/pipelines/definition.ts). */
@@ -35,6 +39,9 @@ export const editor = {
     router: 'Route ({count} branches)',
     join: 'Join on {keys}',
     union: 'Union',
+    aggregate: 'Aggregate by {groups}',
+    aggregateAll: 'Aggregate all rows',
+    dedupe: 'Deduplicate on {keys}',
     destinationDataset: 'Write dataset {name}',
     destinationTable: 'Write {name}',
     destinationApi: 'Send {name}',
@@ -124,6 +131,7 @@ export const editor = {
     join: '{step}: {matched} of {count} rows matched',
     joinMultiplied: '; rows multiplied: {count}',
     joinSample: ' (looked up {staged, plural, one {# row} other {# rows}} of the other source for this sample)',
+    aggregatedSample: '{step}: aggregated over the sample only; a run counts every row.',
     severity: {
       error: 'error',
       warning: 'warning',

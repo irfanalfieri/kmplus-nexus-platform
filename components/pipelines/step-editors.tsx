@@ -8,7 +8,15 @@ import { Notice, type NoticeTone } from '@/components/ui/notice'
 import { EmptyState } from '@/components/ui/empty-state'
 import { cn } from '@/lib/utils'
 import {
+  AGGREGATE_FNS,
   COLUMN_TYPES,
+  TIME_GRAINS,
+  timeGrainColumn,
+  type AggregateFn,
+  type AggregateMeasure,
+  type AggregateStep,
+  type DedupeStep,
+  type TimeGrain,
   FILTER_OPERATORS,
   OTHERWISE,
   SEVERITIES,
@@ -37,6 +45,7 @@ import { AiMappingButton } from '@/components/ai/ai-mapping'
 import { useT } from '@/components/i18n/i18n-provider'
 import { getConnectorDefinition } from '@/lib/connectors/catalog'
 import { ApiDestinationFields, newApiDestination } from './api-destination-editor'
+import { recencyColumn } from '@/lib/pipelines/aggregate'
 import type { steps as stepsMessages } from '@/lib/i18n/messages/en/steps'
 
 export type BuilderOptions = Awaited<ReturnType<typeof getBuilderOptions>>
@@ -950,6 +959,171 @@ export function UnionEditor({ step, inputs, onChange }: { step: UnionStep; input
             <Input value={labelOf(i.from)} placeholder={i.defaultLabel} onChange={(e) => setLabel(i.from, e.target.value)} />
           </Field>
         ))}
+    </div>
+  )
+}
+
+// ── Aggregate ────────────────────────────────────────────────────────────────
+
+const FN_NEEDS_COLUMN = (fn: AggregateFn) => fn !== 'count'
+
+/** A column picked from a list, or none. */
+function ColumnChecklist({ columns, value, onChange, label }: { columns: Column[]; value: string[]; onChange: (v: string[]) => void; label: string }) {
+  return (
+    <fieldset className="space-y-1">
+      <legend className="text-xs font-medium text-muted-foreground">{label}</legend>
+      <div className="flex flex-wrap gap-x-3 gap-y-1">
+        {columns.map((c) => (
+          <label key={c.name} className="flex items-center gap-1.5 font-mono text-xs">
+            <input type="checkbox" className="size-3.5 accent-primary" checked={value.includes(c.name)} onChange={(e) => onChange(e.target.checked ? [...value, c.name] : value.filter((x) => x !== c.name))} />
+            {c.name}
+          </label>
+        ))}
+      </div>
+    </fieldset>
+  )
+}
+
+export function AggregateEditor({ step, columns, onChange }: { step: AggregateStep; columns: Column[]; onChange: (s: AggregateStep) => void }) {
+  const t = useT()
+  const dates = columns.filter((c) => c.type === 'date' || c.type === 'timestamp' || /date|time|_at$/i.test(c.name))
+  const setMeasure = (i: number, patch: Partial<AggregateMeasure>) => onChange({ ...step, measures: step.measures.map((m, j) => (j === i ? { ...m, ...patch } : m)) })
+  return (
+    <div className="grid gap-3">
+      <p className="text-xs text-muted-foreground">{t('steps.aggregate.help')}</p>
+      {columns.length ? (
+        <ColumnChecklist columns={columns} value={step.groupBy} onChange={(groupBy) => onChange({ ...step, groupBy })} label={t('steps.aggregate.groupBy')} />
+      ) : (
+        <Field label={t('steps.aggregate.groupBy')}>
+          <Input value={step.groupBy.join(', ')} onChange={(e) => onChange({ ...step, groupBy: e.target.value.split(',').map((x) => x.trim()).filter(Boolean) })} className="font-mono" />
+        </Field>
+      )}
+      <div className="grid grid-cols-[1fr_auto] gap-1.5">
+        <Field label={t('steps.aggregate.timeGrain')}>
+          <NativeSelect value={step.timeGrain?.column ?? ''} onChange={(v) => onChange({ ...step, timeGrain: v ? { column: v, grain: step.timeGrain?.grain ?? 'month', as: step.timeGrain?.as ?? '' } : undefined })}>
+            <option value="">{t('steps.aggregate.noTimeGrain')}</option>
+            {(dates.length ? dates : columns).map((c) => (
+              <option key={c.name} value={c.name}>
+                {c.name}
+              </option>
+            ))}
+          </NativeSelect>
+        </Field>
+        <Field label={<span className="sr-only">{t('steps.aggregate.grain')}</span>}>
+          <NativeSelect value={step.timeGrain?.grain ?? 'month'} disabled={!step.timeGrain} onChange={(v) => step.timeGrain && onChange({ ...step, timeGrain: { ...step.timeGrain, grain: v as TimeGrain } })}>
+            {TIME_GRAINS.map((g) => (
+              <option key={g} value={g}>
+                {t(`steps.aggregate.grains.${g}`)}
+              </option>
+            ))}
+          </NativeSelect>
+        </Field>
+      </div>
+      {step.timeGrain && (
+        <Field label={t('steps.aggregate.bucketName')}>
+          <Input value={step.timeGrain.as} placeholder={timeGrainColumn({ ...step.timeGrain, as: '' })} onChange={(e) => step.timeGrain && onChange({ ...step, timeGrain: { ...step.timeGrain, as: e.target.value.trim() } })} className="font-mono" />
+        </Field>
+      )}
+      <fieldset className="space-y-2">
+        <legend className="text-xs font-medium text-muted-foreground">{t('steps.aggregate.measures')}</legend>
+        {step.measures.map((m, i) => (
+          <div key={i} className="space-y-1.5 rounded-md border border-border p-2">
+            <div className="grid grid-cols-[1fr_auto] gap-1.5">
+              <Input value={m.name} onChange={(e) => setMeasure(i, { name: e.target.value.trim() })} aria-label={t('steps.aggregate.measureName', { n: i + 1 })} className="font-mono" />
+              <Button size="icon-sm" variant="ghost" disabled={step.measures.length === 1} onClick={() => onChange({ ...step, measures: step.measures.filter((_, j) => j !== i) })} aria-label={t('steps.aggregate.removeMeasure', { n: i + 1 })}>
+                <Trash2 aria-hidden />
+              </Button>
+            </div>
+            <div className="grid grid-cols-2 gap-1.5">
+              <NativeSelect value={m.fn} onChange={(v) => setMeasure(i, { fn: v as AggregateFn })} aria-label={t('steps.aggregate.fn', { n: i + 1 })}>
+                {AGGREGATE_FNS.map((f) => (
+                  <option key={f} value={f}>
+                    {t(`steps.aggregate.fns.${f}`)}
+                  </option>
+                ))}
+              </NativeSelect>
+              <ColumnPicker columns={columns} value={m.column} onChange={(v) => setMeasure(i, { column: v })} label={t('steps.aggregate.column', { n: i + 1 })} />
+            </div>
+            {!FN_NEEDS_COLUMN(m.fn) && !m.column && <p className="text-xs text-muted-foreground">{t('steps.aggregate.countRows')}</p>}
+            {(m.fn === 'first' || m.fn === 'last') && (
+              <Field label={t('steps.aggregate.sortBy')}>
+                <NativeSelect value={m.sortBy} onChange={(v) => setMeasure(i, { sortBy: v })}>
+                  <option value="">{t('steps.aggregate.readOrder')}</option>
+                  {columns.map((c) => (
+                    <option key={c.name} value={c.name}>
+                      {c.name}
+                    </option>
+                  ))}
+                </NativeSelect>
+              </Field>
+            )}
+            {m.fn === 'join' && (
+              <Field label={t('steps.aggregate.separator')}>
+                <Input value={m.separator} onChange={(e) => setMeasure(i, { separator: e.target.value })} className="w-24 font-mono" />
+              </Field>
+            )}
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" className="size-4 accent-primary" checked={Boolean(m.condition)} onChange={(e) => setMeasure(i, { condition: e.target.checked ? { match: 'all', conditions: [newCondition(columns[0]?.name ?? '')], groups: [] } : undefined })} />
+              {t('steps.aggregate.onlyWhere')}
+            </label>
+            {m.condition && (
+              <ConditionsEditor match={m.condition.match} conditions={m.condition.conditions} columns={columns} onChange={(match, conditions) => setMeasure(i, { condition: { match, conditions, groups: [] } })} label={t('steps.aggregate.countRowsMatching')} />
+            )}
+          </div>
+        ))}
+        <Button size="sm" variant="outline" disabled={step.measures.length >= 30} onClick={() => onChange({ ...step, measures: [...step.measures, { name: `measure_${step.measures.length + 1}`, fn: 'count', column: '', sortBy: '', separator: ', ' }] })}>
+          <Plus aria-hidden /> {t('steps.aggregate.addMeasure')}
+        </Button>
+      </fieldset>
+      <Notice tone="info">{t('steps.aggregate.fullRead')}</Notice>
+    </div>
+  )
+}
+
+// ── Deduplicate ──────────────────────────────────────────────────────────────
+
+export function DedupeEditor({ step, columns, onChange }: { step: DedupeStep; columns: Column[]; onChange: (s: DedupeStep) => void }) {
+  const t = useT()
+  const dates = columns.filter((c) => c.type === 'date' || c.type === 'timestamp' || /date|time|_at$/i.test(c.name))
+  const check = (key: keyof DedupeStep['normalize'], label: string) => (
+    <label className="flex items-center gap-2 text-sm">
+      <input type="checkbox" className="size-4 accent-primary" checked={step.normalize[key]} onChange={(e) => onChange({ ...step, normalize: { ...step.normalize, [key]: e.target.checked } })} />
+      {label}
+    </label>
+  )
+  return (
+    <div className="grid gap-3">
+      <p className="text-xs text-muted-foreground">{t('steps.dedupe.help')}</p>
+      {columns.length ? (
+        <ColumnChecklist columns={columns} value={step.keys} onChange={(keys) => onChange({ ...step, keys })} label={t('steps.dedupe.keys')} />
+      ) : (
+        <Field label={t('steps.dedupe.keys')}>
+          <Input value={step.keys.join(', ')} onChange={(e) => onChange({ ...step, keys: e.target.value.split(',').map((x) => x.trim()).filter(Boolean) })} className="font-mono" />
+        </Field>
+      )}
+      <fieldset className="space-y-1">
+        <legend className="text-xs font-medium text-muted-foreground">{t('steps.join.normalize')}</legend>
+        {check('trim', t('steps.join.trim'))}
+        {check('ignoreCase', t('steps.join.ignoreCase'))}
+        {check('leadingZeros', t('steps.join.leadingZeros'))}
+      </fieldset>
+      <Field label={t('steps.dedupe.keep')}>
+        <NativeSelect value={step.keep} onChange={(v) => onChange({ ...step, keep: v as DedupeStep['keep'], recentBy: v === 'most_recent' && !step.recentBy ? (recencyColumn(columns) ?? dates[0])?.name ?? '' : step.recentBy })}>
+          <option value="most_recent">{t('steps.dedupe.keepRecent')}</option>
+          <option value="first">{t('steps.dedupe.keepFirst')}</option>
+          <option value="last">{t('steps.dedupe.keepLast')}</option>
+        </NativeSelect>
+      </Field>
+      {step.keep === 'most_recent' && (
+        <Field label={t('steps.dedupe.recentBy')}>
+          <ColumnPicker columns={dates.length ? dates : columns} value={step.recentBy} onChange={(v) => onChange({ ...step, recentBy: v })} label={null} />
+        </Field>
+      )}
+      <p className="text-xs text-muted-foreground">{step.keep === 'first' ? t('steps.dedupe.streams') : t('steps.dedupe.blocking')}</p>
+      <label className="flex items-center gap-2 text-sm">
+        <input type="checkbox" className="size-4 accent-primary" checked={step.flagRemoved} onChange={(e) => onChange({ ...step, flagRemoved: e.target.checked })} />
+        {t('steps.dedupe.flagRemoved')}
+      </label>
     </div>
   )
 }

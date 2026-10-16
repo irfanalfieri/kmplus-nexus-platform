@@ -10,7 +10,7 @@ import { can } from '@/lib/auth/permissions'
 import { recordAudit } from '@/lib/audit'
 import { definitionSchema, destinationTarget, stepTitle } from '@/lib/pipelines/definition'
 import { REPLAY_MAX_ROWS, enqueueRun } from '@/lib/pipelines/jobs'
-import { isStagedStep, lanePlan } from '@/lib/pipelines/lanes'
+import { lanePlan, replayBlocked } from '@/lib/pipelines/lanes'
 import { startWorker } from '@/lib/pipelines/worker'
 import { applyMasks, masksFor } from '@/lib/governance/masking'
 import type { Mask } from '@/lib/governance/definition'
@@ -283,13 +283,13 @@ async function replayRowsImpl(rawIds: string[]) {
       outcomes.push({ pipelineId, runId: '', status: 'skipped', message: 'The pipeline has no published version.', rows: rejectIds.length })
       continue
     }
-    // Rows held in a lane that feeds a Join's right side were looked up in a finished run: a new run brings them in.
+    // Rows held before a Join's looked-up side or an Aggregate / Deduplicate step were used by a finished run: a new run brings them in.
     const def = definitionSchema.safeParse(pipeline.config)
     if (def.success) {
       const plan = lanePlan(def.data)
-      const staged = rows.filter((r) => r.pipelineId === pipelineId && r.nodeId && isStagedStep(plan, r.nodeId)).map((r) => r.id)
+      const staged = rows.filter((r) => r.pipelineId === pipelineId && r.nodeId && replayBlocked(def.data, plan, r.nodeId)).map((r) => r.id)
       if (staged.length) {
-        outcomes.push({ pipelineId, runId: '', status: 'skipped', message: 'These rows were held in a lane that feeds a Join. Run the pipeline again to include them.', rows: staged.length })
+        outcomes.push({ pipelineId, runId: '', status: 'skipped', message: "These rows were held before a Join's looked-up side or an Aggregate / Deduplicate step. Run the pipeline again to include them.", rows: staged.length })
         rejectIds = rejectIds.filter((id) => !staged.includes(id))
         if (!rejectIds.length) continue
       }

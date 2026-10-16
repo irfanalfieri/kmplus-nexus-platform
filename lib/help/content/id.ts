@@ -251,7 +251,7 @@ export const helpId: HelpContent = {
     {
       id: 'pipelines',
       title: 'Bangun pipeline',
-      summary: 'Templat, editor, langkah, beberapa sumber dengan Gabung dan Satukan, pemeriksaan, tujuan, penerbitan, jadwal, persetujuan, serta lingkungan dengan promosi.',
+      summary: 'Templat, editor, langkah, beberapa sumber dengan Gabung dan Satukan, Agregasi dan Hapus duplikat, pemeriksaan, tujuan, penerbitan, jadwal, persetujuan, serta lingkungan dengan promosi.',
       screen: 'pipelines',
       sections: [
         {
@@ -271,6 +271,8 @@ export const helpId: HelpContent = {
                 ['Router', 'Mengirim baris ke cabang berbeda berdasarkan kondisi.'],
                 ['Gabung (join)', 'Menambahkan kolom dari sumber lain berdasarkan kunci, mis. gaji dari API payroll untuk setiap karyawan (lihat Beberapa sumber).'],
                 ['Satukan (union)', 'Menumpuk baris dari beberapa sumber, mis. dua sistem HR, dan mencatat asal setiap baris.'],
+                ['Agregasi', 'Satu baris per kelompok dengan jumlah, total, rata-rata, dan lainnya, mis. jumlah karyawan per unit per bulan.'],
+                ['Hapus duplikat', 'Mempertahankan satu baris per kunci, mis. catatan terbaru setiap karyawan, dan mencantumkan sisanya di Kualitas data.'],
                 ['Tujuan', 'Menulis ke dataset atau ke sumber data tujuan seperti produk KMPlus.'],
               ],
             },
@@ -299,7 +301,7 @@ export const helpId: HelpContent = {
             {
               kind: 'list',
               items: [
-                '**Tambahkan setelah langkah terpilih** di kiri menyisipkan langkah Filter, Pemetaan & transformasi, Validasi, Aturan bisnis, Router, Gabung, Satukan, atau Tujuan; **Sumber** menambahkan sumber lain untuk digabungkan.',
+                '**Tambahkan setelah langkah terpilih** di kiri menyisipkan langkah Filter, Pemetaan & transformasi, Validasi, Aturan bisnis, Router, Gabung, Satukan, Agregasi, Hapus duplikat, atau Tujuan; **Sumber** menambahkan sumber lain untuk digabungkan.',
                 'Pilih langkah untuk mengeditnya di kanan; **Langkah berikutnya** menghubungkannya ke langkah selanjutnya (Router punya satu per cabang).',
                 '**Pengaturan eksekusi** mengatur pengulangan, batas waktu, ukuran batch, ambang karantina, dan kapan memberi peringatan (tidak pernah, saat gagal, atau saat gagal atau ada baris tertahan).',
                 '**Jadwal** mengatur kapan versi terbit berjalan (lihat Jadwal dan pemicu).',
@@ -335,6 +337,31 @@ export const helpId: HelpContent = {
             { kind: 'p', text: '**Uji pada sampel** membaca sampel dari sumber penggerak, lalu hanya baris sisi kanan dengan kunci sampel tersebut (dari database dan file; sumber lain membaca hingga 5.000 baris), sehingga langkah Gabung menampilkan “18 dari 25 berpasangan”.' },
             { kind: 'note', tone: 'warning', text: 'Penggerak inkremental dengan langkah Gabung: sumber yang dicari dibaca penuh setiap eksekusi, tetapi hanya baris yang dibaca sumber penggerak (baru atau berubah) yang digabung. Perubahan di payroll baru sampai ke seorang karyawan ketika baris karyawan itu sendiri juga berubah. Setiap sumber menyimpan posisi sinkronisasinya sendiri.' },
             { kind: 'note', tone: 'info', text: 'Baris yang ditahan di langkah Gabung atau sesudahnya diputar ulang dari langkahnya seperti biasa. Baris yang ditahan di dalam jalur yang mengisi sisi kanan langkah Gabung tidak dapat diputar ulang ke penggabungan yang sudah selesai: jalankan pipeline lagi setelah memperbaiki sumbernya.' },
+          ],
+        },
+        {
+          id: 'blocking',
+          title: 'Agregasi dan Hapus duplikat',
+          blocks: [
+            { kind: 'p', text: 'Kedua langkah ini memerlukan semua baris sebelum dapat menjawab, sehingga eksekusi lebih dulu membaca sumbernya, menahan baris yang sampai ke langkah tersebut, lalu menjawab per kelompok dan meneruskan hasilnya ke langkah berikutnya.' },
+            {
+              kind: 'table',
+              head: ['Langkah', 'Pengaturan'],
+              rows: [
+                ['Agregasi', 'Kelompokkan per kolom dan, bila perlu, rentang waktu pada kolom tanggal (hari, minggu mulai Senin, bulan, kuartal, tahun). Ukuran: jumlah baris, jumlah unik, total, rata-rata, minimum, maksimum, pertama / terakhir menurut suatu kolom, gabungkan sebagai teks, kumpulkan sebagai daftar; masing-masing dapat hanya menghitung baris yang memenuhi kondisi (mis. `active_headcount` = jumlah baris dengan status = Active).'],
+                ['Hapus duplikat', 'Kolom kunci (dibandingkan dengan mengabaikan spasi dan huruf besar/kecil, seperti kunci Gabung). Pertahankan baris terbaru menurut kolom tanggal (bawaan bila ada), yang pertama dibaca, atau yang terakhir dibaca.'],
+              ],
+            },
+            {
+              kind: 'list',
+              items: [
+                'Duplikat yang dihapus dicantumkan di **Kualitas data** sebagai tanda, masing-masing menyebutkan baris yang dipertahankan. Tidak ada yang ditahan; tanda tidak membuat eksekusi menjadi sebagian.',
+                'Langkah Agregasi memerlukan **pembacaan penuh** dari sumber yang mengisinya: pembacaan inkremental hanya akan menghitung baris yang berubah, sehingga editor menolaknya.',
+                'Baris yang ditahan sebelumnya di jalur itu (gagal pemeriksaan) tidak dihitung; log eksekusi menyebutkan jumlahnya. Perbaiki lalu jalankan pipeline lagi, bukan diputar ulang.',
+                'Langkah Agregasi juga dapat menyiapkan sisi yang dicari pada langkah Gabung, mis. menjumlahkan tunjangan per karyawan lalu menggabungkannya ke setiap karyawan.',
+                '**Uji pada sampel** mengagregasi sampelnya saja; hasil uji menyebutkannya.',
+              ],
+            },
           ],
         },
         {
@@ -972,6 +999,8 @@ export const helpId: HelpContent = {
     { id: 'join-multiplied', group: 'pipelines', q: 'Mengapa dataset saya memiliki lebih banyak baris daripada sistem HR setelah langkah Gabung?', a: 'Langkah Gabung menulis **satu baris per pasangan**: karyawan dengan dua catatan payroll menjadi dua baris. Uji dan log eksekusi menyebutkan berapa baris yang berlipat. Untuk mempertahankan satu, setel **Beberapa pasangan** ke *Hanya pasangan pertama* dan pilih kolom penentunya (mis. `valid_from` terbaru).' },
     { id: 'join-no-match', group: 'pipelines', q: 'Baris ditahan di langkah Gabung dengan “Tidak ada pasangan di …”. Lalu bagaimana?', a: 'Kuncinya tidak ditemukan di sisi kanan langkah Gabung (sering kali unit atau catatan yang dibuat belakangan, atau kunci yang ditulis berbeda). Periksa cara membandingkan kunci, atau tunggu hingga pasangannya ada; lalu buka baris itu di Kualitas data dan pilih **Simpan & putar ulang**: baris masuk kembali di langkah Gabung dan dicocokkan lagi.' },
     { id: 'join-incremental', group: 'pipelines', q: 'Bisakah pipeline inkremental memakai langkah Gabung?', a: 'Bisa. Sumber yang dicari dibaca penuh setiap eksekusi, sehingga baris baru dari sumber penggerak selalu menemukan pasangannya. Namun perubahan yang hanya terjadi di sisi yang dicari (gaji baru) baru sampai ke seorang karyawan ketika baris karyawan itu dibaca lagi: gunakan pembacaan penuh bila hal itu penting, atau atur ulang posisi sinkronisasi.' },
+    { id: 'dedupe-which', group: 'pipelines', q: 'Seorang karyawan muncul dua kali di sumber. Catatan mana yang dipertahankan?', a: 'Tambahkan langkah **Hapus duplikat** pada kunci karyawan. Secara bawaan langkah ini mempertahankan catatan terbaru menurut kolom tanggal seperti `updated_at`; Anda juga dapat mempertahankan yang pertama atau terakhir dibaca. Setiap catatan yang dihapus dicantumkan di Kualitas data, dengan menyebutkan yang dipertahankan. Duplikat antar-eksekusi ditangani oleh tujuan upsert dengan kunci yang sama.' },
+    { id: 'aggregate-incremental', group: 'pipelines', q: 'Mengapa langkah Agregasi tidak bisa membaca secara inkremental?', a: 'Pembacaan inkremental hanya membawa baris baru atau yang berubah, sehingga jumlah karyawan hanya akan menghitung baris itu. Setel sumber yang mengisi langkah Agregasi ke **Penuh**; bila datanya besar, jadwalkan pipeline lebih jarang.' },
     { id: 'deleted-employees', group: 'pipelines', q: 'Bagaimana karyawan yang keluar ditangani?', a: 'Dengan tujuan upsert dan **Tandai baris yang tidak ada lagi di sumber sebagai terhapus**, baris yang hilang dari sumber ditandai terhapus alih-alih dibuang. Pembacaan mengecualikannya; riwayatnya tetap ada.' },
     { id: 'env-why', group: 'environments', q: 'Mengapa memakai Development, Staging, dan Production?', a: 'Agar pipeline bisa diubah tanpa membahayakan data produksi. Bangun dengan data uji di Development, periksa hasilnya dengan data mirip produksi di Staging, dan promosikan hanya yang berhasil ke Production, yang tidak bisa diedit langsung.' },
     { id: 'env-sources', group: 'environments', q: 'Apakah pipeline yang dipromosikan membaca database Development di Production?', a: 'Tidak. Sumber data dicocokkan **berdasarkan nama**, dan setiap lingkungan punya sumber sendiri dengan kredensialnya sendiri. Beri sumber nama yang sama di setiap lingkungan; sumber yang belum ada memblokir promosi.' },

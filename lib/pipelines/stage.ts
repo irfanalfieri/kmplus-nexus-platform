@@ -83,6 +83,27 @@ export async function lookupStage(table: string, keys: string[]): Promise<Map<st
   return out
 }
 
+const exists = async (table: string) => Boolean((await pool.query<{ r: string | null }>('SELECT to_regclass($1)::text AS r', [rel(table)])).rows[0]?.r)
+
+/** Finish phase: the next group keys after `after`, in key order (none when nothing was staged). */
+export async function stageKeys(table: string, after: string | null, limit: number): Promise<string[]> {
+  if (!(await exists(table))) return []
+  const { rows } = await pool.query<{ k: string }>(
+    `SELECT DISTINCT "_k" AS k FROM ${rel(table)} WHERE "_k" IS NOT NULL ${after === null ? '' : 'AND "_k" > $2'} ORDER BY "_k" LIMIT $1`,
+    after === null ? [limit] : [limit, after]
+  )
+  return rows.map((r) => r.k)
+}
+
+/** Finish phase: every staged row of these groups, grouped by key, in staging order. */
+export async function stageGroups(table: string, keys: string[]): Promise<Map<string, Row[]>> {
+  const out = new Map<string, Row[]>(keys.map((k) => [k, []]))
+  if (!keys.length) return out
+  const { rows } = await pool.query<{ k: string; row: Row }>(`SELECT "_k" AS k, "row" FROM ${rel(table)} WHERE "_k" = ANY($1::text[]) ORDER BY "_k", "_stage_row"`, [keys])
+  for (const r of rows) out.get(r.k)?.push(r.row)
+  return out
+}
+
 /** Disk used by a run's staging tables (bytes), for the run log. */
 export async function stageSize(runId: string): Promise<number> {
   const tables = await db.select({ tableName: pipelineStageTables.tableName }).from(pipelineStageTables).where(eq(pipelineStageTables.runId, runId))
