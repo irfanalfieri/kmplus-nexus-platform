@@ -231,10 +231,15 @@ export const pipelines = pgTable('pipelines', {
 export const pipelineApprovals = pgTable('pipeline_approvals', {
   id: text('id').primaryKey(),
   workspaceId: text('workspaceId').notNull(),
-  pipelineId: text('pipelineId').notNull(),
-  /** The pipeline_versions version that is published on approval. */
+  /** What waits: a pipeline version, or a change to a defined dataset schema. */
+  subject: text('subject').notNull().default('pipeline'),
+  /** Pipeline requests only (schema requests have none). */
+  pipelineId: text('pipelineId'),
+  /** Pipelines: the pipeline_versions version published on approval. Schemas: the version the change would create. */
   version: integer('version').notNull(),
-  /** publish (a change made here) | promote (arrived from the previous environment) */
+  /** Schema requests: { datasetName, ops, baseVersion } (lib/datasets/schema.ts operations). */
+  payload: jsonb('payload'),
+  /** publish (a change made here) | promote (arrived from the previous environment) | schema */
   kind: text('kind').notNull().default('publish'),
   /** pending | approved | rejected | cancelled | superseded */
   status: text('status').notNull().default('pending'),

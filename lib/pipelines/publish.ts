@@ -113,7 +113,7 @@ export async function assertPipelinesEditable(ctx: { workspaceId: string }) {
 }
 
 /** Members who may approve, other than the requester. */
-async function approvers(workspaceId: string, exceptUserId: string) {
+export async function approvers(workspaceId: string, exceptUserId: string) {
   const rows = await db
     .select({ userId: workspaceMembers.userId, role: workspaceMembers.role })
     .from(workspaceMembers)

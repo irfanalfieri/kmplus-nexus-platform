@@ -512,11 +512,12 @@ export const helpId: HelpContent = {
               head: ['Pengaturan', 'Yang menunggu persetujuan'],
               rows: [
                 ['Nonaktif', 'Tidak ada: editor menerbitkan langsung.'],
-                ['Perubahan destruktif', 'Versi yang mengganti dataset atau menandai baris terhapus.'],
-                ['Setiap penerbitan', 'Setiap versi, termasuk promosi ke workspace ini.'],
+                ['Perubahan destruktif', 'Versi yang mengganti dataset atau menandai baris terhapus, serta penggantian nama, perubahan tipe, dan penghapusan kolom skema dataset.'],
+                ['Setiap penerbitan', 'Setiap versi, termasuk promosi ke workspace ini, serta setiap perubahan skema kecuali deskripsi.'],
               ],
             },
             { kind: 'p', text: 'Versi yang menunggu tampil di **Riwayat persetujuan** pada layar Pipeline dan di **Perlu Anda tangani** pada Ringkasan. Admin atau data steward menyetujui atau menolaknya; tidak ada yang menyetujui perubahannya sendiri, jadi persetujuan memerlukan setidaknya dua admin atau steward.' },
+            { kind: 'p', text: '**Perubahan skema** yang menunggu menampilkan perubahannya, baris yang terdampak, serta pipeline, dasbor, dan kunci API yang membaca dataset. Menyetujuinya menerapkan perubahan sesuai permintaan; jika skema sudah berubah sehingga tidak mungkin diterapkan (kolomnya diganti nama atau dihapus), permintaan ditutup sebagai tergantikan. Kolom yang ditambahkan otomatis oleh run dan skema yang dibawa promosi tidak pernah menunggu.' },
           ],
         },
         {
@@ -750,7 +751,7 @@ export const helpId: HelpContent = {
               rows: [
                 ['Tambah kolom', 'Langsung ditambahkan, kosong atau dengan nilai bawaannya.'],
                 ['Jadikan wajib', 'Baris tanpa nilai dihitung lebih dulu. Run berikutnya menahan baris yang tidak mengisinya.'],
-                ['Ganti nama', 'Kolom tetap menyimpan nilainya. Draf pipeline, dasbor, dan penyamaran pindah ke nama baru, pipeline yang sudah terbit mengikutinya, dan Data API tetap melayani nama lama selama **30 hari** dengan header `Deprecation`.'],
+                ['Ganti nama', 'Kolom tetap menyimpan nilainya. Draf pipeline, dasbor, dan penyamaran pindah ke nama baru, pipeline yang sudah terbit mengikutinya, dan Data API tetap melayani nama lama selama **30 hari** dengan header `Deprecation`. Jika ruang kerja mewajibkan persetujuan, penggantian nama, perubahan tipe, dan penghapusan menunggu orang kedua.'],
                 ['Ubah tipe', 'Nilai yang tidak dapat dikonversi dihitung lebih dulu dan dikosongkan jika Anda melanjutkan.'],
                 ['Hapus', 'Dikonfirmasi dengan pipeline, dasbor, dan kunci API yang memakai dataset.'],
               ],

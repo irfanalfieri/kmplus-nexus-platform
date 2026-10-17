@@ -24,7 +24,7 @@ import { startRestWriteMock } from './test/rest-write-mock'
 import { autoBindBody, bodyLeaves, parseBodySample, setRowsArray, updateBodyNode } from '@/lib/pipelines/body-template'
 import { cancelPipelineRun, createWebhookTrigger, discardDraft, getBuilderOptions, getDatasetPreview, getRunStatus, listPipelines, listRuns, publishPipeline, retryPipelineRun, runPipelineNow, savePipeline, sendApiTestRequest, testPipeline, clearStepCache } from '@/lib/actions/pipelines'
 import { createSamlProvider, createSsoProvider, deleteSsoProvider, listSsoProviders, setSamlIdp, updateSsoProvider, verifySsoDomain } from '@/lib/actions/sso'
-import { approveRequest, listApprovals, rejectRequest } from '@/lib/actions/approvals'
+import { approveRequest, cancelRequest, listApprovals, rejectRequest } from '@/lib/actions/approvals'
 import { listPromotionStatus, previewPromotion, promotePipeline, setApprovalPolicy, setupEnvironments, unlinkEnvironment } from '@/lib/actions/environments'
 import { createScimToken, revokeScimToken, setScimGroupRole } from '@/lib/actions/scim'
 import { DELETE as scimDelete, GET as scimGet, PATCH as scimPatch, POST as scimPost } from '@/app/api/scim/v2/[[...path]]/route'
@@ -57,7 +57,7 @@ import { approveRows, dismissRows, fixRow, getQualityOverview, listQuarantine, r
 import { getCatalogSample, getLineage, getQualityHistory, listCatalog, saveCatalogEntry, saveDomainMapping, askCatalog } from '@/lib/actions/catalog'
 import { createApiKey, revokeApiKey } from '@/lib/actions/api-keys'
 import { changeDatasetSchema, defineDatasetSchema, defineFromCurrentColumns, dismissUpgradeNotice, getDatasetSchema, getUpgradeNotices, listInferredDatasets, previewSchemaChange } from '@/lib/actions/schemas'
-import { loadSchema } from '@/lib/datasets/store'
+import { changeSchema, loadSchema } from '@/lib/datasets/store'
 import { uploadFilePart } from '@/lib/actions/files'
 import { GET as getDataset } from '@/app/api/v1/datasets/[name]/route'
 import { GET as getDomain } from '@/app/api/v1/domains/[entity]/route'
@@ -1622,7 +1622,62 @@ async function main() {
       assert.equal((await savePipeline({ id: saved.id, publish: true, name: `${RUN} approved`, definition: def, schedule: { type: 'manual' } as never })).published, true)
       const replaceDef = { steps: [def.steps[0], { ...def.steps[1], mode: 'replace', keys: [] }] }
       assert.equal((await savePipeline({ id: saved.id, publish: true, name: `${RUN} approved`, definition: replaceDef, schedule: { type: 'manual' } as never })).published, false)
+
+      // Schema changes follow the same policy: a rename waits, an added column applies at once.
+      const ds = `${RUN}_profile`
+      const before = (await getDatasetSchema(ds)).version
+      const asked = await changeDatasetSchema({ datasetName: ds, ops: [{ kind: 'rename', from: 'hire_date', to: 'start_date' }], note: 'clearer name' })
+      assert.ok(asked.pending, 'the rename waits for a second person')
+      assert.deepEqual(asked.reasons, [`${ds}: Renamed hire_date to start_date`])
+      const page = await getDatasetSchema(ds)
+      assert.equal(page.version, before, 'nothing changed yet')
+      assert.ok(page.pending?.mine && page.pending.changes[0] === 'Renamed hire_date to start_date')
+      await rejectsWith(() => changeDatasetSchema({ datasetName: ds, ops: [{ kind: 'remove', name: 'full_name' }] }), /already waiting for approval/)
+      const team = { name: 'team', type: 'text' as const, required: false, description: '', classification: 'internal' as const, default: null, autoAdded: false, reviewed: true }
+      const added = await changeDatasetSchema({ datasetName: ds, ops: [{ kind: 'add', column: team }] })
+      assert.equal(added.pending, null)
+      assert.equal(added.version, before + 1)
+      await rejectsWith(() => approveRequest({ id: asked.pending! }), /Someone else/)
+      setTestUser(approver)
+      await switchWorkspace(adminWs)
+      const request = (await listApprovals('pending')).find((r) => r.id === asked.pending)!
+      assert.equal(request.subject, 'schema')
+      assert.deepEqual(request.schema!.lines, ['Renamed hire_date to start_date'])
+      assert.ok(request.schema!.usage!.pipelines.includes(`${RUN} hris profile`), 'the approver sees who reads the dataset')
+      assert.ok(request.canDecide)
+      // Applied as asked, even though a column was added in between.
+      assert.equal((await approveRequest({ id: request.id, note: 'ok' })).version, before + 2)
+      const after = await getDatasetSchema(ds)
+      assert.ok(after.schema!.columns.some((c) => c.name === 'start_date') && !after.pending)
+      assert.ok(after.aliases.some((a) => a.oldName === 'hire_date' && a.newName === 'start_date'), 'the old name stays readable for 30 days')
+      const changedBy = await db.select().from(auditLogs).where(and(eq(auditLogs.workspaceId, adminWs), eq(auditLogs.action, 'SCHEMA_CHANGE'), eq(auditLogs.resourceId, ds)))
+      assert.ok(changedBy.some((a) => a.userId === admin.id && JSON.stringify(a.changes).includes('start_date')), 'recorded as the requester’s change')
+      assert.ok((await db.select().from(notifications).where(and(eq(notifications.userId, admin.id), eq(notifications.workspaceId, adminWs)))).some((n) => /Schema change to .* approved/.test(n.title)))
+      // A request the schema has moved past is superseded instead of applied.
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const stale = await changeDatasetSchema({ datasetName: ds, ops: [{ kind: 'remove', name: 'team' }] })
+      await changeSchema({ workspaceId: adminWs, userId: admin.id }, ds, [{ kind: 'rename', from: 'team', to: 'squad' }])
+      setTestUser(approver)
+      await switchWorkspace(adminWs)
+      await rejectsWith(() => approveRequest({ id: stale.pending! }), /no longer applies/)
+      const [superseded] = await db.select().from(pipelineApprovals).where(eq(pipelineApprovals.id, stale.pending!))
+      assert.equal(superseded.status, 'superseded')
+      assert.ok((await getDatasetSchema(ds)).schema!.columns.some((c) => c.name === 'squad'), 'the column stays')
+      // The requester (not a viewer) can cancel a waiting change.
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const cancelled = await changeDatasetSchema({ datasetName: ds, ops: [{ kind: 'type', name: 'squad', type: 'integer' }] })
+      setTestUser(viewer)
+      await switchWorkspace(adminWs)
+      await rejectsWith(() => cancelRequest(cancelled.pending!), /requester or an admin/)
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      await cancelRequest(cancelled.pending!)
+      assert.equal((await getDatasetSchema(ds)).pending, null)
+      // Policy off: the same kind of change applies at once.
       await setApprovalPolicy('off')
+      assert.equal((await changeDatasetSchema({ datasetName: ds, ops: [{ kind: 'remove', name: 'squad' }] })).pending, null)
       const { rows: approved } = await listAuditLogs({ action: 'APPROVE' })
       assert.ok(approved.length >= 1)
     })

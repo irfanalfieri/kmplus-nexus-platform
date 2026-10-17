@@ -10,9 +10,13 @@ import { can } from '@/lib/auth/permissions'
 import { guard } from '@/lib/server-action'
 import { DOMAIN_BY_NAME } from '@/lib/domain/model'
 import { definitionSchema, type PipelineDefinition } from '@/lib/pipelines/definition'
-import { columnOwners, datasetSchemaSpec, isDestructiveOp, schemaFromColumns, schemaFromEntity, schemaFromExample, schemaOpSchema, unsafeNames, type SchemaOp } from '@/lib/datasets/schema'
+import { published, usageOf } from '@/lib/datasets/usage'
+import { columnOwners, datasetSchemaSpec, describeOp, isDestructiveOp, schemaFromColumns, schemaFromEntity, schemaFromExample, schemaOpSchema, unsafeNames, type SchemaOp } from '@/lib/datasets/schema'
 import { activeAliases, changePreview, changeSchema, defineSchema, loadSchema, loadSchemas, schemaVersions } from '@/lib/datasets/store'
 import { UPGRADE_NOTICES } from '@/lib/upgrades/notices'
+import { schemaApprovalReasons } from '@/lib/pipelines/approvals'
+import { userNames, workspaceSettings } from '@/lib/pipelines/publish'
+import { pendingSchemaRequest, requestSchemaApproval, schemaPayload } from '@/lib/datasets/approval'
 
 /**
  * Defined dataset schemas (lanes design §3): define, change with impact
@@ -23,48 +27,6 @@ import { UPGRADE_NOTICES } from '@/lib/upgrades/notices'
 const datasetName = z.string().trim().min(1).max(48).regex(/^[a-z][a-z0-9_]*$/, 'Lowercase letters, numbers and underscores; start with a letter')
 
 type Column = { name: string; type: string }
-
-async function published(ctx: WorkspaceContext) {
-  const rows = await db.select({ id: pipelines.id, name: pipelines.name, config: pipelines.config }).from(pipelines).where(eq(pipelines.workspaceId, ctx.workspaceId))
-  return rows.flatMap((p) => {
-    const d = definitionSchema.safeParse(p.config)
-    return d.success ? [{ id: p.id, name: p.name, definition: d.data as PipelineDefinition }] : []
-  })
-}
-
-/** Pipelines, dashboards and API keys that use a dataset (impact previews, the review list). */
-async function usageOf(ctx: WorkspaceContext, names: string[]) {
-  const pipes = await published(ctx)
-  const boards = await db.select({ name: dashboards.name, widgets: dashboards.widgets }).from(dashboards).where(eq(dashboards.workspaceId, ctx.workspaceId))
-  const since = new Date(Date.now() - 30 * 86_400_000)
-  const reads = await db
-    .select({ userId: auditLogs.userId, dataset: sql<string>`${auditLogs.changes}->>'dataset'` })
-    .from(auditLogs)
-    .where(and(eq(auditLogs.workspaceId, ctx.workspaceId), eq(auditLogs.action, 'API_READ'), gte(auditLogs.createdAt, since)))
-    .groupBy(auditLogs.userId, sql`${auditLogs.changes}->>'dataset'`)
-  const keyIds = [...new Set(reads.map((r) => r.userId.replace(/^apikey:/, '')))]
-  const keys = keyIds.length ? await db.select({ id: apiKeys.id, name: apiKeys.name }).from(apiKeys).where(and(eq(apiKeys.workspaceId, ctx.workspaceId), inArray(apiKeys.id, keyIds))) : []
-  return Object.fromEntries(
-    names.map((name) => {
-      const usedBy = pipes.filter((p) =>
-        p.definition.nodes.some(
-          (n) =>
-            (n.type === 'destination' && n.kind === 'dataset' && n.datasetName === name) ||
-            (n.type === 'map' && n.fields.some((f) => f.transforms.some((t) => t.fn === 'lookup' && t.args[0]?.trim() === name))) ||
-            (n.type === 'validate' && n.rules.some((r) => r.rule === 'exists_in' && r.value.startsWith(`${name}.`)))
-        )
-      )
-      return [
-        name,
-        {
-          pipelines: usedBy.map((p) => p.name),
-          dashboards: boards.filter((b) => ((b.widgets ?? []) as { dataset: string }[]).some((w) => w.dataset === name)).map((b) => b.name),
-          apiKeys: keys.filter((k) => reads.some((r) => r.dataset === name && r.userId === `apikey:${k.id}`)).map((k) => k.name),
-        },
-      ]
-    })
-  ) as Record<string, { pipelines: string[]; dashboards: string[]; apiKeys: string[] }>
-}
 
 async function datasetRow(ctx: WorkspaceContext, name: string) {
   const [d] = await db.select().from(nexusDatasets).where(and(eq(nexusDatasets.workspaceId, ctx.workspaceId), eq(nexusDatasets.name, name))).limit(1)
@@ -89,7 +51,17 @@ async function getDatasetSchemaImpl(rawName: string) {
     aliases: (await activeAliases(ctx.workspaceId, name)).map((a) => ({ oldName: a.oldName, newName: a.newName, expiresAt: a.expiresAt })),
     usage: (await usageOf(ctx, [name]))[name],
     canEdit: can(ctx.role, 'catalog:edit'),
+    pending: await pendingOf(ctx, name),
   }
+}
+
+/** A change to this dataset's schema waiting for approval (shown on the schema page). */
+async function pendingOf(ctx: WorkspaceContext, name: string) {
+  const row = await pendingSchemaRequest(ctx.workspaceId, name)
+  const payload = row ? schemaPayload(row.payload) : null
+  if (!row || !payload) return null
+  const names = await userNames([row.requestedBy])
+  return { id: row.id, changes: payload.ops.map(describeOp), requestedBy: names.get(row.requestedBy) ?? row.requestedBy, mine: row.requestedBy === ctx.userId, createdAt: row.createdAt, canCancel: row.requestedBy === ctx.userId || ctx.role === 'admin' }
 }
 
 const defineInput = z.object({
@@ -147,7 +119,13 @@ async function defineFromCurrentColumnsImpl(rawNames: string[]) {
   return { defined }
 }
 
-const changeInput = z.object({ datasetName, ops: z.array(schemaOpSchema).min(1).max(50) })
+const changeInput = z.object({ datasetName, ops: z.array(schemaOpSchema).min(1).max(50), note: z.string().trim().max(300).optional() })
+
+/** Why this change waits for a second person under the workspace's approval policy (empty = applied at once). */
+async function approvalFor(ctx: WorkspaceContext, name: string, ops: SchemaOp[]) {
+  const ws = await workspaceSettings(ctx.workspaceId)
+  return schemaApprovalReasons(ws.publishApproval, name, ops)
+}
 
 /** What a change would do before it is confirmed: rows touched, and who reads the columns it renames, retypes or removes. */
 async function previewSchemaChangeImpl(input: z.input<typeof changeInput>) {
@@ -158,16 +136,24 @@ async function previewSchemaChangeImpl(input: z.input<typeof changeInput>) {
   const d = await datasetRow(ctx, data.datasetName)
   const rows = d ? await changePreview(d.tableName, stored.schema, data.ops as SchemaOp[]) : []
   const destructive = (data.ops as SchemaOp[]).some(isDestructiveOp)
-  return { destructive, rows, usage: destructive ? (await usageOf(ctx, [data.datasetName]))[data.datasetName] : null }
+  return { destructive, rows, usage: destructive ? (await usageOf(ctx, [data.datasetName]))[data.datasetName] : null, approval: await approvalFor(ctx, data.datasetName, data.ops as SchemaOp[]) }
 }
 
 /** Applies a confirmed change (stewards and admins). */
 async function changeDatasetSchemaImpl(input: z.input<typeof changeInput>) {
   const ctx = await requireWorkspace('catalog:edit')
   const data = changeInput.parse(input)
-  const res = await changeSchema({ workspaceId: ctx.workspaceId, userId: ctx.userId }, data.datasetName, data.ops as SchemaOp[])
+  const ops = data.ops as SchemaOp[]
+  // Under the workspace's approval policy a destructive change waits for a second person.
+  const reasons = await approvalFor(ctx, data.datasetName, ops)
+  if (reasons.length) {
+    const approvalId = await requestSchemaApproval(ctx, data.datasetName, ops, reasons, data.note)
+    revalidatePath('/dashboard', 'layout')
+    return { pending: approvalId, reasons, version: null, moved: { pipelines: [] as string[], dashboards: [] as string[] } }
+  }
+  const res = await changeSchema({ workspaceId: ctx.workspaceId, userId: ctx.userId }, data.datasetName, ops)
   revalidatePath('/dashboard', 'layout')
-  return res
+  return { pending: null, reasons: [] as string[], version: res.version, moved: res.moved }
 }
 
 /** Upgrade notices for this person (dismissed per person): currently "Datasets can now have defined schemas". */

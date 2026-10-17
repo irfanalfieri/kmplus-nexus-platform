@@ -30,6 +30,7 @@ import {
 } from '@/lib/datasets/schema'
 import { DOMAIN_BY_NAME } from '@/lib/domain/model'
 import { localizeCheck } from '@/lib/pipelines/check-messages'
+import { schemaApprovalReasons } from '@/lib/pipelines/approvals'
 
 type Test = (name: string, fn: () => void | Promise<void>) => Promise<void>
 type DatasetDest = Extract<DestinationStep, { kind: 'dataset' }>
@@ -192,4 +193,17 @@ export async function schemaTests(test: Test) {
     const extra = datasetSchemaSpec.parse({ ...profile, columns: [...profile.columns, { name: 'legacy' }] })
     assert.equal(schemaPromotion(profile, extra).status, 'blocked')
   })
+
+  await test('approvals: schema renames, type changes and removals wait under "destructive"; every change but notes under "always"', () => {
+    const rename = { kind: 'rename' as const, from: 'grade', to: 'level' }
+    const add = { kind: 'add' as const, column: { name: 'team', type: 'text' as const, required: false, description: '', classification: 'internal' as const, default: null, autoAdded: false, reviewed: true } }
+    const note = { kind: 'describe' as const, name: 'grade', description: 'Pay grade' }
+    assert.deepEqual(schemaApprovalReasons('off', 'p', [rename]), [])
+    assert.deepEqual(schemaApprovalReasons('destructive', 'p', [rename, add]), ['p: Renamed grade to level'])
+    assert.deepEqual(schemaApprovalReasons('destructive', 'p', [add, { kind: 'require', name: 'grade', required: true }]), [])
+    assert.deepEqual(schemaApprovalReasons('destructive', 'p', [{ kind: 'remove', name: 'x' }, { kind: 'type', name: 'y', type: 'integer' }]), ['p: Removed x', 'p: Changed y to integer'])
+    assert.deepEqual(schemaApprovalReasons('always', 'p', [add]), ['Every schema change needs approval in this workspace'])
+    assert.deepEqual(schemaApprovalReasons('always', 'p', [note, { kind: 'review', name: 'grade' }]), [])
+  })
+
 }

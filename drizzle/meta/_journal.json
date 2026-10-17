@@ -176,6 +176,13 @@
       "when": 1792146511071,
       "tag": "0024_dataset_schemas",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1792215413895,
+      "tag": "0025_approvals_for_schemas",
+      "breakpoints": true
     }
   ]
 }

@@ -512,11 +512,12 @@ export const helpEn: HelpContent = {
               head: ['Setting', 'What waits for approval'],
               rows: [
                 ['Off', 'Nothing: editors publish directly.'],
-                ['Destructive changes', 'Versions that replace a dataset or mark rows deleted.'],
-                ['Every publish', 'Every version, including promotions into this workspace.'],
+                ['Destructive changes', 'Versions that replace a dataset or mark rows deleted, and dataset schema renames, type changes and removals.'],
+                ['Every publish', 'Every version, including promotions into this workspace, and every schema change except descriptions.'],
               ],
             },
             { kind: 'p', text: 'Waiting versions appear under **Approval history** on the Pipelines screen and in **Needs you** on the Overview. An admin or data steward approves or rejects them; nobody approves their own change, so approvals need at least two admins or stewards.' },
+            { kind: 'p', text: 'A waiting **schema change** shows the change, the rows it touches and the pipelines, dashboards and API keys that read the dataset. Approving applies it as the requester asked; if the schema changed in a way that makes it impossible (the column was renamed or removed), the request is closed as superseded. Columns a run adds automatically and schemas carried by a promotion never wait.' },
           ],
         },
         {
@@ -750,7 +751,7 @@ export const helpEn: HelpContent = {
               rows: [
                 ['Add a column', 'Added at once, empty or with its default.'],
                 ['Make required', 'Rows without a value are counted first. Later runs hold rows that don’t fill it.'],
-                ['Rename', 'The column keeps its values. Pipeline drafts, dashboards and masks move to the new name, published pipelines follow it, and the Data API serves the old name for **30 days** with a `Deprecation` header.'],
+                ['Rename', 'The column keeps its values. Pipeline drafts, dashboards and masks move to the new name, published pipelines follow it, and the Data API serves the old name for **30 days** with a `Deprecation` header. Where the workspace requires approvals, renames, type changes and removals wait for a second person.'],
                 ['Change type', 'Values that can’t convert are counted first and emptied if you continue.'],
                 ['Remove', 'Confirmed with the pipelines, dashboards and API keys that use the dataset.'],
               ],

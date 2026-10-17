@@ -30,7 +30,7 @@ const STATUS_TEXT: Record<string, MessageKey> = {
 }
 
 /**
- * Pipeline versions waiting for a second person (GV-6). Approvers decide;
+ * Pipeline versions and schema changes waiting for a second person (GV-6). Approvers decide;
  * requesters see and can cancel their own. Hidden when there is nothing pending
  * and the history is closed.
  */
@@ -92,7 +92,21 @@ export default function ApprovalsPanel({
     }
   }
 
+  /** Reasons not already shown as a schema change line. */
+  const reasonsOf = (r: Request) => (r.schema ? r.reasons.filter((x) => !x.startsWith(`${r.schema!.datasetName}: `)) : r.reasons)
+  /** What a request is about: a pipeline, or the schema of a dataset. */
+  const label = (r: Request) => (r.schema ? t('approvals.schemaName', { dataset: r.schema.datasetName }) : r.pipelineName)
   const approve = async (r: Request) => {
+    if (r.schema) {
+      const ok = await confirm({
+        title: t('approvals.schemaApproveTitle', { dataset: r.schema.datasetName }),
+        description: t('approvals.schemaApproveBody'),
+        confirmLabel: t('approvals.applyChange'),
+        tone: 'danger',
+      })
+      if (ok) await act(r.id, async () => t('approvals.schemaApproved', { dataset: r.schema!.datasetName, version: (await approveRequest({ id: r.id, note: notes[r.id] ?? '' })).version }))
+      return
+    }
     const ok = await confirm({
       title: t('editor.approvals.approveTitle', { name: r.pipelineName, version: r.version }),
       description: t('editor.approvals.approveBody', { version: r.publishedVersion || '–' }),
@@ -102,17 +116,17 @@ export default function ApprovalsPanel({
   }
   const reject = async (r: Request) => {
     const ok = await confirm({
-      title: t('editor.approvals.rejectTitle', { name: r.pipelineName, version: r.version }),
+      title: t('editor.approvals.rejectTitle', { name: label(r), version: r.version }),
       description: t('editor.approvals.rejectBody'),
       confirmLabel: t('editor.approvals.reject'),
       tone: 'danger',
     })
-    if (ok) await act(r.id, async () => (await rejectRequest({ id: r.id, note: notes[r.id] ?? '' }), t('editor.approvals.rejected', { name: r.pipelineName, version: r.version })))
+    if (ok) await act(r.id, async () => (await rejectRequest({ id: r.id, note: notes[r.id] ?? '' }), t('editor.approvals.rejected', { name: label(r), version: r.version })))
   }
   const cancel = async (r: Request) => {
     const ok = await confirm({
-      title: t('editor.approvals.cancelTitle'),
-      description: t('editor.approvals.cancelBody', { name: r.pipelineName, version: r.version }),
+      title: r.schema ? t('schemas.panel.cancelTitle') : t('editor.approvals.cancelTitle'),
+      description: r.schema ? t('approvals.schemaCancelBody', { dataset: r.schema.datasetName }) : t('editor.approvals.cancelBody', { name: label(r), version: r.version }),
       confirmLabel: t('editor.approvals.cancelRequest'),
       cancelLabel: t('editor.approvals.keepRequest'),
       tone: 'danger',
@@ -163,11 +177,16 @@ export default function ApprovalsPanel({
               <li key={r.id} className="space-y-2 p-4 text-sm">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                   <span className="font-medium">
-                    {r.pipelineName} <span className="font-mono">v{r.version}</span>
+                    {label(r)} <span className="font-mono">v{r.version}</span>
                   </span>
                   <StateMark state={STATUS_STATE[r.status] ?? 'idle'} className="text-xs">
                     {statusText(r.status)}
                   </StateMark>
+                  {r.schema && (
+                    <Badge variant="outline" className="rounded-sm">
+                      {t('approvals.schemaChange')}
+                    </Badge>
+                  )}
                   {r.kind === 'promote' && (
                     <Badge variant="outline" className="rounded-sm">
                       {r.fromWorkspace ? t('editor.approvals.promotionFrom', { workspace: r.fromWorkspace }) : t('editor.approvals.promotion')}
@@ -175,16 +194,17 @@ export default function ApprovalsPanel({
                   )}
                   <span className="text-xs text-muted-foreground">
                     {t('editor.approvals.requestedBy', { who: r.mine ? t('editor.approvals.you') : r.requestedBy })} · <span className="font-mono">{when(r.createdAt)}</span> ·{' '}
-                    {t('editor.approvals.runsToday', { version: `v${r.publishedVersion || '–'}` })}
+                    {r.schema ? t('approvals.schemaToday', { version: `v${r.schema.currentVersion || r.schema.baseVersion}` }) : t('editor.approvals.runsToday', { version: `v${r.publishedVersion || '–'}` })}
                   </span>
                 </div>
-                {r.reasons.length > 0 && (
+                {reasonsOf(r).length > 0 && (
                   <ul className="list-inside list-disc text-xs text-muted-foreground">
-                    {r.reasons.map((x) => (
+                    {reasonsOf(r).map((x) => (
                       <li key={x}>{x}</li>
                     ))}
                   </ul>
                 )}
+                {r.schema && <SchemaImpact schema={r.schema} />}
                 {r.requestNote && <p className="text-xs">{t('editor.approvals.note', { note: r.requestNote })}</p>}
                 {lines.length > 0 && (
                   <details className="text-xs">
@@ -208,9 +228,9 @@ export default function ApprovalsPanel({
                 )}
                 {r.canDecide && (
                   <div className="flex flex-wrap items-center gap-2">
-                    <Input className="max-w-xs" placeholder={t('editor.approvals.notePlaceholder')} value={notes[r.id] ?? ''} onChange={(e) => setNotes({ ...notes, [r.id]: e.target.value })} aria-label={t('editor.approvals.noteFor', { name: r.pipelineName, version: r.version })} />
+                    <Input className="max-w-xs" placeholder={t('editor.approvals.notePlaceholder')} value={notes[r.id] ?? ''} onChange={(e) => setNotes({ ...notes, [r.id]: e.target.value })} aria-label={t('editor.approvals.noteFor', { name: label(r), version: r.version })} />
                     <Button size="sm" disabled={busy !== null} onClick={() => void approve(r)}>
-                      {busy === r.id ? <Loader2 className="animate-spin" aria-hidden /> : <CheckCheck aria-hidden />} {t('editor.approvals.approvePublish')}
+                      {busy === r.id ? <Loader2 className="animate-spin" aria-hidden /> : <CheckCheck aria-hidden />} {r.schema ? t('approvals.applyChange') : t('editor.approvals.approvePublish')}
                     </Button>
                     <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => void reject(r)}>
                       <X aria-hidden /> {t('editor.approvals.reject')}
@@ -231,5 +251,34 @@ export default function ApprovalsPanel({
         </ul>
       )}
     </section>
+  )
+}
+
+/** A schema request: its changes, the rows they touch and who reads the dataset. */
+function SchemaImpact({ schema }: { schema: NonNullable<Request['schema']> }) {
+  const { t } = usePrefs()
+  const usage = schema.usage
+  const lines: string[] = []
+  for (const r of schema.rows) {
+    if (r.emptyRows) lines.push(t('schemas.panel.emptyRows', { count: r.emptyRows, column: r.column }))
+    if (r.failingRows) lines.push(t('approvals.schemaFailing', { count: r.failingRows, column: r.column }))
+  }
+  if (usage) {
+    if (usage.pipelines.length) lines.push(t('schemas.panel.impactPipelines', { names: usage.pipelines.join(', ') }))
+    if (usage.dashboards.length) lines.push(t('schemas.panel.impactDashboards', { names: usage.dashboards.join(', ') }))
+    if (usage.apiKeys.length) lines.push(t('schemas.panel.impactApiKeys', { names: usage.apiKeys.join(', ') }))
+    if (!usage.pipelines.length && !usage.dashboards.length && !usage.apiKeys.length) lines.push(t('schemas.panel.noImpact'))
+  }
+  return (
+    <div className="space-y-1 text-xs">
+      <ul className="list-inside list-disc font-mono">
+        {schema.lines.map((l) => (
+          <li key={l}>{l}</li>
+        ))}
+      </ul>
+      {lines.map((l) => (
+        <p key={l} className="text-muted-foreground">{l}</p>
+      ))}
+    </div>
   )
 }

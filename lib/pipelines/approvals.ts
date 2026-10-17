@@ -1,4 +1,5 @@
 import { destinationTarget, type PipelineDefinition } from './definition'
+import { describeOp, isDestructiveOp, type SchemaOp } from '@/lib/datasets/schema'
 
 /**
  * Publish approvals (GV-6). Client-safe and pure; covered by scripts/engine-tests.ts.
@@ -8,6 +9,11 @@ import { destinationTarget, type PipelineDefinition } from './definition'
  *   destructive  versions that replace a dataset, mark rows deleted or call an API that changes data need a second person
  *   always       every publish (and every promotion into this workspace) needs a second person
  * The requester can never approve their own request.
+ *
+ * Changes to a defined dataset schema follow the same policy (`schemaApprovalReasons`):
+ * renames, type changes and removals are destructive; under "always" every change
+ * waits except descriptions, classifications and reviews. Additions a run makes
+ * automatically and additive promotions never wait.
  */
 
 export const APPROVAL_POLICIES = ['off', 'destructive', 'always'] as const
@@ -15,8 +21,8 @@ export type ApprovalPolicy = (typeof APPROVAL_POLICIES)[number]
 
 export const APPROVAL_POLICY_INFO: Record<ApprovalPolicy, { label: string; description: string }> = {
   off: { label: 'Off', description: 'Editors publish directly.' },
-  destructive: { label: 'Destructive changes', description: 'A second person approves versions that replace a dataset or mark rows deleted.' },
-  always: { label: 'Every publish', description: 'A second person approves every version before it runs, including promotions into this workspace.' },
+  destructive: { label: 'Destructive changes', description: 'A second person approves versions that replace a dataset or mark rows deleted, and schema renames, type changes and removals.' },
+  always: { label: 'Every publish', description: 'A second person approves every version before it runs, including promotions into this workspace, and every schema change except descriptions.' },
 }
 
 export const APPROVAL_STATUSES = ['pending', 'approved', 'rejected', 'cancelled', 'superseded'] as const
@@ -46,4 +52,16 @@ export function approvalReasons(policy: ApprovalPolicy, def: PipelineDefinition,
   const destructive = destructiveWrites(def)
   if (policy === 'destructive') return destructive
   return [opts.promotedFrom ? `Promoted from ${opts.promotedFrom}` : 'Every publish needs approval in this workspace', ...destructive]
+}
+
+/** Schema changes that never wait: they describe a column and change no data or reader. */
+const SCHEMA_NOTES = new Set<SchemaOp['kind']>(['describe', 'review'])
+
+/** Why a change to a defined dataset schema needs approval under the policy; empty = apply right away. */
+export function schemaApprovalReasons(policy: ApprovalPolicy, datasetName: string, ops: SchemaOp[]): string[] {
+  if (policy === 'off') return []
+  const destructive = ops.filter(isDestructiveOp).map((o) => `${datasetName}: ${describeOp(o)}`)
+  if (policy === 'destructive') return destructive
+  if (ops.every((o) => SCHEMA_NOTES.has(o.kind))) return []
+  return ['Every schema change needs approval in this workspace', ...destructive]
 }

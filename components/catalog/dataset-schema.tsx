@@ -15,6 +15,8 @@ import { COLUMN_TYPES, type ColumnType } from '@/lib/pipelines/definition'
 import { SCHEMA_CLASSIFICATIONS, type SchemaClassification, type SchemaOp } from '@/lib/datasets/schema'
 import { DOMAIN_ENTITIES } from '@/lib/domain/model'
 import { changeDatasetSchema, defineDatasetSchema, getDatasetSchema, previewSchemaChange } from '@/lib/actions/schemas'
+import { cancelRequest } from '@/lib/actions/approvals'
+import Link from 'next/link'
 import { NativeSelect } from '@/components/pipelines/step-editors'
 
 type Data = Awaited<ReturnType<typeof getDatasetSchema>>
@@ -138,8 +140,10 @@ export function DatasetSchemaPanel({ datasetName, onChanged }: { datasetName: st
         if (u.apiKeys.length) lines.push(t('schemas.panel.impactApiKeys', { names: u.apiKeys.join(', ') }))
         if (!u.pipelines.length && !u.dashboards.length && !u.apiKeys.length) lines.push(t('schemas.panel.noImpact'))
       }
+      const waits = preview.approval.length > 0
+      if (waits) lines.push(t('schemas.panel.approvalNeeded'))
       const ok = await confirm({
-        title: title ?? t('schemas.panel.confirmTitle'),
+        title: title ?? (waits ? t('schemas.panel.requestTitle') : t('schemas.panel.confirmTitle')),
         description: (
           <span className="block space-y-1">
             {lines.map((l, i) => (
@@ -147,7 +151,7 @@ export function DatasetSchemaPanel({ datasetName, onChanged }: { datasetName: st
             ))}
           </span>
         ),
-        confirmLabel: t('schemas.panel.apply'),
+        confirmLabel: waits ? t('schemas.panel.requestApproval') : t('schemas.panel.apply'),
         tone: ops.some((o) => o.kind === 'remove' || o.kind === 'type') ? 'danger' : 'default',
       })
       if (!ok) return
@@ -155,8 +159,9 @@ export function DatasetSchemaPanel({ datasetName, onChanged }: { datasetName: st
     await run(async () => {
       const res = await changeDatasetSchema({ datasetName, ops })
       setPending(null)
+      if (res.pending) return t('schemas.panel.sentForApproval')
       const moved = [...res.moved.pipelines, ...res.moved.dashboards]
-      return `${t('schemas.panel.changed', { version: res.version })}${moved.length ? ` ${t('schemas.panel.moved', { names: moved.join(', ') })}` : ''}`
+      return `${t('schemas.panel.changed', { version: res.version ?? 0 })}${moved.length ? ` ${t('schemas.panel.moved', { names: moved.join(', ') })}` : ''}`
     })
   }
 
@@ -217,6 +222,12 @@ export function DatasetSchemaPanel({ datasetName, onChanged }: { datasetName: st
 
   const schema = data.schema
   const canEdit = data.canEdit
+  const waiting = data.pending
+  const cancelWaiting = async () => {
+    if (!waiting) return
+    const ok = await confirm({ title: t('schemas.panel.cancelTitle'), description: waiting.changes.join('; '), confirmLabel: t('schemas.panel.cancelRequest'), cancelLabel: t('schemas.panel.keepRequest'), tone: 'danger' })
+    if (ok) await run(async () => (await cancelRequest(waiting.id), t('schemas.panel.requestCancelled')))
+  }
   const keysDirty = keys !== null && keys.join() !== schema.keys.join()
 
   return (
@@ -232,6 +243,27 @@ export function DatasetSchemaPanel({ datasetName, onChanged }: { datasetName: st
           </Button>
         )}
       </div>
+
+      {waiting && (
+        <Notice tone="held" className="text-xs">
+          <p className="font-medium">{t('schemas.panel.waitingTitle', { who: waiting.mine ? t('schemas.panel.you') : waiting.requestedBy })}</p>
+          <ul className="mt-1 list-inside list-disc">
+            {waiting.changes.map((c) => (
+              <li key={c}>{c}</li>
+            ))}
+          </ul>
+          <div className="mt-2 flex flex-wrap items-center gap-3">
+            <Link href="/dashboard/pipelines" className="font-medium text-info-text underline-offset-2 hover:underline">
+              {t('schemas.panel.openApprovals')}
+            </Link>
+            {waiting.canCancel && (
+              <Button size="sm" variant="outline" disabled={busy} onClick={() => void cancelWaiting()}>
+                {t('schemas.panel.cancelRequest')}
+              </Button>
+            )}
+          </div>
+        </Notice>
+      )}
 
       <label className="flex items-start gap-2 text-sm">
         <input type="checkbox" className="mt-0.5 size-4 accent-primary" checked={schema.autoAdd} disabled={!canEdit || busy} onChange={(e) => void change([{ kind: 'autoAdd', on: e.target.checked }])} />
