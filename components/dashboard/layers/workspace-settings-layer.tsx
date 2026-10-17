@@ -27,6 +27,7 @@ import { SETTINGS_TABS, SETTINGS_TAB_PERMISSION, settingsHref, type SettingsTab 
 import { useCan, useWorkspace } from '@/components/workspace/workspace-context'
 import { usePrefs } from '@/components/i18n/i18n-provider'
 import { PageHeader } from '@/components/dashboard/page-header'
+import { useHashTarget } from '@/components/dashboard/url-intents'
 import { SettingsPanel, nativeSelectClass } from '@/components/workspace/settings-panel'
 import { AuditLog } from '@/components/workspace/audit-log'
 import { AccountSecurity } from '@/components/workspace/account-security'
@@ -210,6 +211,7 @@ function MembersSettings() {
   }, [load])
 
   const date = (d: Date | string) => formatDateTime(d, { dateStyle: 'medium', timeStyle: undefined })
+  useHashTarget(members !== null)
 
   return (
     <>
@@ -310,7 +312,7 @@ function MembersSettings() {
       </SettingsPanel>
 
       {isAdmin && (
-        <SettingsPanel title={t('settings.inviteTitle')} description={t('settings.inviteHelp')}>
+        <SettingsPanel id="invite" title={t('settings.inviteTitle')} description={t('settings.inviteHelp')}>
           <form
             className="flex flex-wrap gap-2"
             onSubmit={(e) => {

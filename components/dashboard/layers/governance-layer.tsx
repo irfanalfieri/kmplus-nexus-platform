@@ -11,6 +11,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { useConfirm } from '@/components/ui/dialog'
 import { Table, TBody, THead, Td, Th, Tr } from '@/components/ui/data-table'
 import { PageHeader } from '@/components/dashboard/page-header'
+import { useHashTarget, useUrlIntents } from '@/components/dashboard/url-intents'
 import { nativeSelectClass } from '@/components/workspace/settings-panel'
 import { usePrefs, useT } from '@/components/i18n/i18n-provider'
 import type { Translate } from '@/lib/i18n/translate'
@@ -72,6 +73,7 @@ export default function GovernanceLayer() {
   }, [load])
 
   const dataset = data?.datasets.find((d) => d.name === selected) ?? null
+  useHashTarget(data !== null)
 
   return (
     <div className="space-y-6">
@@ -95,7 +97,7 @@ export default function GovernanceLayer() {
         <>
           <Controls data={data} />
 
-          <section data-tour="governance-policies" className="rounded-lg border border-border bg-card p-5" aria-labelledby="gov-policies">
+          <section id="policies" data-tour="governance-policies" className="scroll-mt-6 rounded-lg border border-border bg-card p-5" aria-labelledby="gov-policies">
             <div className="mb-1 flex items-center gap-2">
               <LockKeyhole className="h-4 w-4 text-muted-foreground" aria-hidden />
               <h2 id="gov-policies" className="text-base font-semibold">{t('insights.governance.policiesTitle')}</h2>
@@ -205,35 +207,38 @@ function Controls({ data }: { data: Overview }) {
       action: { label: t('insights.governance.controls.rolesLink'), tab: 'settings/members' },
     },
   ]
+  // One board panel, one row per control (DESIGN.md: lines and tables, never a grid of KPI cards).
   return (
-    <section aria-labelledby="gov-controls" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-      <h2 id="gov-controls" className="sr-only">
+    <section aria-labelledby="gov-controls" className="rounded-lg border border-border bg-card">
+      <h2 id="gov-controls" className="border-b border-border px-4 py-3 text-base font-semibold">
         {t('insights.governance.controls.title')}
       </h2>
-      {tiles.map((tile) => {
-        const Icon = tile.icon
-        return (
-          <div key={tile.key} className="rounded-lg border border-border bg-card p-4">
-            <div className="flex items-start justify-between gap-2">
-              <h3 className="flex items-center gap-2 text-sm font-normal text-muted-foreground">
-                <Icon className="h-4 w-4" aria-hidden /> {tile.label}
-              </h3>
+      <ul className="divide-y divide-border">
+        {tiles.map((tile) => {
+          const Icon = tile.icon
+          return (
+            <li key={tile.key} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 px-4 py-3 md:grid-cols-[minmax(12rem,16rem)_minmax(10rem,14rem)_minmax(0,1fr)_6.5rem_7rem]">
+              <span className="flex items-center gap-2 text-sm font-medium">
+                <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden /> {tile.label}
+              </span>
+              <span className="order-3 font-mono text-sm tabular-nums md:order-none">{tile.value}</span>
+              <span className="order-4 col-span-2 text-xs text-muted-foreground md:order-none md:col-span-1">{tile.hint}</span>
               {tile.ok ? (
-                <span className="flex items-center gap-1 text-xs font-medium text-live-text"><CheckCircle2 className="h-3.5 w-3.5 text-live" aria-hidden /> {t('insights.governance.controls.ok')}</span>
+                <span className="flex items-center gap-1.5 justify-self-end text-xs font-medium text-live-text md:justify-self-start"><CheckCircle2 className="size-3.5 text-live" aria-hidden /> {t('insights.governance.controls.ok')}</span>
               ) : (
-                <span className="flex items-center gap-1 text-xs font-medium text-warning-text"><AlertTriangle className="h-3.5 w-3.5 text-warning" aria-hidden /> {t('insights.governance.controls.attention')}</span>
+                <span className="flex items-center gap-1.5 justify-self-end text-xs font-medium text-warning-text md:justify-self-start"><AlertTriangle className="size-3.5 text-warning" aria-hidden /> {t('insights.governance.controls.attention')}</span>
               )}
-            </div>
-            <div className="mt-2 font-mono text-xl font-semibold tabular-nums">{tile.value}</div>
-            <div className="mt-1 text-xs text-muted-foreground">{tile.hint}</div>
-            {tile.action && (
-              <Link href={`/dashboard/${tile.action.tab}`} className={cn('mt-2 inline-block rounded-sm text-xs font-medium text-info-text underline-offset-4 hover:underline', focusRing)}>
-                {tile.action.label} →
-              </Link>
-            )}
-          </div>
-        )
-      })}
+              <span className="order-5 col-span-2 md:order-none md:col-span-1 md:justify-self-end">
+                {tile.action && (
+                  <Link href={`/dashboard/${tile.action.tab}`} className={cn('inline-flex min-h-8 items-center rounded-sm text-xs font-medium text-info-text underline-offset-4 hover:underline', focusRing)}>
+                    {tile.action.label} →
+                  </Link>
+                )}
+              </span>
+            </li>
+          )
+        })}
+      </ul>
     </section>
   )
 }
@@ -351,7 +356,7 @@ function PolicyEditor({ dataset, canManage, onSaved }: { dataset: Dataset; canMa
                 <Tr key={col.name}>
                   <Td className="py-2">
                     <span className="font-mono text-xs">{col.name}</span> <span className="font-mono text-xs text-muted-foreground">{col.type}</span>
-                    {suggested && p.mask !== 'none' && <Badge variant="outline" className="ml-2 text-[10px]">{t('insights.governance.policy.suggested')}</Badge>}
+                    {suggested && p.mask !== 'none' && <Badge variant="outline" className="ml-2 text-[11px]">{t('insights.governance.policy.suggested')}</Badge>}
                   </Td>
                   <Td className="py-2">
                     <select
@@ -541,7 +546,7 @@ function Erasure({ onDone }: { onDone: () => void }) {
   }
 
   return (
-    <section className="rounded-lg border border-border bg-card p-5" aria-labelledby="gov-erasure">
+    <section id="erasure" className="scroll-mt-6 rounded-lg border border-border bg-card p-5" aria-labelledby="gov-erasure">
       {confirmEl}
       <div className="mb-1 flex items-center gap-2">
         <Eraser className="h-4 w-4 text-muted-foreground" aria-hidden />

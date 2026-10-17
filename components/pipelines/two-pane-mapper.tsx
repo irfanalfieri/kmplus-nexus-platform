@@ -119,8 +119,8 @@ export function TwoPaneMapper({ step, columns, options, onApply, onClose }: { st
                   >
                     <GripVertical className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
                     <span className="min-w-0 flex-1 truncate font-mono">{c.name}</span>
-                    <span className="font-mono text-[10px] text-muted-foreground">{c.type}</span>
-                    {n > 0 && <span className="rounded-sm bg-live-soft px-1 text-[10px] text-live-text">{n > 1 ? `×${n}` : '✓'}</span>}
+                    <span className="font-mono text-[11px] text-muted-foreground">{c.type}</span>
+                    {n > 0 && <span className="rounded-sm bg-live-soft px-1 text-[11px] text-live-text">{n > 1 ? `×${n}` : '✓'}</span>}
                   </button>
                 </li>
               )
@@ -158,8 +158,8 @@ export function TwoPaneMapper({ step, columns, options, onApply, onClose }: { st
                 <span className={cn('min-w-0 flex-1 truncate font-mono', !r.from && 'text-muted-foreground')}>{r.from || t('steps.map.mapper.dropHere')}</span>
                 <ArrowRight className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
                 <span className="min-w-0 flex-1 truncate font-mono font-medium">{r.to}</span>
-                <span className="font-mono text-[10px] text-muted-foreground">{r.type}</span>
-                {r.transforms.length > 0 && <span className="text-[10px] text-muted-foreground">{t('steps.map.mapper.transforms', { count: r.transforms.length })}</span>}
+                <span className="font-mono text-[11px] text-muted-foreground">{r.type}</span>
+                {r.transforms.length > 0 && <span className="text-[11px] text-muted-foreground">{t('steps.map.mapper.transforms', { count: r.transforms.length })}</span>}
                 {picked && (
                   <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" onClick={() => fill(r.to, picked)}>
                     {t('steps.map.mapper.use')}

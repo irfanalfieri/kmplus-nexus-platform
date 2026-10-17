@@ -11,6 +11,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { useConfirm } from '@/components/ui/dialog'
 import { Table, TBody, THead, Td, Th, Tr } from '@/components/ui/data-table'
 import { PageHeader } from '@/components/dashboard/page-header'
+import { useHashTarget, useUrlIntents } from '@/components/dashboard/url-intents'
 import { usePrefs, useT } from '@/components/i18n/i18n-provider'
 import type { Translate } from '@/lib/i18n/translate'
 import { insights } from '@/lib/i18n/messages/en/insights'
@@ -91,6 +92,18 @@ export default function CatalogLayer() {
   )
   const selected = data?.items.find((i) => i.key === selectedKey) ?? null
 
+  // Deep links: ?item=dataset:<name> (Go to's records), ?new, ?ask.
+  useUrlIntents(data !== null, {
+    item: (key) => {
+      if (!data?.items.some((i) => i.key === key)) return
+      setKind('all')
+      setQuery('')
+      setSelectedKey(key)
+    },
+    new: () => data?.canEdit && setCreating(true),
+    ask: () => window.setTimeout(() => document.querySelector<HTMLInputElement>('#catalog-ask input, #catalog-ask textarea')?.focus(), 80),
+  })
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -131,13 +144,15 @@ export default function CatalogLayer() {
       </div>
 
       {data && data.items.length > 0 && (
-        <AiCatalogAsk
-          onOpen={(key) => {
-            setKind('all')
-            setQuery('')
-            setSelectedKey(key)
-          }}
-        />
+        <div id="catalog-ask">
+          <AiCatalogAsk
+            onOpen={(key) => {
+              setKind('all')
+              setQuery('')
+              setSelectedKey(key)
+            }}
+          />
+        </div>
       )}
 
       {!data ? (
@@ -194,7 +209,7 @@ export default function CatalogLayer() {
                   {i.tags.length > 0 && (
                     <div className="mt-1 flex flex-wrap gap-1">
                       {i.tags.map((tag) => (
-                        <Badge key={tag} variant="secondary" className="font-mono text-[10px]">#{tag}</Badge>
+                        <Badge key={tag} variant="secondary" className="font-mono text-[11px]">#{tag}</Badge>
                       ))}
                     </div>
                   )}

@@ -295,7 +295,7 @@ export function DatasetSchemaPanel({ datasetName, onChanged }: { datasetName: st
                     {isKey && <KeyRound className="mr-1 inline size-3 text-info-text" aria-label={t('schemas.panel.keys')} />}
                     {c.name}
                     {c.autoAdded && !c.reviewed && (
-                      <span className="ml-1 rounded-sm bg-warning-soft px-1 font-sans text-[10px] text-warning-text">{t('schemas.panel.autoAdded')}</span>
+                      <span className="ml-1 rounded-sm bg-warning-soft px-1 font-sans text-[11px] text-warning-text">{t('schemas.panel.autoAdded')}</span>
                     )}
                   </Td>
                   <Td className="py-1 font-mono text-xs text-muted-foreground">{c.type}</Td>
@@ -322,7 +322,7 @@ export function DatasetSchemaPanel({ datasetName, onChanged }: { datasetName: st
                   </Td>
                   <Td className="py-1 text-xs">
                     {writers.length ? writers.join(', ') : <span className="text-muted-foreground">{data.owners.byName.length ? '—' : t('schemas.panel.nobody')}</span>}
-                    {writers.length > 1 && <span className="block text-[10px] text-warning-text">{t('schemas.panel.lastWriterWins')}</span>}
+                    {writers.length > 1 && <span className="block text-[11px] text-warning-text">{t('schemas.panel.lastWriterWins')}</span>}
                   </Td>
                   {canEdit && (
                     <Td className="py-1 text-right">

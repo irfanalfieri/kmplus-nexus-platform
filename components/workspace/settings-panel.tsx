@@ -2,9 +2,9 @@ import * as React from 'react'
 import { cn } from '@/lib/utils'
 
 /** A settings panel: flat plate on the board with its own h2. */
-export function SettingsPanel({ title, description, children, className }: { title: React.ReactNode; description?: React.ReactNode; children: React.ReactNode; className?: string }) {
+export function SettingsPanel({ id, title, description, children, className }: { id?: string; title: React.ReactNode; description?: React.ReactNode; children: React.ReactNode; className?: string }) {
   return (
-    <section className={cn('rounded-lg border border-border bg-card p-5', className)}>
+    <section id={id} className={cn('scroll-mt-6 rounded-lg border border-border bg-card p-5', className)}>
       <h2 className="text-base font-semibold">{title}</h2>
       {description && <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>}
       <div className="mt-4">{children}</div>

@@ -50,7 +50,7 @@ export const helpEn: HelpContent = {
               kind: 'list',
               items: [
                 '**The rail** on the left groups screens by job: Build, Operate, Govern, Analyze and Workspace. Below 1024 px it opens from the menu button.',
-                '**Go to… (Ctrl K)** in the top bar jumps to any screen or settings section by name.',
+                '**Go to… (Ctrl K)** in the top bar finds anything by name: a screen, a settings tab, a feature (type “maintenance”, “import”, “masking” or “erasure”), a pipeline, data source, dataset, dashboard or rule, and the theme and language. Words in English or Indonesian both work. Features open through their own links, so you can also bookmark or share them (e.g. `/dashboard/pipelines?maintenance=1`).',
                 '**Guide me** starts the guided tour; **Help & FAQ** opens this guide.',
                 '**The bell** lists failed runs and held rows; the **account menu** switches theme and language and signs you out.',
                 '**The workspace switcher** under the logo moves between your workspaces and environments.',

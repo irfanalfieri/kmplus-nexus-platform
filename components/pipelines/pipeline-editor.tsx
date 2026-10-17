@@ -341,7 +341,7 @@ function NexusNode({ data, selected }: NodeProps<FlowNode<NodeData>>) {
         <Icon className={cn('size-4 shrink-0', KIND_ICON[node.type])} aria-hidden />
         <span className="truncate text-sm font-medium">{kindTitle(node.type, t)}</span>
         {data.driver && (
-          <Badge variant="outline" className="ml-auto rounded-sm px-1 py-0 font-mono text-[10px] uppercase">
+          <Badge variant="outline" className="ml-auto rounded-sm px-1 py-0 font-mono text-[11px] uppercase">
             {t('editor.canvas.driver')}
           </Badge>
         )}

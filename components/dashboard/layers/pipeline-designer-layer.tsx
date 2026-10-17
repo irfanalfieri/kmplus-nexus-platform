@@ -35,6 +35,7 @@ import { listPromotionStatus } from '@/lib/actions/environments'
 import { ENVIRONMENT_INFO, isEnvironment } from '@/lib/pipelines/promote'
 
 import { ends, lineState, type PipelineRow } from '@/components/pipelines/line-state'
+import { useHashTarget, useUrlIntents } from '@/components/dashboard/url-intents'
 
 function toEditable(p: PipelineRow): EditablePipeline {
   // Edit the unpublished draft when there is one, else the published definition.
@@ -237,6 +238,28 @@ export default function PipelineDesignerLayer() {
     }
   }
 
+  // Deep links (Go to, Help, notifications): ?new, ?import, ?maintenance, ?approvals, ?edit=<id>, ?history=<id>, #datasets.
+  const reveal = (id: string) => window.setTimeout(() => document.getElementById(id)?.scrollIntoView({ block: 'start' }), 80)
+  useUrlIntents(!loading, {
+    new: () => editable && setPicking(true),
+    import: () => editable && setImporting(true),
+    maintenance: () => setMaintenance(true),
+    approvals: () => {
+      setApprovalHistory(true)
+      reveal('approvals')
+    },
+    edit: (id) => {
+      const p = items.find((x) => x.id === id)
+      // People who can't edit get the pipeline's run history instead.
+      if (p) (canEdit ? setEditing(toEditable(p)) : setHistoryFor(p))
+    },
+    history: (id) => {
+      const p = items.find((x) => x.id === id)
+      if (p) setHistoryFor(p)
+    },
+  })
+  useHashTarget(!loading)
+
   const newButton = editable && (
     <Button data-tour="pipelines-new" onClick={() => setPicking(true)} disabled={loading}>
       <Plus /> {t('pipelines.new')}
@@ -350,7 +373,9 @@ export default function PipelineDesignerLayer() {
         )}
 
         <ActiveMaintenanceNotice refreshKey={maintenanceKey} />
-        <ApprovalsPanel refreshKey={approvalsKey} onDecided={() => void load()} history={approvalHistory} onHistoryChange={setApprovalHistory} />
+        <div id="approvals" className="scroll-mt-6">
+          <ApprovalsPanel refreshKey={approvalsKey} onDecided={() => void load()} history={approvalHistory} onHistoryChange={setApprovalHistory} />
+        </div>
 
         <section data-tour="pipelines-board" aria-labelledby="pipelines-board" className="rounded-lg border border-border bg-card">
           <h2 id="pipelines-board" className="sr-only">
@@ -394,14 +419,14 @@ export default function PipelineDesignerLayer() {
           ) : visible.length === 0 ? (
             <EmptyState compact title={t('pipelines.noMatch', { query })} />
           ) : (
-            <Table label={t('pages.pipelines.title')} className="min-w-[760px]">
+            <Table label={t('pages.pipelines.title')} className="md:min-w-[760px]">
               <THead>
                 <tr>
-                  <Th className="min-w-56">{t('pipelines.colPipeline')}</Th>
+                  <Th className="min-w-44 sm:min-w-56">{t('pipelines.colPipeline')}</Th>
                   <Th className="hidden xl:table-cell">{t('pipelines.colLine')}</Th>
                   <Th>{t('pipelines.colState')}</Th>
-                  <Th>{t('pipelines.colLastRun')}</Th>
-                  <Th className="text-right">{t('pipelines.colRows')}</Th>
+                  <Th className="hidden sm:table-cell">{t('pipelines.colLastRun')}</Th>
+                  <Th className="hidden text-right md:table-cell">{t('pipelines.colRows')}</Th>
                   <Th className="text-right">
                     <span className="sr-only">{t('common.edit')}</span>
                   </Th>
@@ -439,25 +464,28 @@ export default function PipelineDesignerLayer() {
                             {t('pipelines.incremental', { column: incremental.watermarkColumn ?? '' })} · {p.syncPosition ? t('pipelines.syncedTo', { position: p.syncPosition }) : t('pipelines.firstRunAll')}
                           </div>
                         )}
-                        <FlowLine className="mt-1.5 max-w-sm xl:hidden" from={from} to={to} state={line.state} srLabel={t('pipelines.flowLabel', { from: table ? `${from} · ${table}` : from, to })} />
+                        {/* w-0 + min-w-full: the line truncates its names instead of widening the column (phones). */}
+                        <div className="mt-1.5 w-0 min-w-full xl:hidden">
+                          <FlowLine className="sm:max-w-sm" from={from} to={to} state={line.state} srLabel={t('pipelines.flowLabel', { from: table ? `${from} · ${table}` : from, to })} />
+                        </div>
                       </Td>
                       <Td className="hidden xl:table-cell">
                         <FlowLine className="max-w-md" from={from} to={to} state={line.state} srLabel={t('pipelines.flowLabel', { from: table ? `${from} · ${table}` : from, to })} />
                       </Td>
                       <Td>
                         {line.state === 'tripped' && p.heldRows > 0 && p.lastRunStatus !== 'failed' ? (
-                          <Link href="/dashboard/quality" className="rounded-sm hover:underline">
+                          <Link href={`/dashboard/quality?pipeline=${encodeURIComponent(p.id)}`} className="rounded-sm hover:underline">
                             <StateMark state="tripped">{line.label}</StateMark>
                           </Link>
                         ) : (
                           <StateMark state={line.state}>{line.label}</StateMark>
                         )}
                       </Td>
-                      <Td className="font-mono text-xs whitespace-nowrap text-muted-foreground">
+                      <Td className="hidden font-mono text-xs whitespace-nowrap text-muted-foreground sm:table-cell">
                         {when(p.lastRunAt)}
                         {p.lastRun?.duration != null && <div>{duration(p.lastRun.duration)}</div>}
                       </Td>
-                      <Td className="text-right font-mono text-xs whitespace-nowrap">
+                      <Td className="hidden text-right font-mono text-xs whitespace-nowrap md:table-cell">
                         {p.lastRun ? (
                           <>
                             {formatNumber(p.lastRun.written ?? 0)} / {formatNumber(p.lastRun.read ?? 0)}
@@ -484,7 +512,7 @@ export default function PipelineDesignerLayer() {
                               aria-label={t('pipelines.runFor', { name: p.name })}
                             >
                               {running === p.id ? <Loader2 className="animate-spin" /> : <Play />}
-                              {running === p.id ? t('pipelines.running') : t('pipelines.run')}
+                              <span className="hidden sm:inline">{running === p.id ? t('pipelines.running') : t('pipelines.run')}</span>
                             </Button>
                           )}
                           <Menu>
@@ -554,7 +582,7 @@ export default function PipelineDesignerLayer() {
         </section>
 
         {options.datasets.length > 0 && (
-          <section aria-labelledby="datasets-title" className="rounded-lg border border-border bg-card">
+          <section id="datasets" aria-labelledby="datasets-title" className="scroll-mt-6 rounded-lg border border-border bg-card">
             <div className="border-b border-border px-4 py-3">
               <h2 id="datasets-title" className="text-base font-semibold">
                 {t('pipelines.datasetsTitle')}

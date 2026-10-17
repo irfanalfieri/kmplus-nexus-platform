@@ -12,6 +12,7 @@ import { Table, TBody, Td, Th, THead, Tr } from '@/components/ui/data-table'
 import { useConfirm } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/toast'
 import { PageHeader } from '@/components/dashboard/page-header'
+import { useHashTarget, useUrlIntents } from '@/components/dashboard/url-intents'
 import { usePrefs } from '@/components/i18n/i18n-provider'
 import { getMonitoringOverview, type PipelineHealth } from '@/lib/actions/monitoring'
 import { cancelPipelineRun, getDatasetPreview, retryPipelineRun } from '@/lib/actions/pipelines'
@@ -187,6 +188,7 @@ export default function SchedulerMonitoringLayer() {
   }
 
   const versionOf = (id: string) => data?.health.find((h) => h.id === id)?.version ?? 1
+  useHashTarget(data !== null)
 
   return (
     <div className="space-y-6">
@@ -303,7 +305,7 @@ export default function SchedulerMonitoringLayer() {
             </section>
           )}
 
-          <section className="rounded-lg border border-border bg-card" aria-labelledby="mon-runs">
+          <section id="runs" className="scroll-mt-6 rounded-lg border border-border bg-card" aria-labelledby="mon-runs">
             <h2 id="mon-runs" className="px-5 pt-5 pb-3 text-base font-semibold">
               {t('ops.monitoring.runs.title')}
             </h2>
@@ -496,7 +498,7 @@ function RunTrend({ trend }: { trend: Overview['trend'] }) {
         </Table>
       ) : (
         <div className="relative mt-4 flex gap-2" role="img" aria-label={t('ops.monitoring.trend.aria', { days: trend.map((d) => t('ops.monitoring.trend.ariaDay', { day: dayLabel(d.day), success: d.success, partial: d.partial, failed: d.failed })).join('; ') })}>
-          <div className="flex flex-col justify-between text-right font-mono text-[10px] text-muted-foreground tabular-nums" style={{ height: H }}>
+          <div className="flex flex-col justify-between text-right font-mono text-[11px] text-muted-foreground tabular-nums" style={{ height: H }}>
             {[...ticks].reverse().map((tick) => (
               <span key={tick}>{tick}</span>
             ))}
@@ -546,7 +548,7 @@ function RunTrend({ trend }: { trend: Overview['trend'] }) {
             </div>
             <div className="mt-1 flex gap-2">
               {trend.map((d) => (
-                <span key={d.day} className="flex-1 text-center text-[10px] text-muted-foreground">
+                <span key={d.day} className="flex-1 text-center text-[11px] text-muted-foreground">
                   {dayLabel(d.day)}
                 </span>
               ))}

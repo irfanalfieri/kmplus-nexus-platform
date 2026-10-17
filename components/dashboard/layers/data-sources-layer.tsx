@@ -3,7 +3,7 @@
 import { isSecretManager, secretRef } from '@/lib/secrets/types'
 import { AiConnectorSuggest } from '@/components/ai/ai-connector-suggest'
 import { suggestConnector } from '@/lib/actions/ai'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Activity, Database, Eye, KeyRound, Layers, Loader2, MoreHorizontal, Pencil, Plus, RefreshCw, Save, Tag, Trash2, Upload } from 'lucide-react'
 import EditCredentialsDialog from '@/components/connectors/edit-credentials-dialog'
@@ -21,6 +21,7 @@ import { SourceHealthDialog } from '@/components/data-sources/source-health'
 import { EnvironmentMarks, EnvironmentsDialog, OwnershipDialog, memberName, type Member, type SourceEnvironments } from '@/components/data-sources/source-ownership'
 import { matchesSourceFilter, tagCounts, tagsOf, type SourceFilter } from '@/lib/connectors/ownership'
 import { listMembers } from '@/lib/actions/workspaces'
+import { useUrlIntents } from '@/components/dashboard/url-intents'
 import { useToast } from '@/components/ui/toast'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import ConnectorCredentialForm from '@/components/connectors/connector-credential-form'
@@ -175,6 +176,28 @@ export default function DataSourcesLayer() {
   const me = members.find((m) => m.isYou)?.userId ?? ''
   const ownerOf = (s: DataSourceRow) => (s.ownerId ? (memberName(members.find((m) => m.userId === s.ownerId)) ?? t('sources.formerMember')) : null)
   const hasEnvs = Boolean(envs?.environments.length)
+
+  // Deep links: ?add=source|destination; ?source=<id> (marks the row) with &open=owner|environments|health|credentials.
+  const [focusId, setFocusId] = useState<string | null>(null)
+  const openParam = useRef('')
+  useUrlIntents(!loading, {
+    open: (v) => {
+      openParam.current = v
+    },
+    add: (v) => canManage && setAdding(v === 'destination' ? 'destination' : 'source'),
+    source: (id) => {
+      const s = sources.find((x) => x.id === id)
+      if (!s) return
+      setFilter(NO_FILTER)
+      setFocusId(s.id)
+      window.setTimeout(() => document.getElementById(`source-${s.id}`)?.scrollIntoView({ block: 'center' }), 80)
+      const open = openParam.current
+      if (open === 'environments' && hasEnvs) setEnvFor(s)
+      else if (open === 'health') setHealthFor(s.id)
+      else if (canManage && open === 'owner') setOwnershipFor(s)
+      else if (canManage && open === 'credentials' && s.sourceType !== 'file') setCredentialsFor({ id: s.id, name: s.name })
+    },
+  })
 
   return (
     <div>
@@ -383,15 +406,15 @@ export default function DataSourcesLayer() {
             shown.length === 0 ? (
             <p className="p-8 text-center text-sm text-muted-foreground">{t('sources.noneMatch')}</p>
             ) : (
-            <Table label={t('pages.sources.title')} className="min-w-[760px]">
+            <Table label={t('pages.sources.title')} className="md:min-w-[760px]">
               <THead>
                 <tr>
                   <Th>{t('sources.colName')}</Th>
-                  <Th>{t('sources.colRole')}</Th>
+                  <Th className="hidden md:table-cell">{t('sources.colRole')}</Th>
                   <Th>{t('sources.colStatus')}</Th>
-                  <Th className="text-right">{t('sources.colTables')}</Th>
-                  <Th>{t('sources.colChecked')}</Th>
-                  {hasEnvs && <Th>{t('sources.colEnvironments')}</Th>}
+                  <Th className="hidden text-right lg:table-cell">{t('sources.colTables')}</Th>
+                  <Th className="hidden sm:table-cell">{t('sources.colChecked')}</Th>
+                  {hasEnvs && <Th className="hidden md:table-cell">{t('sources.colEnvironments')}</Th>}
                   <Th className="text-right">
                     <span className="sr-only">{t('common.edit')}</span>
                   </Th>
@@ -403,8 +426,8 @@ export default function DataSourcesLayer() {
                   const connected = source.status === 'connected'
                   const scan = source.config?.schemaScan as SchemaScanResult | undefined
                   return (
-                    <Tr key={source.id}>
-                      <Td>
+                    <Tr key={source.id} id={`source-${source.id}`} selected={focusId === source.id} className="scroll-mt-24">
+                      <Td className="min-w-40">
                         <div className="font-medium">{source.name}</div>
                         <div className="text-xs text-muted-foreground">{getConnectorDefinition(source.sourceType)?.name ?? source.sourceType.toUpperCase()}</div>
                         <div className="mt-0.5 text-xs text-muted-foreground">{ownerOf(source) ? t('sources.ownerLine', { name: ownerOf(source)! }) : t('sources.noOwner')}</div>
@@ -420,7 +443,7 @@ export default function DataSourcesLayer() {
                           </ul>
                         )}
                       </Td>
-                      <Td>
+                      <Td className="hidden md:table-cell">
                         {isSecretManager(source.sourceType) ? (
                           // Secrets managers supply credentials to other sources; they are never read or written as data.
                           <span title={t('sources.secretsHint', { name: source.name })}>{t('sources.roleSecrets')}</span>
@@ -454,10 +477,10 @@ export default function DataSourcesLayer() {
                           </button>
                         )}
                       </Td>
-                      <Td className="text-right font-mono text-xs">{scan && !isSecretManager(source.sourceType) ? scan.tables.length : '—'}</Td>
-                      <Td className="font-mono text-xs text-muted-foreground">{ago(source.lastConnected)}</Td>
+                      <Td className="hidden text-right font-mono text-xs lg:table-cell">{scan && !isSecretManager(source.sourceType) ? scan.tables.length : '—'}</Td>
+                      <Td className="hidden font-mono text-xs text-muted-foreground sm:table-cell">{ago(source.lastConnected)}</Td>
                       {hasEnvs && envs && (
-                        <Td>
+                        <Td className="hidden md:table-cell">
                           <button type="button" onClick={() => setEnvFor(source)} className="rounded-sm text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring" aria-label={t('sources.environmentsTitle', { name: source.name })}>
                             <EnvironmentMarks rows={envs.sources[source.id] ?? []} environments={envs.environments} />
                           </button>
@@ -467,7 +490,7 @@ export default function DataSourcesLayer() {
                         <div className="flex items-center justify-end gap-1.5">
                           {canManage && source.sourceType === 'file' && (
                             <Button size="sm" variant="outline" onClick={() => setUploadFor(source.id)} aria-label={t('sources.uploadFor', { name: source.name })}>
-                              <Upload /> {t('sources.upload')}
+                              <Upload /> <span className="hidden lg:inline">{t('sources.upload')}</span>
                             </Button>
                           )}
                           {connected && canPreview && !isSecretManager(source.sourceType) && (
@@ -480,7 +503,7 @@ export default function DataSourcesLayer() {
                                 setExplorerOpen(true)
                               }}
                             >
-                              <Eye /> {t('sources.browse')}
+                              <Eye /> <span className="hidden lg:inline">{t('sources.browse')}</span>
                             </Button>
                           )}
                           {canManage && (

@@ -74,7 +74,7 @@ export default function NotificationBell() {
       <Popover.Trigger render={<Button variant="ghost" size="icon" className="relative" aria-label={t('auth.bell.label', { count: unread })} />}>
         <Bell className="size-5" aria-hidden />
         {unread > 0 && (
-          <span aria-hidden className="absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-sm bg-danger px-1 font-mono text-[10px] font-semibold text-white dark:text-background">
+          <span aria-hidden className="absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-sm bg-danger px-1 font-mono text-[11px] font-semibold text-white dark:text-background">
             {unread > 99 ? '99+' : unread}
           </span>
         )}

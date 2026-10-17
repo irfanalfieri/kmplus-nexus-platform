@@ -103,11 +103,11 @@ export function SchemaMappingFields({ step, schema, columns, onChange }: { step:
                 <Tr key={c.name}>
                   <Td className="py-1 align-top">
                     <span className="font-mono text-xs">{c.name}</span>
-                    <span className="ml-1 font-mono text-[10px] text-muted-foreground">{c.type}</span>
+                    <span className="ml-1 font-mono text-[11px] text-muted-foreground">{c.type}</span>
                     {schema.keys.includes(c.name) ? (
-                      <span className="ml-1 text-[10px] font-medium text-info-text">{t('steps.destination.schema.key')}</span>
+                      <span className="ml-1 text-[11px] font-medium text-info-text">{t('steps.destination.schema.key')}</span>
                     ) : c.required ? (
-                      <span className="ml-1 text-[10px] font-medium text-warning-text">{t('steps.destination.schema.required')}</span>
+                      <span className="ml-1 text-[11px] font-medium text-warning-text">{t('steps.destination.schema.required')}</span>
                     ) : null}
                   </Td>
                   <Td className="py-1">

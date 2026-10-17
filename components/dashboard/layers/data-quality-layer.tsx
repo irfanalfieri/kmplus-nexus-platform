@@ -16,6 +16,7 @@ import { approveRows, bulkFix, dismissRows, fixRow, getQualityOverview, listQuar
 import { useCan } from '@/components/workspace/workspace-context'
 import { usePrefs } from '@/components/i18n/i18n-provider'
 import { PageHeader } from '@/components/dashboard/page-header'
+import { useHashTarget, useUrlIntents } from '@/components/dashboard/url-intents'
 import { nativeSelectClass } from '@/components/workspace/settings-panel'
 import type { MessageKey } from '@/lib/i18n/translate'
 import { localizeCheck } from '@/lib/pipelines/check-messages'
@@ -244,6 +245,14 @@ export default function DataQualityLayer() {
 
   const current = fixing !== null ? items[fixing] : null
   const status = VIEWS[view].status
+
+  // Deep links: ?view=approval, ?view=flag … (Go to, Overview's "Needs you").
+  useUrlIntents(true, {
+    view: (v) => {
+      if (v in VIEWS) setView(v as View)
+    },
+    pipeline: (id) => setPipelineId(id),
+  })
 
   return (
     <div>

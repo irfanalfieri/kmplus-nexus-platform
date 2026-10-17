@@ -66,7 +66,7 @@ function LineageCard({ data }: NodeProps<Node<Data>>) {
       )}
     >
       <Handle type="target" position={Position.Left} style={handleStyle} isConnectable={false} />
-      <div className="flex items-center gap-1.5 font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
+      <div className="flex items-center gap-1.5 font-mono text-[11px] tracking-wide text-muted-foreground uppercase">
         <Icon className="h-3 w-3" aria-hidden /> {kindLabel(t, node.kind)}
         {focus && <span className="ml-auto normal-case">{t('insights.lineage.thisItem')}</span>}
       </div>

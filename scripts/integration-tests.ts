@@ -72,6 +72,7 @@ import { dashboardResults, loadEmbed } from '@/lib/analytics/dashboards'
 import { proxy } from '../proxy'
 import { NextRequest } from 'next/server'
 import { listAuditLogs } from '@/lib/actions/audit'
+import { listFinderRecords } from '@/lib/actions/finder'
 import { processJobs, CHUNK_ROWS } from '@/lib/pipelines/jobs'
 import { deleteMaintenanceWindow, listMaintenanceWindows, saveMaintenanceWindow } from '@/lib/actions/maintenance'
 import { holdDuePipeline } from '@/lib/pipelines/maintenance-store'
@@ -2401,6 +2402,27 @@ async function main() {
       const { rows: exports } = await listAuditLogs({ action: 'EXPORT' })
       assert.ok(exports.some((e) => e.resourceId === sourceId))
       await unlinkEnvironment(stagingWs)
+    })
+
+    await test('Go to finder: record names of this workspace only, and only dashboards shared with the caller', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const { id: hidden } = await saveDashboard({ name: `${RUN} finder private`, description: '', widgets: [] })
+      await setDashboardSharing(hidden, { mode: 'restricted', roles: [], userIds: [] })
+      const mine = await listFinderRecords()
+      assert.ok(mine.pipelines.some((p) => p.name === `${RUN} employees`))
+      assert.ok(mine.sources.some((s) => s.id === sourceId && s.name === `${RUN} fixture`))
+      assert.ok(mine.datasets.includes(`${RUN}_employees`))
+      assert.ok(mine.dashboards.some((d) => d.id === hidden), 'admins see restricted dashboards')
+      setTestUser(viewer)
+      await switchWorkspace(adminWs)
+      assert.ok(!(await listFinderRecords()).dashboards.some((d) => d.id === hidden), 'a restricted dashboard stays hidden from others')
+      setTestUser(outsider)
+      const theirs = await listFinderRecords()
+      assert.ok(!theirs.pipelines.some((p) => p.name.startsWith(RUN)) && !theirs.datasets.some((d) => d.startsWith(RUN)), 'another workspace sees none of these names')
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      await deleteDashboard(hidden)
     })
 
     await test('SCIM: provision, group roles, deactivate (signed out, no SSO rejoin), delete; tokens are workspace-scoped', async () => {

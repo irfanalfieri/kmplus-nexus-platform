@@ -84,7 +84,7 @@ export const tour: Messages['tour'] = {
     },
     jump: {
       title: 'Pergi ke mana saja dengan Ctrl K',
-      body: 'Ketik nama layar atau bagian pengaturan mana pun untuk langsung menuju ke sana.',
+      body: 'Ketik yang Anda cari: layar, pengaturan, fitur seperti “jendela pemeliharaan” atau “hak penghapusan”, atau nama pipeline, sumber data, dataset, atau dasbor. Kata dalam Bahasa Indonesia maupun Inggris sama-sama bisa.',
     },
     finish: {
       title: 'Bantuan selalu tersedia',

@@ -9,6 +9,7 @@ import { Notice } from '@/components/ui/notice'
 import { EmptyState } from '@/components/ui/empty-state'
 import { useConfirm } from '@/components/ui/dialog'
 import { PageHeader } from '@/components/dashboard/page-header'
+import { useHashTarget, useUrlIntents } from '@/components/dashboard/url-intents'
 import { usePrefs } from '@/components/i18n/i18n-provider'
 import { cn } from '@/lib/utils'
 import { deleteDashboard, getAnalyticsDatasets, getDashboardData, getDashboardFilterOptions, listDashboards, saveDashboard } from '@/lib/actions/analytics'
@@ -185,6 +186,14 @@ export default function AnalyticsDashboardLayer() {
     if (ok) await act(() => persist(d, d.widgets.filter((x) => x.id !== w.id)))
   }
 
+  // Deep links: ?dashboard=<id> (Go to's records), ?new (focus the new dashboard's name).
+  useUrlIntents(list !== null, {
+    dashboard: (id) => {
+      if (list?.dashboards.some((d) => d.id === id)) setSelectedId(id)
+    },
+    new: () => window.setTimeout(() => document.getElementById('new-dashboard-name')?.focus(), 80),
+  })
+
   return (
     <div className="space-y-6">
       <PageHeader title={t('pages.analytics.title')} description={t('pages.analytics.description')} />
@@ -268,7 +277,7 @@ export default function AnalyticsDashboardLayer() {
             </ul>
             {list.canEdit && (
               <form onSubmit={create} className="space-y-2 rounded-lg border border-border bg-card p-3">
-                <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder={t('insights.analytics.newName')} aria-label={t('insights.analytics.newName')} required />
+                <Input id="new-dashboard-name" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder={t('insights.analytics.newName')} aria-label={t('insights.analytics.newName')} required />
                 <Button type="submit" size="sm" className="w-full" disabled={busy || !newName.trim()}>
                   <Plus className="mr-1 h-4 w-4" aria-hidden /> {t('insights.analytics.create')}
                 </Button>

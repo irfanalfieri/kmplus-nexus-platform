@@ -11,6 +11,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Modal, useConfirm } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/toast'
 import { PageHeader } from '@/components/dashboard/page-header'
+import { useHashTarget, useUrlIntents } from '@/components/dashboard/url-intents'
 import { usePrefs } from '@/components/i18n/i18n-provider'
 import { deleteRule, listRuleVersions, listRules, saveRule, testRule } from '@/lib/actions/rules'
 import { getBuilderOptions, listPipelines } from '@/lib/actions/pipelines'
@@ -109,6 +110,15 @@ export default function BusinessRulesLayer() {
       setError(err instanceof Error ? err.message : t('ops.rules.deleteFailed'))
     }
   }
+
+  // Deep links (Go to, Help): ?new, ?edit=<id>.
+  useUrlIntents(!loading, {
+    new: () => canEdit && setEditing(blankRule()),
+    edit: (id) => {
+      const r = rules.find((x) => x.id === id)
+      if (r?.body) setEditing({ id: r.id, name: r.name, description: r.description, body: r.body, changeNote: '' })
+    },
+  })
 
   return (
     <div className="space-y-5">

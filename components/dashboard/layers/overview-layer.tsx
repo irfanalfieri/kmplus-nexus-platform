@@ -94,16 +94,16 @@ export default function OverviewLayer() {
 
   // What needs a person, most urgent first. Each item names the thing and links to where it is fixed.
   const needs: { state: FlowState; text: string; href: string; action: MessageKey }[] = []
-  if (data.held.invalid) needs.push({ state: 'tripped', text: t('overview.needs.held', { count: formatNumber(data.held.invalid) }), href: '/dashboard/quality', action: 'overview.needs.review' })
-  if (data.held.approval) needs.push({ state: 'held', text: t('overview.needs.approvalRows', { count: formatNumber(data.held.approval) }), href: '/dashboard/quality', action: 'overview.needs.review' })
-  if (data.approvalsPending) needs.push({ state: 'held', text: t('overview.needs.approvals', { count: data.approvalsPending }), href: '/dashboard/pipelines', action: 'overview.needs.review' })
+  if (data.held.invalid) needs.push({ state: 'tripped', text: t('overview.needs.held', { count: formatNumber(data.held.invalid) }), href: '/dashboard/quality?view=invalid', action: 'overview.needs.review' })
+  if (data.held.approval) needs.push({ state: 'held', text: t('overview.needs.approvalRows', { count: formatNumber(data.held.approval) }), href: '/dashboard/quality?view=approval', action: 'overview.needs.review' })
+  if (data.approvalsPending) needs.push({ state: 'held', text: t('overview.needs.approvals', { count: data.approvalsPending }), href: '/dashboard/pipelines?approvals=1', action: 'overview.needs.review' })
   for (const a of data.attention) {
-    needs.push({ state: 'tripped', text: t(a.lastRunStatus === 'failed' ? 'overview.needs.failed' : 'overview.needs.partial', { name: a.name }), href: '/dashboard/monitoring', action: 'overview.needs.open' })
+    needs.push({ state: 'tripped', text: t(a.lastRunStatus === 'failed' ? 'overview.needs.failed' : 'overview.needs.partial', { name: a.name }), href: `/dashboard/pipelines?history=${encodeURIComponent(a.id)}`, action: 'overview.needs.open' })
   }
   for (const s of data.sourceList.filter((x) => x.status !== 'connected')) {
-    needs.push({ state: 'idle', text: t('overview.needs.source', { name: s.name }), href: '/dashboard/sources', action: 'overview.needs.check' })
+    needs.push({ state: 'idle', text: t('overview.needs.source', { name: s.name }), href: `/dashboard/sources?source=${encodeURIComponent(s.id)}&open=health`, action: 'overview.needs.check' })
   }
-  if (data.held.flag) needs.push({ state: 'paused', text: t('overview.needs.flagged', { count: formatNumber(data.held.flag) }), href: '/dashboard/quality', action: 'overview.needs.review' })
+  if (data.held.flag) needs.push({ state: 'paused', text: t('overview.needs.flagged', { count: formatNumber(data.held.flag) }), href: '/dashboard/quality?view=flag', action: 'overview.needs.review' })
 
   const setupLeft = data.checklist.filter((c) => !c.done).length
   const readout: { label: string; state?: FlowState }[] = [
@@ -164,7 +164,7 @@ export default function OverviewLayer() {
                 {lines.slice(0, LINES_SHOWN).map(({ p, from, table, to, line }) => (
                   <li key={p.id}>
                     <Link
-                      href="/dashboard/pipelines"
+                      href={p.heldRows > 0 ? `/dashboard/quality?pipeline=${encodeURIComponent(p.id)}` : `/dashboard/pipelines?history=${encodeURIComponent(p.id)}`}
                       className="grid gap-x-4 gap-y-1.5 px-4 py-3 outline-none hover:bg-muted/50 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring sm:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)_auto] sm:items-center"
                     >
                       <span className="min-w-0">

@@ -82,7 +82,7 @@ export const tour = {
     },
     jump: {
       title: 'Go anywhere with Ctrl K',
-      body: 'Type the name of any screen or settings section to jump straight to it.',
+      body: 'Type what you want: a screen, a setting, a feature such as “maintenance windows” or “erasure”, or the name of a pipeline, data source, dataset or dashboard. English and Indonesian words both work.',
     },
     finish: {
       title: 'Help is always here',

@@ -312,7 +312,7 @@ Corners are square-shouldered at 2px (`--radius: 0.125rem`). Tailwind's radius s
 
 ### Buttons
 Compact and squared, with the action named in words.
-- **Shape:** 2px corners, 32px tall (28px small, 36px large), with 10px horizontal padding and a 16px icon.
+- **Shape:** 2px corners, 32px tall (28px small, 36px large), with 10px horizontal padding and a 16px icon. On touch screens (`pointer: coarse`) buttons grow to 40px and icon buttons to 40×40, so row actions stay easy to hit.
 - **Primary:** KM+ Teal 60 with white ink. It darkens to 82% teal mixed with black on hover; in dark mode it is Teal 40 with Teal 100 ink and lightens on hover. Pressing nudges it down 1px.
 - **Outline:** a white panel fill with a Gray 50 stroke at 60%, and a muted fill on hover. Use it for every secondary and row action.
 - **Danger:** solid Tripped Red with white ink (Gray 100 ink in dark mode). Use it only as the confirm button of a destructive ConfirmDialog. `destructive` is the quiet 10% red tint variant.
@@ -346,6 +346,7 @@ Menus are popovers with a minimum width of 224px and 1px Rule, using the Raised 
 ### Navigation
 - **Rail:** the official KM+ logo (`KmLogo tone="onDark"`, 36px tall: white "KM PLUS" lettering with the teal rays) and "Nexus" in light 15px text, bottom-aligned, then the workspace plate, then the groups. Group headings use the mono Label style in Rail Muted, with a 16px Rail Muted icon and 14px Rail Ink text on each item. Hovered and current items take the Rail Accent fill. The current item adds a 3px Teal 30 left edge, a Teal 30 icon, a 500 weight and `aria-current="page"`. Data quality shows a red mono count with an sr-only sentence.
 - **Top bar:** a 56px white bar with a bottom Rule. The breadcrumb reads workspace (muted) / screen (500 weight).
+- **Go to (Ctrl K):** the one way to reach anything by name. A Raised dialog with a search field and one listbox grouped by mono labels (Features, Records, Screens, Settings, Preferences). Each option is an icon, the name (records in mono 12px) and a muted hint naming its screen or record type; the active option takes the Accent fill and the Teal edge. A mono footer names the keys and the result count. Features open through their own links, so every feature is also a bookmarkable URL.
 - **Profile menu:** a name plus organisation, the 32px Teal 70 initials avatar, and theme, language and sign-out options. Language and theme are stored in the `nexus_lang` and `nexus_theme` cookies.
 
 ### FlowLine / StateMark / Breaker (signature)

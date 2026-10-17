@@ -14,7 +14,7 @@ export function EnvironmentBadge({ environment, className = '' }: { environment:
   const t = useT()
   if (!isEnvironment(environment)) return null
   return (
-    <span className={`inline-flex shrink-0 items-center rounded-sm border px-1.5 py-px font-mono text-[10px] font-medium tracking-wide ${STYLE[environment]} ${className}`} title={t(`auth.environment.${environment}`)}>
+    <span className={`inline-flex shrink-0 items-center rounded-sm border px-1.5 py-px font-mono text-[11px] font-medium tracking-wide ${STYLE[environment]} ${className}`} title={t(`auth.environment.${environment}`)}>
       {ENVIRONMENT_INFO[environment].short}
     </span>
   )

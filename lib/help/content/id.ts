@@ -50,7 +50,7 @@ export const helpId: HelpContent = {
               kind: 'list',
               items: [
                 '**Rel** di kiri mengelompokkan layar menurut tugas: Bangun, Operasikan, Tata kelola, Analisis, dan Ruang kerja. Di bawah 1024 px rel dibuka dari tombol menu.',
-                '**Pergi ke… (Ctrl K)** di bilah atas langsung menuju layar atau bagian pengaturan mana pun berdasarkan nama.',
+                '**Pergi ke… (Ctrl K)** di bilah atas menemukan apa saja berdasarkan nama: layar, tab pengaturan, fitur (ketik “pemeliharaan”, “impor”, “penyamaran”, atau “penghapusan”), pipeline, sumber data, dataset, dasbor, atau aturan, serta tema dan bahasa. Kata dalam Bahasa Indonesia maupun Inggris sama-sama bisa. Fitur dibuka lewat tautannya sendiri, sehingga dapat juga ditandai atau dibagikan (mis. `/dashboard/pipelines?maintenance=1`).',
                 '**Pandu saya** memulai tur terpandu; **Bantuan & FAQ** membuka panduan ini.',
                 '**Lonceng** menampilkan eksekusi gagal dan baris tertahan; **menu akun** mengganti tema dan bahasa serta untuk keluar.',
                 '**Pengalih workspace** di bawah logo berpindah antar-workspace dan lingkungan Anda.',
