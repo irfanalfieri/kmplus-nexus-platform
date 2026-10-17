@@ -444,6 +444,7 @@ export const helpId: HelpContent = {
               ],
             },
             { kind: 'p', text: 'Satu pipeline bisa punya beberapa tujuan, mis. dataset employees dan sebuah produk KMPlus.' },
+            { kind: 'p', text: '**Dataset dengan skema yang ditetapkan** menampilkan kolomnya di langkah Tujuan: pilih isi setiap kolom, dan upsert dicocokkan dengan kunci skema. Lihat *Skema dataset yang ditetapkan* di bab Katalog.' },
             { kind: 'p', text: '**Mengirim baris ke REST API.** Pilih sumber data REST di langkah Tujuan, lalu atur metode (POST, PUT, atau PATCH) dan path. `{{column}}` di path diisi nilai setiap baris, mis. `PUT /employees/{{employee_id}}`.' },
             {
               kind: 'steps',
@@ -728,6 +729,34 @@ export const helpId: HelpContent = {
           title: 'Mendokumentasikan dataset',
           blocks: [
             { kind: 'p', text: 'Steward menambahkan pemilik, steward, klasifikasi, tag, deskripsi, dan deskripsi kolom. Setiap item juga menampilkan kesegaran, riwayat kualitas, serta sampel yang tersamar dan tersaring barisnya. Dataset bisa diterbitkan sebagai entitas Unified Data Model (Employee, Organization, Position …) untuk Data API.' },
+          ],
+        },
+        {
+          id: 'schemas',
+          title: 'Skema dataset yang ditetapkan',
+          blocks: [
+            { kind: 'p', text: 'Kolom dataset biasanya berupa apa pun yang ditulis pipeline-nya. **Skema yang ditetapkan** membuat dataset memiliki kolomnya sendiri: setiap kolom punya tipe, wajib atau opsional, dan klasifikasi yang langsung dipakai penyamaran Tata Kelola; kolom kunci mencocokkan baris untuk upsert dan replay. Beberapa pipeline lalu dapat mengisi satu dataset, masing-masing kolomnya sendiri.' },
+            {
+              kind: 'steps',
+              items: [
+                'Buka dataset di Katalog dan, di bawah **Skema**, pilih **Tetapkan dari kolom saat ini** (tidak ada yang dimuat ulang), **Dari entitas bisnis** (Employee, Organization …) atau **Dari contoh** (objek JSON atau header CSV). **Dataset baru** memulai dataset kosong dengan cara yang sama.',
+                'Tetapkan **kolom kunci** dan kolom yang wajib. Steward dan admin mengubah skema; setiap perubahan menjadi versi di **Riwayat**, diaudit, dan dikirim sebagai webhook `dataset.schema_changed`.',
+                'Di langkah Tujuan setiap pipeline, pilih isi setiap kolom skema: sebuah kolom, nilai tetap, atau **tidak ditulis**. **Cocokkan kolom** mengisinya menurut nama dan sinonim HR. Pipeline hanya menulis kolom yang dipetakannya, dicocokkan dengan kunci, sehingga pipeline HRIS dapat mengisi nama dan pipeline LMS jam pelatihan.',
+              ],
+            },
+            {
+              kind: 'table',
+              head: ['Perubahan', 'Yang terjadi'],
+              rows: [
+                ['Tambah kolom', 'Langsung ditambahkan, kosong atau dengan nilai bawaannya.'],
+                ['Jadikan wajib', 'Baris tanpa nilai dihitung lebih dulu. Run berikutnya menahan baris yang tidak mengisinya.'],
+                ['Ganti nama', 'Kolom tetap menyimpan nilainya. Draf pipeline, dasbor, dan penyamaran pindah ke nama baru, pipeline yang sudah terbit mengikutinya, dan Data API tetap melayani nama lama selama **30 hari** dengan header `Deprecation`.'],
+                ['Ubah tipe', 'Nilai yang tidak dapat dikonversi dihitung lebih dulu dan dikosongkan jika Anda melanjutkan.'],
+                ['Hapus', 'Dikonfirmasi dengan pipeline, dasbor, dan kunci API yang memakai dataset.'],
+              ],
+            },
+            { kind: 'p', text: 'Kolom yang dikirim pipeline tetapi tidak ada di skema tidak ditulis: Uji dan Simpan menanyakan **Perbaiki pemetaan** atau **Abaikan dan lanjutkan**. Dengan **Tambahkan kolom baru secara otomatis**, kolom yang dicocokkan menurut nama ditambahkan, ditandai untuk ditinjau, dan tidak tampil di Data API sampai steward menandainya sudah ditinjau. Baris yang tidak mengisi nilai wajib atau berisi nilai yang tidak dapat dikonversi masuk ke Kualitas Data dari langkah Tujuan.' },
+            { kind: 'note', tone: 'info', text: 'Mempromosikan pipeline juga mempromosikan skema dataset yang ditulisnya: skema baru dibuat dan kolom yang ditambahkan ikut. Perubahan tipe, perubahan kunci, atau kolom yang dihapus di lingkungan berikutnya memblokir promosi sampai diubah di sana.' },
           ],
         },
         {
@@ -1035,6 +1064,8 @@ export const helpId: HelpContent = {
     { id: 'api-duplicates', group: 'pipelines', q: 'Bisakah eksekusi yang dicoba ulang membuat akun dua kali di sistem lain?', a: 'Tidak dengan langkah **Ubah data (API)**: setiap panggilan yang berhasil dicatat menurut kunci barisnya sebelum hal lain terjadi, sehingga percobaan ulang, eksekusi yang dilanjutkan, atau putar ulang melewatinya. Setiap panggilan juga membawa Idempotency-Key; hanya API yang mengabaikan kunci itu yang, sangat jarang, bisa menerima pengulangan bila Nexus berhenti tepat setelah sebuah panggilan.' },
     { id: 'api-cache', group: 'pipelines', q: 'Mengapa langkah Perkaya tidak menangkap perubahan di API?', a: 'Jawabannya disimpan di cache (bawaan 24 jam). Turunkan waktu cache, atau tekan **Hapus cache** di langkah itu; eksekusi berikutnya menanyakan lagi ke API.' },
     { id: 'deleted-employees', group: 'pipelines', q: 'Bagaimana karyawan yang keluar ditangani?', a: 'Dengan tujuan upsert dan **Tandai baris yang tidak ada lagi di sumber sebagai terhapus**, baris yang hilang dari sumber ditandai terhapus alih-alih dibuang. Pembacaan mengecualikannya; riwayatnya tetap ada.' },
+    { id: 'two-pipelines-one-dataset', group: 'pipelines', q: 'Bisakah dua pipeline mengisi dataset yang sama?', a: 'Bisa, setelah dataset memiliki **skema yang ditetapkan** dengan kolom kunci: setiap pipeline hanya memetakan kolomnya sendiri dan melakukan upsert pada kunci, sehingga kolom lain tidak tersentuh. Katalog menampilkan pipeline mana mengisi kolom mana dan menandai kolom yang ditulis dua pipeline (run terakhir yang berlaku).' },
+    { id: 'rename-column', group: 'pipelines', q: 'Jika kami mengganti nama kolom dataset, apakah klien API rusak?', a: 'Tidak langsung. Ganti namanya di skema dataset: Data API tetap melayani nama lama selama 30 hari dengan header `Deprecation`, `Sunset`, dan `X-Nexus-Renamed-Fields`, sehingga klien punya waktu untuk beralih. Pipeline, dasbor, dan penyamaran pindah ke nama baru.' },
     { id: 'env-why', group: 'environments', q: 'Mengapa memakai Development, Staging, dan Production?', a: 'Agar pipeline bisa diubah tanpa membahayakan data produksi. Bangun dengan data uji di Development, periksa hasilnya dengan data mirip produksi di Staging, dan promosikan hanya yang berhasil ke Production, yang tidak bisa diedit langsung.' },
     { id: 'env-sources', group: 'environments', q: 'Apakah pipeline yang dipromosikan membaca database Development di Production?', a: 'Tidak. Sumber data dicocokkan **berdasarkan nama**, dan setiap lingkungan punya sumber sendiri dengan kredensialnya sendiri. Beri sumber nama yang sama di setiap lingkungan; sumber yang belum ada memblokir promosi.' },
     { id: 'env-schedule', group: 'environments', q: 'Saya sudah mempromosikan pipeline tetapi tidak berjalan di Production.', a: 'Pipeline yang baru dipromosikan dimulai dengan **jadwal nonaktif**; aktifkan di Production. Jika Production mewajibkan persetujuan, versinya juga menunggu orang kedua terlebih dahulu.' },

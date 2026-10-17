@@ -16,6 +16,8 @@ import { getOwnedPipeline, publishOrRequest, savePipelineAs, workspaceSettings }
 import { parseDefinition } from '@/lib/pipelines/runner'
 import { ruleBodySchema } from '@/lib/rules/definition'
 import { guard } from '@/lib/server-action'
+import { schemaPromotion } from '@/lib/datasets/schema'
+import { changeSchema, defineSchema, loadSchemas } from '@/lib/datasets/store'
 
 /**
  * Environments (GV-7) and publish approvals policy (GV-6).
@@ -191,13 +193,27 @@ async function buildPromotion(ctx: WorkspaceContext, pipelineId: string) {
   const fromLabel = ENVIRONMENT_INFO[ws.environment].label
   const targetLabel = ENVIRONMENT_INFO[nextEnv].label
   const plan = planPromotion(definition, schedule, await sideOf(ctx.workspaceId), await sideOf(target.id), targetLabel)
+  // Defined schemas of the datasets the pipeline writes travel with it.
+  const written = [...new Set(plan.definition.nodes.flatMap((n) => (n.type === 'destination' && n.kind === 'dataset' ? [n.datasetName] : [])))]
+  const schemas: { datasetName: string; status: 'create' | 'update' | 'same' | 'blocked'; lines: string[]; ops: ReturnType<typeof schemaPromotion>['ops']; schema: import('@/lib/datasets/schema').DatasetSchema }[] = []
+  if (written.length) {
+    const [mine, theirs] = await Promise.all([loadSchemas(ctx.workspaceId), loadSchemas(target.id)])
+    for (const name of written) {
+      const src = mine.get(name)
+      if (!src) continue
+      const p = schemaPromotion(src.schema, theirs.get(name)?.schema ?? null)
+      schemas.push({ datasetName: name, ...p, schema: src.schema })
+      plan.items.push({ kind: 'dataset schema', name, status: p.status === 'blocked' ? 'conflict' : p.status, detail: p.lines.length ? p.lines.slice(0, 4).join('; ') + (p.lines.length > 4 ? ' …' : '') : undefined })
+      if (p.status === 'blocked') plan.blocking.push(`The schema of dataset "${name}" in ${targetLabel} differs in ways a promotion doesn't change (${p.lines.join('; ')}). Change it there in the Catalog first.`)
+    }
+  }
   const key = pipeline.promotionKey ?? pipeline.id
   const [existing] = await db
     .select({ id: pipelines.id, name: pipelines.name, version: pipelines.version, enabled: pipelines.enabled })
     .from(pipelines)
     .where(and(eq(pipelines.workspaceId, target.id), eq(pipelines.promotionKey, key)))
     .limit(1)
-  return { ws, target, nextEnv, fromLabel, targetLabel, pipeline, plan, key, existing: existing ?? null }
+  return { ws, target, nextEnv, fromLabel, targetLabel, pipeline, plan, schemas, key, existing: existing ?? null }
 }
 
 async function previewPromotionImpl(rawPipelineId: string) {
@@ -252,6 +268,12 @@ async function promotePipelineImpl(input: z.input<typeof promoteInput>) {
     ruleIds.set(r.sourceId, id)
   }
 
+  // Dataset schemas next, so the first run in the next environment writes to them.
+  for (const sc of b.schemas) {
+    if (sc.status === 'create') await defineSchema(tctx, sc.datasetName, sc.schema, `promotion from ${b.fromLabel}`)
+    else if (sc.status === 'update') await changeSchema(tctx, sc.datasetName, sc.ops)
+  }
+
   const saved = await savePipelineAs(
     tctx,
     {
@@ -280,7 +302,7 @@ async function promotePipelineImpl(input: z.input<typeof promoteInput>) {
     action: 'PROMOTE',
     resource: 'pipeline',
     resourceId: b.pipeline.id,
-    changes: { version: b.pipeline.version, to: b.target.id, toEnvironment: b.nextEnv, targetPipelineId: saved.id, targetVersion: saved.version, published: outcome.published, approvalId: outcome.approvalId, rules: b.plan.rules.map((r) => r.name) },
+    changes: { version: b.pipeline.version, to: b.target.id, toEnvironment: b.nextEnv, targetPipelineId: saved.id, targetVersion: saved.version, published: outcome.published, approvalId: outcome.approvalId, rules: b.plan.rules.map((r) => r.name), schemas: b.schemas.filter((x) => x.status !== 'same').map((x) => x.datasetName) },
   })
   revalidatePath('/dashboard', 'layout')
   return { target: { id: b.target.id, name: b.target.name, environment: b.nextEnv }, pipelineId: saved.id, version: saved.version, published: outcome.published, approvalId: outcome.approvalId ?? null }

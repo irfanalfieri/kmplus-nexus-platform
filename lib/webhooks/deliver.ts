@@ -12,7 +12,7 @@ import { safeFetch } from '@/lib/net/safe-url'
  * a webhook problem must not fail a pipeline run.
  */
 
-export const WEBHOOK_EVENTS = ['run.succeeded', 'run.failed', 'dataset.updated'] as const
+export const WEBHOOK_EVENTS = ['run.succeeded', 'run.failed', 'dataset.updated', 'dataset.schema_changed'] as const
 export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number] | 'ping'
 
 const RETRY_DELAYS_S = [60, 300, 1800, 7200]

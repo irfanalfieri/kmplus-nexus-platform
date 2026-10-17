@@ -348,6 +348,7 @@ export const editor = {
       dataSource: 'data source',
       businessRule: 'business rule',
       pipeline: 'pipeline',
+      datasetSchema: 'dataset schema',
     },
     status: {
       mapped: 'found',
@@ -355,6 +356,7 @@ export const editor = {
       create: 'will be created',
       update: 'will be updated',
       same: 'same',
+      conflict: 'differs',
     },
   },
   templates: {

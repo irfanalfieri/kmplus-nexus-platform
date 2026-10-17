@@ -30,6 +30,7 @@ import { readDatasetSample } from '@/lib/pipelines/io'
 import { applyMasks, accessFor } from '@/lib/governance/masking'
 import type { SchemaScanResult } from '@/lib/connectors/types'
 import { guard } from '@/lib/server-action'
+import { loadSchemas } from '@/lib/datasets/store'
 
 const idSchema = z.string().trim().min(1).max(100)
 
@@ -110,7 +111,7 @@ async function listPipelinesImpl() {
 /** Everything the builder needs to populate pickers (no credentials). */
 async function getBuilderOptionsImpl() {
   const ctx = await requireWorkspace()
-  const [sources, datasets, rules, pipelineRows, templates, policies] = await Promise.all([
+  const [sources, datasets, rules, pipelineRows, templates, policies, schemas] = await Promise.all([
     db
       .select({ id: dataSources.id, name: dataSources.name, sourceType: dataSources.sourceType, status: dataSources.status, config: dataSources.config })
       .from(dataSources)
@@ -129,6 +130,7 @@ async function getBuilderOptionsImpl() {
     db.select({ id: pipelines.id, name: pipelines.name, version: pipelines.version }).from(pipelines).where(eq(pipelines.workspaceId, ctx.workspaceId)).orderBy(pipelines.name),
     db.select().from(mappingTemplates).where(eq(mappingTemplates.workspaceId, ctx.workspaceId)).orderBy(mappingTemplates.name),
     db.select({ columns: datasetPolicies.columns }).from(datasetPolicies).where(eq(datasetPolicies.workspaceId, ctx.workspaceId)),
+    loadSchemas(ctx.workspaceId),
   ])
   return {
     // Secrets managers only supply credentials: never a pipeline source or destination.
@@ -148,7 +150,8 @@ async function getBuilderOptionsImpl() {
         })),
       }
     }),
-    datasets: datasets.map((d) => ({ ...d, columns: d.columns as { name: string; type: string }[] })),
+    // A defined dataset carries its schema: the Destination step maps onto it (target first).
+    datasets: datasets.map((d) => ({ ...d, columns: d.columns as { name: string; type: string }[], schema: schemas.get(d.name)?.schema ?? null })),
     pipelines: pipelineRows.map((p) => ({ id: p.id, name: p.name, published: (p.version ?? 0) > 0 })),
     // Column names a steward classified personal or sensitive in any dataset policy (the API body warns before sending them).
     classifiedColumns: Object.fromEntries(

@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { and, eq, inArray, like } from 'drizzle-orm'
 import { db, pool } from '@/lib/db'
-import { agentTasks as agentTaskTable, agents as agentTable, apiCallCache, apiCallLedger, apiKeys, apiRateLimits, auditLogs, businessRuleVersions, businessRules, catalogEntries, connectorInstalls, dashboards, dataSources, datasetPolicies, datasetQualitySnapshots, domainMappings, mappingTemplates, notifications, pipelineApprovals, scimGroups, scimTokens, scimUsers, ssoProvider, webhookDeliveries, webhooks, workspaceSso, executionLogs, nexusDatasets, pipelineJobs, pipelineRunRejects, pipelines, pipelineStageTables, pipelineVersions, session, user, verification, workspaceInvites, workspaceMembers, workspaces } from '@/lib/db/schema'
+import { agentTasks as agentTaskTable, agents as agentTable, apiCallCache, apiCallLedger, apiKeys, apiRateLimits, auditLogs, businessRuleVersions, businessRules, catalogEntries, connectorInstalls, dashboards, dataSources, datasetPolicies, datasetQualitySnapshots, domainMappings, mappingTemplates, notifications, pipelineApprovals, scimGroups, scimTokens, scimUsers, ssoProvider, webhookDeliveries, webhooks, workspaceSso, executionLogs, nexusDatasets, pipelineJobs, pipelineRunRejects, pipelines, pipelineStageTables, pipelineVersions, session, user, verification, workspaceInvites, workspaceMembers, workspaces, datasetColumnAliases, datasetSchemaVersions, datasetSchemas, upgradeNoticeDismissals } from '@/lib/db/schema'
 import { acceptInvite, changeMemberRole, createAccountFromInvite, createInvite, describeInvite, getWorkspaceContext, listMembers, resetMemberTwoFactor, switchWorkspace } from '@/lib/actions/workspaces'
 import { installConnector } from '@/lib/actions/connectors'
 import { createDataSource, deleteDataSource, getDataSources, getEditableCredentials, listSecretManagers, listSecretNames, renameDataSource, setDataSourceRole, testConnection, updateDataSourceCredentials } from '@/lib/actions/data-sources'
@@ -56,6 +56,8 @@ import { deleteRule, listRuleVersions, listRules, saveRule, testRule } from '@/l
 import { approveRows, dismissRows, fixRow, getQualityOverview, listQuarantine, replayRows, restoreRows } from '@/lib/actions/quality'
 import { getCatalogSample, getLineage, getQualityHistory, listCatalog, saveCatalogEntry, saveDomainMapping, askCatalog } from '@/lib/actions/catalog'
 import { createApiKey, revokeApiKey } from '@/lib/actions/api-keys'
+import { changeDatasetSchema, defineDatasetSchema, defineFromCurrentColumns, dismissUpgradeNotice, getDatasetSchema, getUpgradeNotices, listInferredDatasets, previewSchemaChange } from '@/lib/actions/schemas'
+import { loadSchema } from '@/lib/datasets/store'
 import { uploadFilePart } from '@/lib/actions/files'
 import { GET as getDataset } from '@/app/api/v1/datasets/[name]/route'
 import { GET as getDomain } from '@/app/api/v1/domains/[entity]/route'
@@ -1411,6 +1413,120 @@ async function main() {
       }
     })
 
+    await test('Phase D: two pipelines fill one defined dataset column by column; a rename keeps Data API clients working; the banner defines inferred datasets in place', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const S = `"${FIXTURE_SCHEMA}"`
+      await pool.query(`CREATE TABLE ${S}.hris_people (id text PRIMARY KEY, nama text, hired date, shoe int)`)
+      await pool.query(`INSERT INTO ${S}.hris_people VALUES ('E1', 'Ani', '2024-01-15', 38), ('E2', 'Budi', '2023-06-01', 42), ('E3', 'Citra', '2022-03-10', 37), ('E4', '', '2025-02-01', 40)`)
+      await pool.query(`CREATE TABLE ${S}.lms_hours (emp text PRIMARY KEY, hours numeric)`)
+      await pool.query(`INSERT INTO ${S}.lms_hours VALUES ('E1', 12.5), ('E2', 3), ('E3', 40)`)
+      const name = `${RUN}_profile`
+      await defineDatasetSchema({
+        datasetName: name,
+        from: 'schema',
+        schema: { columns: [{ name: 'employee_code', type: 'text', required: true }, { name: 'full_name', type: 'text', required: true }, { name: 'hire_date', type: 'date' }, { name: 'training_hours', type: 'numeric' }], keys: ['employee_code'] },
+      })
+      const col = (column: string) => ({ kind: 'column', column })
+      const pipe = (label: string, table: string, columnMap: { target: string; binding: unknown }[], extra: object = {}) =>
+        savePipeline({
+          publish: true,
+          name: `${RUN} ${label}`,
+          definition: {
+            schemaVersion: 2,
+            nodes: [
+              { id: 's', type: 'source', position: { x: 0, y: 0 }, dataSourceId: sourceId, table },
+              { id: 'd', type: 'destination', position: { x: 300, y: 0 }, kind: 'dataset', datasetName: name, mode: 'upsert', keys: ['employee_code'], columnMap, ...extra },
+            ],
+            edges: [{ id: 'e', from: 's', to: 'd' }],
+            settings: { retries: 0 },
+          },
+          schedule: { type: 'manual' } as never,
+        })
+      const hris = await pipe('hris profile', 'hris_people', [{ target: 'employee_code', binding: col('id') }, { target: 'full_name', binding: col('nama') }, { target: 'hire_date', binding: col('hired') }], { dropExtra: true })
+      const lms = await pipe('lms hours', 'lms_hours', [{ target: 'employee_code', binding: col('emp') }, { target: 'training_hours', binding: col('hours') }])
+      const runOnce = async (id: string) => {
+        const r = await runPipelineNow(id)
+        takeAfterCallbacks()
+        for (let i = 0; i < 5; i++) {
+          const [job] = await db.select({ status: pipelineJobs.status }).from(pipelineJobs).where(eq(pipelineJobs.id, r.runId))
+          if (job.status === 'done') break
+          await processJobs({})
+        }
+        return getRunStatus(r.runId)
+      }
+      const first = await runOnce(hris.id)
+      assert.equal(first.status, 'partial', 'E4 has no name: held by the schema')
+      const [held] = (await listQuarantine({ pipelineId: hris.id, kind: 'invalid' })).rows
+      assert.deepEqual(held.messages, ['full_name is required by the dataset schema'])
+      assert.equal((await runOnce(lms.id)).status, 'success')
+      // HRIS again: its upsert leaves the LMS column alone.
+      await runOnce(hris.id)
+      const [ds] = await db.select().from(nexusDatasets).where(and(eq(nexusDatasets.workspaceId, adminWs), eq(nexusDatasets.name, name)))
+      assert.ok(ds.defined)
+      const read = async () => (await pool.query(`SELECT * FROM "nexus_data"."${ds.tableName}" WHERE "_nexus_deleted_at" IS NULL ORDER BY employee_code`)).rows
+      const rows = await read()
+      assert.deepEqual(rows.map((r) => [r.employee_code, r.full_name, Number(r.training_hours)]), [['E1', 'Ani', 12.5], ['E2', 'Budi', 3], ['E3', 'Citra', 40]])
+      assert.ok(!('shoe' in rows[0]), 'extra columns are not written')
+      const page = await getDatasetSchema(name)
+      assert.deepEqual(page.owners.byColumn, { employee_code: [`${RUN} hris profile`, `${RUN} lms hours`], full_name: [`${RUN} hris profile`], hire_date: [`${RUN} hris profile`], training_hours: [`${RUN} lms hours`] })
+
+      // A Data API client reading training_hours keeps working after the rename, told about the new name.
+      const { key } = await createApiKey({ name: `${RUN} schema reader`, role: 'steward', scopes: ['datasets:read'] })
+      const get = async (path: string) => {
+        const res = await (getDataset as never as (req: Request, ctx: { params: Promise<Record<string, string>> }) => Promise<Response>)(new Request(`http://localhost${path}`, { headers: { authorization: `Bearer ${key}` } }), { params: Promise.resolve({ name }) })
+        return { res, body: (await res.json()) as { data: Record<string, unknown>[]; meta: Record<string, unknown>; error?: { message: string } } }
+      }
+      const preview = await previewSchemaChange({ datasetName: name, ops: [{ kind: 'rename', from: 'training_hours', to: 'learning_hours' }] })
+      assert.ok(preview.destructive)
+      assert.deepEqual(preview.usage!.pipelines.sort(), [`${RUN} hris profile`, `${RUN} lms hours`])
+      const changed = await changeDatasetSchema({ datasetName: name, ops: [{ kind: 'rename', from: 'training_hours', to: 'learning_hours' }] })
+      assert.equal(changed.version, 2)
+      assert.ok(changed.moved.pipelines.includes(`${RUN} lms hours`), 'the LMS mapping moves to the new name (as a draft)')
+      const old = await get(`/api/v1/datasets/${name}?fields=employee_code,training_hours&limit=10`)
+      assert.equal(old.res.status, 200, old.body.error?.message)
+      assert.deepEqual(old.body.data.map((r) => Number(r.training_hours)), [12.5, 3, 40])
+      assert.equal(old.res.headers.get('Deprecation'), 'true')
+      assert.equal(old.res.headers.get('X-Nexus-Renamed-Fields'), 'training_hours=learning_hours')
+      const sunset = new Date(old.res.headers.get('Sunset')!).getTime()
+      assert.ok(Math.abs(sunset - (Date.now() + 30 * 86_400_000)) < 120_000, 'the alias lasts 30 days')
+      assert.equal((await get(`/api/v1/datasets/${name}?fields=learning_hours&limit=1`)).res.status, 200)
+      // The published LMS version still maps training_hours: its next run follows the rename.
+      await pool.query(`UPDATE ${S}.lms_hours SET hours = 13 WHERE emp = 'E1'`)
+      assert.equal((await runOnce(lms.id)).status, 'success')
+      assert.equal(Number((await read())[0].learning_hours), 13)
+      // After 30 days the old name is gone.
+      await db.update(datasetColumnAliases).set({ expiresAt: new Date(Date.now() - 1000) }).where(and(eq(datasetColumnAliases.workspaceId, adminWs), eq(datasetColumnAliases.datasetName, name)))
+      assert.equal((await get(`/api/v1/datasets/${name}?fields=training_hours`)).res.status, 400)
+      const audits = await db.select().from(auditLogs).where(and(eq(auditLogs.workspaceId, adminWs), eq(auditLogs.action, 'SCHEMA_CHANGE'), eq(auditLogs.resourceId, name)))
+      assert.equal(audits.length, 2)
+
+      // The upgrade banner: an inferred dataset becomes defined from its current columns, rows untouched.
+      const inferred = `${RUN}_employees`
+      const notices = await getUpgradeNotices()
+      assert.ok(notices.some((n) => n.id === 'defined-schemas' && n.count > 0))
+      const list = await listInferredDatasets()
+      assert.ok(list.some((d) => d.name === inferred) && !list.some((d) => d.name === name))
+      const [before] = await db.select().from(nexusDatasets).where(and(eq(nexusDatasets.workspaceId, adminWs), eq(nexusDatasets.name, inferred)))
+      const idsBefore = (await pool.query(`SELECT "_nexus_id", "_nexus_loaded_at" FROM "nexus_data"."${before.tableName}" ORDER BY 1`)).rows
+      assert.equal((await defineFromCurrentColumns([inferred])).defined, 1)
+      const idsAfter = (await pool.query(`SELECT "_nexus_id", "_nexus_loaded_at" FROM "nexus_data"."${before.tableName}" ORDER BY 1`)).rows
+      assert.deepEqual(idsAfter, idsBefore, 'nothing was reloaded')
+      const defined = await getDatasetSchema(inferred)
+      assert.ok(defined.defined)
+      assert.deepEqual(defined.schema!.columns.map((c) => c.name), (before.columns as { name: string }[]).map((c) => c.name))
+      await dismissUpgradeNotice('defined-schemas')
+      assert.ok(!(await getUpgradeNotices()).some((n) => n.id === 'defined-schemas'), 'dismissed for this person')
+      await db.delete(upgradeNoticeDismissals).where(eq(upgradeNoticeDismissals.workspaceId, adminWs))
+      // A viewer can read a schema but not change it.
+      setTestUser(viewer)
+      await switchWorkspace(adminWs)
+      assert.equal((await getDatasetSchema(name)).canEdit, false)
+      await rejectsWith(() => changeDatasetSchema({ datasetName: name, ops: [{ kind: 'autoAdd', on: true }] }), /permission|not allowed|role/i)
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+    })
+
     await test('TD-24: a full run supersedes older quarantine (fixes carry over); replays into a replace dataset replace by key', async () => {
       setTestUser(admin)
       await switchWorkspace(adminWs)
@@ -1529,7 +1645,13 @@ async function main() {
       const prodSource = await createDataSource({ name: `${RUN} fixture`, type: 'database', sourceType: 'postgres', config: { role: 'source' }, credentials: { connectionString: process.env.DATABASE_URL!, schema: FIXTURE_SCHEMA } })
       await rejectsWith(() => savePipeline({ name: 'direct edit', definition: { steps: [] }, schedule: { type: 'manual' } as never }), /change only by promotion/)
       await switchWorkspace(adminWs)
+      // The dataset it writes has a defined schema: promotion creates it in Production first.
+      const written = `${RUN}_people`
+      await defineDatasetSchema({ datasetName: written, from: 'columns' })
+      const withSchema = await previewPromotion(devPipeline.id)
+      assert.deepEqual(withSchema.items.filter((i) => i.kind === 'dataset schema').map((i) => [i.name, i.status]), [[written, 'create']])
       const res = await promotePipeline({ pipelineId: devPipeline.id, note: 'first release' })
+      assert.deepEqual((await loadSchema(prodWs, written))?.schema, (await loadSchema(adminWs, written))!.schema)
       assert.equal(res.published, true)
       assert.equal(res.target.id, prodWs)
       const [promoted] = await db.select().from(pipelines).where(eq(pipelines.id, res.pipelineId))
@@ -1538,8 +1660,15 @@ async function main() {
       assert.equal(promoted.enabled, false, 'new pipelines start with the schedule off')
       const src = (promoted.config as { nodes: { type: string; dataSourceId?: string }[] }).nodes.find((n) => n.type === 'source')!
       assert.equal(src.dataSourceId, prodSource, 'uses the Production data source')
+      // An added column goes along with the next promotion; a removed one would block it.
+      await changeDatasetSchema({ datasetName: written, ops: [{ kind: 'add', column: { name: 'team', type: 'text', required: false, description: '', classification: 'internal', default: null, autoAdded: false, reviewed: true } }] })
+      assert.deepEqual((await previewPromotion(devPipeline.id)).items.filter((i) => i.kind === 'dataset schema').map((i) => i.status), ['update'])
       // A second promotion updates the same pipeline.
       const again = await promotePipeline({ pipelineId: devPipeline.id })
+      assert.ok((await loadSchema(prodWs, written))!.schema.columns.some((c) => c.name === 'team'))
+      await changeDatasetSchema({ datasetName: written, ops: [{ kind: 'remove', name: 'team' }] })
+      const blocked = await previewPromotion(devPipeline.id)
+      assert.ok(blocked.blocking.some((b) => /schema of dataset/.test(b)), 'removing a column in the next environment is not done by promotion')
       assert.equal(again.pipelineId, res.pipelineId)
       assert.ok(again.version > res.version)
       const status = await listPromotionStatus()
@@ -2131,7 +2260,7 @@ async function cleanup(userIds: string[]) {
   if (pipeIds.length) await db.delete(apiRateLimits).where(inArray(apiRateLimits.bucket, pipeIds))
   const sso = await db.select({ providerId: workspaceSso.providerId }).from(workspaceSso).where(inArray(workspaceSso.workspaceId, ws))
   if (sso.length) await db.delete(ssoProvider).where(inArray(ssoProvider.providerId, sso.map((x) => x.providerId)))
-  for (const t of [agentTaskTable, agentTable, pipelineApprovals, scimTokens, scimUsers, scimGroups, notifications, workspaceSso, webhookDeliveries, webhooks, mappingTemplates, datasetQualitySnapshots, apiKeys, catalogEntries, domainMappings, businessRuleVersions, businessRules, datasetPolicies, dashboards, nexusDatasets, pipelineRunRejects, executionLogs, pipelineStageTables, apiCallCache, apiCallLedger, pipelineJobs, pipelineVersions, pipelines, dataSources, connectorInstalls, workspaceInvites, auditLogs, workspaceMembers]) {
+  for (const t of [agentTaskTable, agentTable, pipelineApprovals, scimTokens, scimUsers, scimGroups, notifications, workspaceSso, webhookDeliveries, webhooks, mappingTemplates, datasetQualitySnapshots, apiKeys, catalogEntries, domainMappings, businessRuleVersions, businessRules, datasetPolicies, dashboards, datasetColumnAliases, datasetSchemaVersions, datasetSchemas, upgradeNoticeDismissals, nexusDatasets, pipelineRunRejects, executionLogs, pipelineStageTables, apiCallCache, apiCallLedger, pipelineJobs, pipelineVersions, pipelines, dataSources, connectorInstalls, workspaceInvites, auditLogs, workspaceMembers]) {
     await db.delete(t).where(inArray(t.workspaceId, ws))
   }
   await db.delete(auditLogs).where(inArray(auditLogs.userId, userIds))

@@ -292,6 +292,15 @@ const dedupeNode = z.object({
   flagRemoved: z.boolean().default(true),
 })
 
+/** What a column of a defined dataset takes (target-first mapping): a column, a fixed value or an expression. */
+export const schemaBindingSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('none') }),
+  z.object({ kind: z.literal('column'), column: z.string().min(1).max(200) }),
+  z.object({ kind: z.literal('constant'), value: z.string().max(2000) }),
+  z.object({ kind: z.literal('expr'), expr: exprSchema }),
+])
+export type SchemaBinding = z.infer<typeof schemaBindingSchema>
+
 const datasetDestination = z.object({
   id: z.string(),
   type: z.literal('destination'),
@@ -306,6 +315,13 @@ const datasetDestination = z.object({
   keys: z.array(z.string()).default([]),
   /** Upsert + full read: rows not in this run are marked deleted (PD-6 soft-delete missing). */
   softDeleteMissing: z.boolean().default(false),
+  /**
+   * Defined datasets (lib/datasets/schema.ts): what each schema column takes. Empty = input columns
+   * matched by name. The destination writes only the columns it maps (other pipelines may own the rest).
+   */
+  columnMap: z.array(z.object({ target: z.string().min(1).max(63), binding: schemaBindingSchema })).max(300).optional(),
+  /** Extra columns (not in the schema) are left out without asking again ("Drop them and continue"). */
+  dropExtra: z.boolean().optional(),
 })
 
 const datasourceDestination = z.object({

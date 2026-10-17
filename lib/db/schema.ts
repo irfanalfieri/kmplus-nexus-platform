@@ -466,9 +466,65 @@ export const nexusDatasets = pgTable('nexus_datasets', {
   pipelineId: text('pipelineId'),
   rowCount: integer('rowCount').default(0),
   lastLoadedAt: timestamp('lastLoadedAt', { withTimezone: true }),
+  /** Defined datasets have an owned schema (dataset_schemas); inferred ones take whatever their pipelines write. */
+  defined: boolean('defined').notNull().default(false),
+  schemaId: text('schemaId'),
   createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [uniqueIndex('nexus_datasets_workspace_name_idx').on(t.workspaceId, t.name)])
+
+// Defined dataset schemas (lib/datasets/schema.ts): owned columns, keys and the extra-column policy.
+// Every change is a version (dataset_schema_versions), audited and announced by the dataset.schema_changed webhook.
+export const datasetSchemas = pgTable('dataset_schemas', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  datasetName: text('datasetName').notNull(),
+  version: integer('version').notNull().default(1),
+  /** [{ name, type, required, description, classification, default, autoAdded, reviewed }] */
+  columns: jsonb('columns').notNull(),
+  /** Key columns: unique; upserts and replays match on them. */
+  keys: jsonb('keys').notNull().default([]),
+  /** "Add new columns automatically" (stewards and admins): extra columns grow the schema, flagged for review. */
+  autoAdd: boolean('autoAdd').notNull().default(false),
+  createdBy: text('createdBy').notNull(),
+  updatedBy: text('updatedBy').notNull(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex('dataset_schemas_workspace_dataset_idx').on(t.workspaceId, t.datasetName)])
+
+export const datasetSchemaVersions = pgTable('dataset_schema_versions', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  schemaId: text('schemaId').notNull(),
+  datasetName: text('datasetName').notNull(),
+  version: integer('version').notNull(),
+  columns: jsonb('columns').notNull(),
+  keys: jsonb('keys').notNull().default([]),
+  autoAdd: boolean('autoAdd').notNull().default(false),
+  /** What changed: the operations applied ({ kind, … }). */
+  change: jsonb('change').notNull().default([]),
+  changedBy: text('changedBy').notNull(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('dataset_schema_versions_workspace_idx').on(t.workspaceId), index('dataset_schema_versions_schema_idx').on(t.schemaId, t.version)])
+
+// Renamed columns stay readable under their old name in the Data API for 30 days (Deprecation header).
+export const datasetColumnAliases = pgTable('dataset_column_aliases', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  datasetName: text('datasetName').notNull(),
+  oldName: text('oldName').notNull(),
+  newName: text('newName').notNull(),
+  expiresAt: timestamp('expiresAt', { withTimezone: true }).notNull(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('dataset_column_aliases_dataset_idx').on(t.workspaceId, t.datasetName)])
+
+// Upgrade notices (lib/upgrades/notices.ts) dismissed per person and workspace.
+export const upgradeNoticeDismissals = pgTable('upgrade_notice_dismissals', {
+  workspaceId: text('workspaceId').notNull(),
+  userId: text('userId').notNull(),
+  noticeId: text('noticeId').notNull(),
+  dismissedAt: timestamp('dismissedAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [primaryKey({ columns: [t.workspaceId, t.userId, t.noticeId] }), index('upgrade_notice_dismissals_workspace_idx').on(t.workspaceId)])
 
 // Governance (PRD Layer 13): per-dataset column classification, masking and retention.
 export const datasetPolicies = pgTable('dataset_policies', {

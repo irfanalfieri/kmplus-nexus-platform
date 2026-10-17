@@ -64,7 +64,7 @@ export function openApiSpec(origin: string) {
       '/datasets/{name}': {
         get: {
           summary: 'Read a dataset',
-          description: 'Scope `datasets:read`. Rows in a stable order, paged with `cursor`. Live catalog tables (published names) return one page up to their row limit and support only equality filters.',
+          description: 'Scope `datasets:read`. Rows in a stable order, paged with `cursor`. Live catalog tables (published names) return one page up to their row limit and support only equality filters. A column renamed in a defined dataset keeps answering under its old name for 30 days: the response then carries `Deprecation: true`, `Sunset` (when the old name stops working), `X-Nexus-Renamed-Fields` (`old=new`) and `meta.deprecated_fields`. Columns a schema added automatically appear once a data steward has reviewed them.',
           parameters: [{ name: 'name', in: 'path', required: true, schema: { type: 'string' } }, ...listParams],
           responses: { 200: { description: 'One page of rows', content: { 'application/json': { schema: page({ type: 'object', additionalProperties: true }) } } }, 400: err, 401: err, 403: err, 404: err, 429: err },
         },
@@ -96,6 +96,7 @@ export function openApiSpec(origin: string) {
     webhooks: {
       'run.succeeded': event('run.succeeded', { type: 'object', properties: { run } }),
       'run.failed': event('run.failed', { type: 'object', properties: { run } }),
+      'dataset.schema_changed': event('dataset.schema_changed', { type: 'object', properties: { dataset: { type: 'string' }, version: { type: 'integer' }, changes: { type: 'array', items: { type: 'string' } }, renamed: { type: 'array', items: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' } } } } } }),
       'dataset.updated': event('dataset.updated', { type: 'object', properties: { dataset: { type: 'string' }, row_count: { type: 'integer' }, rows_written: { type: 'integer' }, run_id: { type: 'string' }, pipeline_id: { type: 'string' } } }),
     },
     components: {

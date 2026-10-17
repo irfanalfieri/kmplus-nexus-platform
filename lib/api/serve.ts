@@ -10,6 +10,7 @@ import { DOMAIN_BY_NAME } from '@/lib/domain/model'
 import { liveQuery } from '@/lib/pipelines/io'
 import { enqueueRun } from '@/lib/pipelines/jobs'
 import { nudgeWorker, startWorker } from '@/lib/pipelines/worker'
+import { activeAliases } from '@/lib/datasets/store'
 import { ApiAuthError, authenticate, type ApiCaller, type ApiScope } from './keys'
 import { consumeRateLimit, rateLimitHeaders } from './rate-limit'
 import { ApiQueryError, buildApiSql, parseApiQuery, toPage, type ApiQuery } from './query'
@@ -83,17 +84,31 @@ export async function readDataset(caller: ApiCaller, name: string, params: URLSe
   const [d] = await db.select().from(nexusDatasets).where(and(eq(nexusDatasets.workspaceId, caller.workspaceId), eq(nexusDatasets.name, name))).limit(1)
   if (!d) return readLiveTable(caller, name, params)
   const columns = ((d.columns as Column[]) ?? []).map((c) => c.name)
-  const query = parseApiQuery(params, columns)
-  const { masks, rowFilters } = await accessFor(caller.workspaceId, name, caller.role)
+  // A renamed column of a defined dataset keeps answering under its old name for 30 days.
+  const aliases = (await activeAliases(caller.workspaceId, name)).filter((a) => columns.includes(a.newName) && !columns.includes(a.oldName))
+  const columnMap = { ...Object.fromEntries(columns.map((c) => [c, c])), ...Object.fromEntries(aliases.map((a) => [a.oldName, a.newName])) }
+  const query = parseApiQuery(params, Object.keys(columnMap))
+  const access = await accessFor(caller.workspaceId, name, caller.role)
+  const masks = { ...access.masks, ...Object.fromEntries(aliases.flatMap((a) => (access.masks[a.newName] ? [[a.oldName, access.masks[a.newName]]] : []))) }
   // Masked columns can't be filtered on: a filter would reveal the hidden value.
   const blocked = query.filters.find((f) => masks[f.column])
   if (blocked) throw new ApiQueryError(`Field "${blocked.column}" is masked for this API key and can't be filtered.`)
-  const page = await runPage(tableRef(d.tableName), Object.fromEntries(columns.map((c) => [c, c])), query, columns, rowFilters)
+  const page = await runPage(tableRef(d.tableName), columnMap, query, columns, access.rowFilters)
   await recordAudit({ userId: `apikey:${caller.keyId}`, workspaceId: caller.workspaceId }, { action: 'API_READ', resource: 'dataset', resourceId: d.id, changes: { dataset: name, rows: page.data.length, filters: query.filters.map((f) => f.column) } })
+  const headers: Record<string, string> = d.lastLoadedAt ? { 'Last-Modified': new Date(d.lastLoadedAt).toUTCString() } : {}
+  if (aliases.length) {
+    headers.Deprecation = 'true'
+    headers.Sunset = new Date(Math.min(...aliases.map((a) => new Date(a.expiresAt).getTime()))).toUTCString()
+    headers['X-Nexus-Renamed-Fields'] = aliases.map((a) => `${a.oldName}=${a.newName}`).join(', ')
+  }
   return json(
-    { data: applyMasks(page.data, masks), next_cursor: page.next_cursor, meta: { dataset: name, mode: 'cached', last_loaded_at: d.lastLoadedAt, masked_fields: Object.keys(masks) } },
+    {
+      data: applyMasks(page.data, masks),
+      next_cursor: page.next_cursor,
+      meta: { dataset: name, mode: 'cached', last_loaded_at: d.lastLoadedAt, masked_fields: Object.keys(masks), ...(aliases.length ? { deprecated_fields: Object.fromEntries(aliases.map((a) => [a.oldName, { use: a.newName, until: a.expiresAt }])) } : {}) },
+    },
     200,
-    d.lastLoadedAt ? { 'Last-Modified': new Date(d.lastLoadedAt).toUTCString() } : {}
+    headers
   )
 }
 

@@ -49,6 +49,8 @@ const CHECKS = {
   apiItemRejected: { en: 'The API rejected this item: {message}', id: 'API menolak item ini: {message}' },
   // Join steps (several sources).
   joinNoMatch: { en: 'No match in {lane} for {keys}', id: 'Tidak ada pasangan di {lane} untuk {keys}' },
+  // Defined dataset schemas.
+  schemaRequired: { en: '{column} is required by the dataset schema', id: '{column} wajib diisi menurut skema dataset' },
   // Enrich steps.
   enrichNoMatch: { en: 'The API had no answer for this row ({request})', id: 'API tidak memberi jawaban untuk baris ini ({request})' },
   // Deduplicate steps (removed rows are listed as flags).

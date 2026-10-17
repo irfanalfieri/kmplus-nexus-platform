@@ -2,7 +2,7 @@
 
 import { AiCatalogAsk } from '@/components/ai/ai-catalog-ask'
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
-import { BookOpen, Database, Eye, Loader2, MousePointerClick, RefreshCw, Save, Search, SearchX, Server, Zap } from 'lucide-react'
+import { BookOpen, Database, Eye, Loader2, MousePointerClick, Plus, RefreshCw, Save, Search, SearchX, Server, Zap } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -25,6 +25,10 @@ import { SampleTable } from '@/components/pipelines/pipeline-editor'
 import { useCan } from '@/components/workspace/workspace-context'
 import { LineageView } from '@/components/catalog/lineage-graph'
 import { QualityHistory } from '@/components/catalog/quality-history'
+import { DatasetSchemaPanel, DefineFrom } from '@/components/catalog/dataset-schema'
+import { UpgradeBanner } from '@/components/upgrades/upgrade-banner'
+import { Modal } from '@/components/ui/dialog'
+import { defineDatasetSchema } from '@/lib/actions/schemas'
 
 type Catalog = Awaited<ReturnType<typeof listCatalog>>
 type Item = Catalog['items'][number]
@@ -65,6 +69,7 @@ export default function CatalogLayer() {
   const [query, setQuery] = useState('')
   const [kind, setKind] = useState<'all' | 'dataset' | 'source_table'>('all')
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
+  const [creating, setCreating] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -88,7 +93,28 @@ export default function CatalogLayer() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title={t('pages.catalog.title')} description={t('pages.catalog.description')} />
+      <PageHeader
+        title={t('pages.catalog.title')}
+        description={t('pages.catalog.description')}
+        actions={
+          data?.canEdit && (
+            <Button size="sm" variant="outline" onClick={() => setCreating(true)}>
+              <Plus className="mr-1 h-4 w-4" aria-hidden /> {t('schemas.newDataset.button')}
+            </Button>
+          )
+        }
+      />
+      <UpgradeBanner screen="catalog" onChanged={() => void load()} />
+      {creating && (
+        <NewDataset
+          onClose={() => setCreating(false)}
+          onCreated={async (name) => {
+            setCreating(false)
+            await load()
+            setSelectedKey(`dataset:${name}`)
+          }}
+        />
+      )}
 
       {error && <Notice tone="danger">{error}</Notice>}
 
@@ -455,6 +481,13 @@ function Detail({ item, catalog, onSaved, onOpen }: { item: Item; catalog: Catal
         </div>
       </section>
 
+      {item.kind === 'dataset' && (
+        <section aria-labelledby="catalog-schema">
+          <h3 id="catalog-schema" className="mb-2 text-sm font-medium">{t('schemas.panel.title')}</h3>
+          <DatasetSchemaPanel datasetName={item.name} onChanged={() => void onSaved()} />
+        </section>
+      )}
+
       <section aria-labelledby="catalog-lineage">
         <h3 id="catalog-lineage" className="mb-2 text-sm font-medium">{t('insights.catalog.detail.lineage')}</h3>
         <LineageView catalogKey={item.key} onOpen={onOpen} />
@@ -592,5 +625,57 @@ function DomainMapping({ item, catalog, onSaved }: { item: Item; catalog: Catalo
       )}
       {message && <Notice tone={message.ok ? 'success' : 'danger'}>{message.text}</Notice>}
     </section>
+  )
+}
+
+/** A new, empty dataset with a defined schema (pipelines then map onto it). */
+function NewDataset({ onClose, onCreated }: { onClose: () => void; onCreated: (name: string) => Promise<void> }) {
+  const { t } = usePrefs()
+  const [name, setName] = useState('')
+  const [from, setFrom] = useState<{ from: 'entity' | 'example'; entity: string; example: string }>({ from: 'entity', entity: '', example: '' })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const create = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      await defineDatasetSchema({ datasetName: name.trim(), from: from.from, entity: from.entity, example: from.example })
+      await onCreated(name.trim())
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('insights.catalog.detail.saveFailed'))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Modal
+      title={t('schemas.newDataset.title')}
+      description={t('schemas.newDataset.description')}
+      onClose={onClose}
+      dirty={Boolean(name || from.entity || from.example)}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
+          <Button disabled={busy || !name.trim() || (from.from === 'entity' ? !from.entity : !from.example.trim())} onClick={() => void create()}>
+            {busy && <Loader2 className="mr-1 h-4 w-4 animate-spin" aria-hidden />} {t('schemas.newDataset.create')}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        {error && <Notice tone="danger">{error}</Notice>}
+        <label className="block text-sm">
+          <span className="mb-1 block text-xs font-medium text-muted-foreground">{t('schemas.newDataset.name')}</span>
+          <Input value={name} onChange={(e) => setName(e.target.value.toLowerCase())} placeholder="employee_profile" className="font-mono" />
+        </label>
+        <DefineFrom
+          value={from}
+          onChange={(v) => {
+            setFrom(v)
+            if (!name && v.entity && v.from === 'entity') setName(v.entity)
+          }}
+        />
+      </div>
+    </Modal>
   )
 }

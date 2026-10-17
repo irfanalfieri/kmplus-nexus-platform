@@ -37,9 +37,9 @@ export interface PromotionSide {
   pipelines: { id: string; name: string; promotionKey: string | null }[]
 }
 
-export type MappingStatus = 'mapped' | 'missing' | 'create' | 'update' | 'same'
+export type MappingStatus = 'mapped' | 'missing' | 'create' | 'update' | 'same' | 'conflict'
 export interface PromotionItem {
-  kind: 'data source' | 'business rule' | 'pipeline'
+  kind: 'data source' | 'business rule' | 'pipeline' | 'dataset schema'
   name: string
   status: MappingStatus
   detail?: string

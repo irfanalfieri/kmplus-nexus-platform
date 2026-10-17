@@ -348,6 +348,7 @@ export const editor: Messages['editor'] = {
       dataSource: 'sumber data',
       businessRule: 'aturan bisnis',
       pipeline: 'pipeline',
+      datasetSchema: 'skema dataset',
     },
     status: {
       mapped: 'ditemukan',
@@ -355,6 +356,7 @@ export const editor: Messages['editor'] = {
       create: 'akan dibuat',
       update: 'akan diperbarui',
       same: 'sama',
+      conflict: 'berbeda',
     },
   },
   templates: {

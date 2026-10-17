@@ -22,6 +22,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Modal, useConfirm } from '@/components/ui/dialog'
+import { schemaWriteChecks } from './schema-mapping'
 import { Notice } from '@/components/ui/notice'
 import { THead, TBody, Tr, Th, Td } from '@/components/ui/data-table'
 import { Breaker } from '@/components/ui/flow-line'
@@ -505,14 +506,41 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
 
   const setSchedule = (patch: Partial<PipelineSchedule>) => setDraft((d) => ({ ...d, schedule: { ...d.schedule, ...patch } }))
 
+  /** Defined datasets: required columns and conversions must be mapped; extra columns are asked about once. False = stop. */
+  const checkSchemas = async () => {
+    const { errors, extras } = schemaWriteChecks(draft.nodes, (id) => columns.get(id) ?? [], options, t)
+    if (errors.length) {
+      setError(errors.join(' '))
+      return false
+    }
+    if (!extras.length) return true
+    const drop = await confirm({
+      title: t('steps.destination.schema.extrasTitle'),
+      description: extras.map((x) => t('steps.destination.schema.extrasBody', { dataset: x.dataset, columns: x.names.join(', ') })).join(' '),
+      confirmLabel: t('steps.destination.schema.dropContinue'),
+      cancelLabel: t('steps.destination.schema.fixMapping'),
+    })
+    if (!drop) {
+      setSelectedId(extras[0].nodeId)
+      return false
+    }
+    const ids = new Set(extras.map((x) => x.nodeId))
+    const nodes = draft.nodes.map((n) => (ids.has(n.id) && n.type === 'destination' && n.kind === 'dataset' ? { ...n, dropExtra: true } : n))
+    setDraft((d) => ({ ...d, nodes }))
+    return nodes
+  }
+
   const runTest = async () => {
     setError('')
     if (!validation.success) return setError(describeDefinitionError(validation.error))
+    const checked = await checkSchemas()
+    if (!checked) return
+    const def = checked === true ? definition : { ...definition, nodes: checked }
     setTesting(true)
     setTest(null)
     setTab('test')
     try {
-      const res = await testPipeline(definition, draft.id)
+      const res = await testPipeline(def, draft.id)
       if (!res.ok) setError(res.message)
       else setTest(res.result)
     } catch (err) {
@@ -529,6 +557,9 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
     if (!scheduleCheck.success) return setError(t('editor.modal.checkSchedule'))
     if (draft.schedule.type === 'cron' && !upcoming.length) return setError(t('editor.modal.cronInvalid'))
     if (draft.schedule.type === 'after' && !draft.schedule.afterPipelineId) return setError(t('editor.modal.chooseAfter'))
+    const checked = await checkSchemas()
+    if (!checked) return
+    const def = checked === true ? definition : { ...definition, nodes: checked }
     if (
       publish &&
       !(await confirm({
@@ -540,8 +571,8 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
       return
     setSaving(publish ? 'publish' : 'draft')
     try {
-      const snapshot = snapshotOf(draft)
-      const res = await savePipeline({ id: draft.id, name: draft.name, description: draft.description, definition, schedule: draft.schedule, enabled: draft.enabled, changeNote: changeNote || undefined, publish })
+      const snapshot = snapshotOf({ ...draft, nodes: def.nodes })
+      const res = await savePipeline({ id: draft.id, name: draft.name, description: draft.description, definition: def, schedule: draft.schedule, enabled: draft.enabled, changeNote: changeNote || undefined, publish })
       setSavedSnapshot(snapshot)
       onSaved(res.id, res)
     } catch (err) {

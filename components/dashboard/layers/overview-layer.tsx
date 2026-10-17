@@ -9,6 +9,7 @@ import { Notice } from '@/components/ui/notice'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Breaker, FlowLine, StateMark, type FlowState } from '@/components/ui/flow-line'
 import { PageHeader } from '@/components/dashboard/page-header'
+import { UpgradeBanner } from '@/components/upgrades/upgrade-banner'
 import { usePrefs } from '@/components/i18n/i18n-provider'
 import { useWorkspace } from '@/components/workspace/workspace-context'
 import { getOverview } from '@/lib/actions/monitoring'
@@ -79,6 +80,7 @@ export default function OverviewLayer() {
     return (
       <div>
         <PageHeader title={greeting} description={t('pages.overview.description')} />
+      <UpgradeBanner screen="overview" />
         {error ? (
           <Notice tone="danger">{error}</Notice>
         ) : (
@@ -115,6 +117,7 @@ export default function OverviewLayer() {
   return (
     <div>
       <PageHeader title={greeting} description={t('pages.overview.description')} />
+      <UpgradeBanner screen="overview" />
 
       <div className="space-y-5">
         {error && <Notice tone="danger">{error}</Notice>}

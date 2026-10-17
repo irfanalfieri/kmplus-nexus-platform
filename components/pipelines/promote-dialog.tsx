@@ -21,11 +21,13 @@ const STATUS_TEXT: Record<string, MessageKey> = {
   create: 'editor.promote.status.create',
   update: 'editor.promote.status.update',
   same: 'editor.promote.status.same',
+  conflict: 'editor.promote.status.conflict',
 }
 const KIND_TEXT: Record<string, MessageKey> = {
   'data source': 'editor.promote.kind.dataSource',
   'business rule': 'editor.promote.kind.businessRule',
   pipeline: 'editor.promote.kind.pipeline',
+  'dataset schema': 'editor.promote.kind.datasetSchema',
 }
 
 /** Promote a pipeline's published version to the next environment (GV-7). */
@@ -99,11 +101,11 @@ export default function PromoteDialog({ pipelineId, onClose, onDone }: { pipelin
             <ul className="space-y-1 rounded-md border border-border p-2 text-xs" aria-label={t('editor.promote.maps')}>
               {preview.items.map((i) => (
                 <li key={`${i.kind}:${i.name}`} className="flex items-center gap-2">
-                  {i.status === 'missing' ? <AlertTriangle className="size-3.5 shrink-0 text-danger" aria-hidden /> : <CheckCircle2 className="size-3.5 shrink-0 text-live" aria-hidden />}
+                  {i.status === 'missing' || i.status === 'conflict' ? <AlertTriangle className="size-3.5 shrink-0 text-danger" aria-hidden /> : <CheckCircle2 className="size-3.5 shrink-0 text-live" aria-hidden />}
                   <span className="text-muted-foreground">{KIND_TEXT[i.kind] ? t(KIND_TEXT[i.kind]) : i.kind}</span>
                   <span className="font-mono font-medium">{i.name}</span>
                   {i.detail && <span className="text-muted-foreground">({i.detail === 'runs after' ? t('editor.promote.runsAfter') : i.detail})</span>}
-                  <span className={i.status === 'missing' ? 'ml-auto font-medium text-danger-text' : 'ml-auto text-muted-foreground'}>{STATUS_TEXT[i.status] ? t(STATUS_TEXT[i.status]) : i.status}</span>
+                  <span className={i.status === 'missing' || i.status === 'conflict' ? 'ml-auto font-medium text-danger-text' : 'ml-auto text-muted-foreground'}>{STATUS_TEXT[i.status] ? t(STATUS_TEXT[i.status]) : i.status}</span>
                 </li>
               ))}
             </ul>

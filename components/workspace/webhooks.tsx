@@ -19,6 +19,7 @@ const EVENTS = [
   ['run.succeeded', 'runSucceeded'],
   ['run.failed', 'runFailed'],
   ['dataset.updated', 'datasetUpdated'],
+  ['dataset.schema_changed', 'schemaChanged'],
 ] as const
 
 const DELIVERY_STATUSES = ['pending', 'delivered', 'failed'] as const
@@ -119,7 +120,7 @@ export function Webhooks() {
               e.preventDefault()
               if (!url || !events.length) return
               void run('new', async () => {
-                const res = await createWebhook({ url, events: events as ('run.succeeded' | 'run.failed' | 'dataset.updated')[] })
+                const res = await createWebhook({ url, events: events as ('run.succeeded' | 'run.failed' | 'dataset.updated' | 'dataset.schema_changed')[] })
                 setSecret(res.secret)
                 setCopied(false)
                 setAdding(false)

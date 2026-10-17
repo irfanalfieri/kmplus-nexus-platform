@@ -14,6 +14,10 @@ import { inferColumns, type TypeHints } from './columns'
 import { joinKey } from './join'
 import { joinPrefix, lanePlan, passNodes, replayBlocked, type LanePlan, type Pass } from './lanes'
 import { aggregateGroup, aggregateKey, aggregateOutputTypes, dedupeKey, duplicateMessage, pickSurvivor } from './aggregate'
+import { activeAliases, loadSchema, type StoredSchema } from '@/lib/datasets/store'
+import { prepareDefinedWrite } from '@/lib/datasets/write'
+import { exposedColumns } from '@/lib/datasets/schema'
+import type { OutputColumn } from './columns'
 import { createStageTable, dropStageTables, lookupStage, stageGroups, stageKeys, stageSize, stageTableName, writeStageChunk } from './stage'
 import { checkManagers, type Row } from './transforms'
 import { loadRules, loadRunContext } from './context'
@@ -423,29 +427,61 @@ async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promi
     const timeoutAt = new Date(progress.startedAt!).getTime() + def.settings.timeoutMinutes * 60_000
 
     let destRejects: Reject[] = []
+    // Defined datasets (lib/datasets): their schema, loaded once per slice (an automatic addition refreshes it).
+    const schemas = new Map<string, StoredSchema | null>()
+    const schemaOf = async (name: string) => {
+      if (!schemas.has(name)) schemas.set(name, await loadSchema(scope.workspaceId, name))
+      return schemas.get(name)!
+    }
+    const aliases = new Map<string, { oldName: string; newName: string }[]>()
+    const aliasesOf = async (name: string) => {
+      if (!aliases.has(name)) aliases.set(name, await activeAliases(scope.workspaceId, name))
+      return aliases.get(name)!
+    }
+    const extrasLogged = new Set<string>()
     const writeOutputs = async (out: ChunkOutput) => {
       for (const [destId, target] of targets) {
         const rows = out.byDestination.get(destId) ?? []
         if (!rows.length) continue
         const dest = target.node
         const columns = totals.columnsByDest[destId] ?? []
-        checkDestination(def!, columns, dest)
+        const stored = dest.kind === 'dataset' ? await schemaOf(dest.datasetName) : null
+        if (!stored) checkDestination(def!, columns, dest)
         const writeStarted = Date.now()
         let written = 0
         if (dest.kind === 'dataset') {
+          let write = { rows, columns, keys: dest.keys, tableColumns: undefined as OutputColumn[] | undefined }
+          if (stored) {
+            // Target-first mapping, checked against the schema; only mapped columns are written (column ownership).
+            const prep = await prepareDefinedWrite({ workspaceId: scope.workspaceId, userId: job.actorId }, stored, dest, rows, Object.fromEntries(columns.map((c) => [c.name, c.type])), await aliasesOf(dest.datasetName))
+            schemas.set(dest.datasetName, prep.stored)
+            if (prep.added.length) log(progress, 'info', `${dest.datasetName}: new column(s) ${prep.added.join(', ')} added to the schema for review`)
+            if (prep.dropped.length && !extrasLogged.has(destId)) {
+              extrasLogged.add(destId)
+              log(progress, 'warn', `${dest.datasetName}: column(s) not in the schema were not written: ${prep.dropped.slice(0, 20).join(', ')}`)
+            }
+            for (const r of prep.rejects) {
+              destRejects.push({ stepId: destId, row: r.row, errors: r.errors, severity: 'error', kind: 'invalid' })
+              totals.rejectedCount++
+              const st = totals.steps.find((x) => x.id === destId)
+              if (st) st.rejected++
+            }
+            write = { rows: prep.rows, columns: prep.columns, keys: prep.keys, tableColumns: prep.tableColumns }
+          }
           const res = await writeDataset({
             workspaceId: scope.workspaceId,
             existingTableName: target.staging ?? target.table!,
             datasetName: dest.datasetName,
             mode: target.staging || (progress.replay && dest.mode === 'replace') ? 'append' : dest.mode,
-            keys: dest.keys,
-            columns,
-            rows,
+            keys: write.keys,
+            columns: write.columns,
+            tableColumns: write.tableColumns,
+            rows: write.rows,
             runId: job.id,
             // The chunk being written: progress.chunks counts completed (checkpointed) chunks.
             chunk: progress.chunks,
             // A replay into a replace dataset replaces rows with the same key instead of adding a second copy (TD-24).
-            replaceKeys: progress.replay && dest.mode === 'replace' ? dest.keys : undefined,
+            replaceKeys: progress.replay && dest.mode === 'replace' ? write.keys : undefined,
           })
           written = res.written
         } else {
@@ -780,7 +816,9 @@ async function finishJob(job: Job, progress: JobProgress, def: PipelineDefinitio
       if (dest.kind === 'dataset') {
         const tableName = await datasetTable(scope.workspaceId, dest.datasetName)
         const staging = stagingTableName(tableName, `${job.id}:${dest.id}`)
-        const columns = totals.columnsByDest[dest.id]?.length ? totals.columnsByDest[dest.id] : outputColumns(def!, [], {}, dest.id)
+        // A defined dataset keeps its schema's columns whatever this run mapped.
+        const defined = await loadSchema(scope.workspaceId, dest.datasetName).catch(() => null)
+        const columns = defined ? exposedColumns(defined.schema).map((c) => ({ name: c.name, type: c.type })) : totals.columnsByDest[dest.id]?.length ? totals.columnsByDest[dest.id] : outputColumns(def!, [], {}, dest.id)
         if (error || cancelled) {
           if (dest.mode === 'replace' && !replay) await dropDatasetTable(staging).catch(() => undefined)
           continue
@@ -789,7 +827,7 @@ async function finishJob(job: Job, progress: JobProgress, def: PipelineDefinitio
         if (dest.mode === 'replace' && !replay) {
           // No rows at all: still create the (empty) dataset with the declared columns.
           if (!totals.writtenByDest[dest.id] && columns.length) {
-            await writeDataset({ workspaceId: scope.workspaceId, existingTableName: staging, datasetName: dest.datasetName, mode: 'append', keys: [], columns, rows: [] })
+            await writeDataset({ workspaceId: scope.workspaceId, existingTableName: staging, datasetName: dest.datasetName, mode: 'append', keys: [], columns, tableColumns: defined?.schema.columns.map((c) => ({ name: c.name, type: c.type })), rows: [] })
           }
           rowCount = await finalizeDatasetReplace(tableName, staging)
         } else {
@@ -1004,8 +1042,11 @@ async function snapshotQuality(scope: RunScope, def: PipelineDefinition, totals:
     if (dest.type !== 'destination' || dest.kind !== 'dataset' || !results.some((r) => r.id === dest.id)) continue
     const tableName = await datasetTable(scope.workspaceId, dest.datasetName).catch(() => null)
     if (!tableName) continue
-    const columns = (totals.columnsByDest[dest.id] ?? []).map((c) => c.name)
-    await takeQualitySnapshot({ workspaceId: scope.workspaceId, datasetName: dest.datasetName, tableName, columns, keys: dest.mode === 'upsert' ? dest.keys : [], validity })
+    // A defined dataset is measured against its schema: every column it owns, its keys.
+    const defined = await loadSchema(scope.workspaceId, dest.datasetName).catch(() => null)
+    const columns = defined ? exposedColumns(defined.schema).map((c) => c.name) : (totals.columnsByDest[dest.id] ?? []).map((c) => c.name)
+    const keys = defined?.schema.keys.length ? defined.schema.keys : dest.mode === 'upsert' ? dest.keys : []
+    await takeQualitySnapshot({ workspaceId: scope.workspaceId, datasetName: dest.datasetName, tableName, columns, keys, validity })
   }
 }
 

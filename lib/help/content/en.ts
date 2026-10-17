@@ -444,6 +444,7 @@ export const helpEn: HelpContent = {
               ],
             },
             { kind: 'p', text: 'A pipeline can have several destinations, e.g. the employees dataset and a KMPlus product.' },
+            { kind: 'p', text: '**Datasets with a defined schema** list their columns in the Destination step: choose what each takes, and upserts match on the schema’s keys. See *Defined dataset schemas* in the Catalog chapter.' },
             { kind: 'p', text: '**Sending rows to a REST API.** Pick a REST data source in the Destination step, then set the method (POST, PUT or PATCH) and the path. `{{column}}` in the path takes each row’s value, e.g. `PUT /employees/{{employee_id}}`.' },
             {
               kind: 'steps',
@@ -728,6 +729,34 @@ export const helpEn: HelpContent = {
           title: 'Documenting a dataset',
           blocks: [
             { kind: 'p', text: 'Stewards add an owner, a steward, a classification, tags, a description and column descriptions. Each item also shows its freshness, quality history and a masked, row-filtered sample. Datasets can be published as Unified Data Model entities (Employee, Organization, Position …) for the Data API.' },
+          ],
+        },
+        {
+          id: 'schemas',
+          title: 'Defined dataset schemas',
+          blocks: [
+            { kind: 'p', text: 'A dataset’s columns are normally whatever its pipelines write. A **defined schema** makes the dataset own them: each column has a type, required or optional, and a classification that feeds Governance masking; key columns match rows for upserts and replays. Several pipelines can then fill one dataset, each its own columns.' },
+            {
+              kind: 'steps',
+              items: [
+                'Open the dataset in the Catalog and, under **Schema**, choose **Define from current columns** (nothing is reloaded), **From a business entity** (Employee, Organization …) or **From an example** (a JSON object or a CSV header). **New dataset** starts an empty dataset the same way.',
+                'Set the **key columns** and what is required. Stewards and admins edit schemas; every change is a version in **History**, audited, and sent as a `dataset.schema_changed` webhook.',
+                'In each pipeline’s Destination step, choose what every schema column takes: a column, a fixed value, or **not written**. **Match columns** fills it in by name and HR synonyms. A pipeline writes only the columns it maps, matched on the keys, so the HRIS pipeline can fill names and the LMS pipeline training hours.',
+              ],
+            },
+            {
+              kind: 'table',
+              head: ['Change', 'What happens'],
+              rows: [
+                ['Add a column', 'Added at once, empty or with its default.'],
+                ['Make required', 'Rows without a value are counted first. Later runs hold rows that don’t fill it.'],
+                ['Rename', 'The column keeps its values. Pipeline drafts, dashboards and masks move to the new name, published pipelines follow it, and the Data API serves the old name for **30 days** with a `Deprecation` header.'],
+                ['Change type', 'Values that can’t convert are counted first and emptied if you continue.'],
+                ['Remove', 'Confirmed with the pipelines, dashboards and API keys that use the dataset.'],
+              ],
+            },
+            { kind: 'p', text: 'Columns a pipeline sends that the schema lacks are not written: Test and Save ask **Fix the mapping** or **Drop them and continue**. With **Add new columns automatically**, columns matched by name are added instead, flagged for review, and stay out of the Data API until a steward marks them reviewed. A row missing a required value or holding a value that doesn’t convert goes to Data quality from the Destination step.' },
+            { kind: 'note', tone: 'info', text: 'Promoting a pipeline also promotes the schemas of the datasets it writes: a new schema is created and added columns go along. A type change, key change or removed column in the next environment blocks the promotion until it is changed there.' },
           ],
         },
         {
@@ -1035,6 +1064,8 @@ export const helpEn: HelpContent = {
     { id: 'api-duplicates', group: 'pipelines', q: 'Can a retried run create an account twice in the other system?', a: 'Not with a **Change data (API)** step: every successful call is recorded by the row’s key before anything else happens, so a retry, a resumed run or a replay skips it. Each call also carries an Idempotency-Key; only an API that ignores that key could, very rarely, see a repeat when Nexus stops right after a call.' },
     { id: 'api-cache', group: 'pipelines', q: 'Why didn’t an Enrich step pick up a change in the API?', a: 'Its answers are cached (24 hours by default). Lower the cache time, or press **Clear cache** in the step; the next run asks the API again.' },
     { id: 'deleted-employees', group: 'pipelines', q: 'How are people who left the company handled?', a: 'With an upsert destination and **Mark rows missing from the source as deleted**, rows that disappear from the source are marked deleted instead of removed. Reads exclude them; the history stays.' },
+    { id: 'two-pipelines-one-dataset', group: 'pipelines', q: 'Can two pipelines fill the same dataset?', a: 'Yes, once the dataset has a **defined schema** with key columns: each pipeline maps only its own columns and upserts on the keys, so the others are left alone. The Catalog shows which pipeline fills which column and flags a column two pipelines write (the last run wins).' },
+    { id: 'rename-column', group: 'pipelines', q: 'If we rename a dataset column, do API clients break?', a: 'Not right away. Rename it in the dataset’s schema: the Data API keeps serving the old name for 30 days with `Deprecation`, `Sunset` and `X-Nexus-Renamed-Fields` headers, so clients have time to switch. Pipelines, dashboards and masks move to the new name.' },
     { id: 'env-why', group: 'environments', q: 'Why use Development, Staging and Production?', a: 'To change pipelines without risking production data. Build against test data in Development, check the result with production-like data in Staging, and promote only what works to Production, which can’t be edited directly.' },
     { id: 'env-sources', group: 'environments', q: 'Does a promoted pipeline read Development’s database in Production?', a: 'No. Data sources are matched **by name**, and each environment has its own source with its own credentials. Give the source the same name in every environment; a missing one blocks the promotion.' },
     { id: 'env-schedule', group: 'environments', q: 'I promoted a pipeline but it doesn’t run in Production.', a: 'A newly promoted pipeline starts with its **schedule off**; turn it on in Production. If Production requires approvals, the version also waits for a second person first.' },

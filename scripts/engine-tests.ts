@@ -34,6 +34,7 @@ import { serverErrorTemplates } from './test/server-error-sources'
 import { laneTests } from './test/lane-tests'
 import { blockingTests } from './test/blocking-tests'
 import { apiCallTests } from './test/api-call-tests'
+import { schemaTests } from './test/schema-tests'
 import { localizeStepTitle } from '@/components/pipelines/step-title'
 import { alertEmail, inviteEmail, passwordChangedEmail, resetPasswordEmail } from '@/lib/email-templates'
 import { BUILTIN_MAPPING_TEMPLATES, PIPELINE_TEMPLATES, applyMappingTemplate, buildPipelineTemplate, mapToEntity } from '@/lib/pipelines/templates'
@@ -672,7 +673,7 @@ async function main() {
     const spec = openApiSpec('https://nexus.example') as { openapi: string; paths: Record<string, unknown>; webhooks: Record<string, unknown> }
     assert.equal(spec.openapi, '3.1.0')
     for (const path of ['/datasets/{name}', '/domains/{entity}', '/pipelines/{id}/runs', '/runs/{id}']) assert.ok(spec.paths[path], path)
-    assert.deepEqual(Object.keys(spec.webhooks).sort(), ['dataset.updated', 'run.failed', 'run.succeeded'])
+    assert.deepEqual(Object.keys(spec.webhooks).sort(), ['dataset.schema_changed', 'dataset.updated', 'run.failed', 'run.succeeded'])
     const after = scheduleSchema.parse({ type: 'after', afterPipelineId: 'p1', afterOn: 'success_or_partial' })
     assert.deepEqual(nextRunTimes(after, 3), [])
     assert.match(describeSchedule(after), /After another pipeline succeeds \(also partially\)/)
@@ -1519,6 +1520,7 @@ async function main() {
   await laneTests(test)
   await blockingTests(test)
   await apiCallTests(test)
+  await schemaTests(test)
 
   console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`)
 }

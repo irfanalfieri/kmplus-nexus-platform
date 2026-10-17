@@ -45,6 +45,7 @@ import { AiMappingButton } from '@/components/ai/ai-mapping'
 import { useT } from '@/components/i18n/i18n-provider'
 import { getConnectorDefinition } from '@/lib/connectors/catalog'
 import { ApiDestinationFields, newApiDestination } from './api-destination-editor'
+import { SchemaMappingFields, schemaFor } from './schema-mapping'
 import { recencyColumn } from '@/lib/pipelines/aggregate'
 import type { steps as stepsMessages } from '@/lib/i18n/messages/en/steps'
 
@@ -716,6 +717,8 @@ export function DestinationEditor({
   }
   const toggleKey = (k: string) => onChange({ ...step, keys: step.keys.includes(k) ? step.keys.filter((x) => x !== k) : [...step.keys, k] } as DestinationStep)
   const base = { id: step.id, type: 'destination' as const, position: step.position, keys: [], softDeleteMissing: false }
+  // A defined dataset: the schema's keys and columns, mapped target first.
+  const schema = step.kind === 'dataset' ? schemaFor(options, step.datasetName) : null
 
   return (
     <div className="space-y-3">
@@ -745,6 +748,7 @@ export function DestinationEditor({
               <option value="append">{t('steps.destination.modeAppend')}</option>
             </NativeSelect>
           </Field>
+          {schema && <SchemaMappingFields step={step} schema={schema} columns={columns} onChange={onChange} />}
         </div>
       ) : (
         <div className="grid gap-3">
@@ -798,7 +802,7 @@ export function DestinationEditor({
         </div>
       )}
 
-      {(step.mode === 'upsert' || step.mode === 'replace') && (
+      {(step.mode === 'upsert' || step.mode === 'replace') && !schema?.keys.length && (
         <fieldset>
           <legend className="mb-1 text-xs font-medium text-muted-foreground">{step.mode === 'replace' ? t('steps.destination.keysOptional') : t('steps.destination.keys')}</legend>
           {step.mode === 'replace' && (

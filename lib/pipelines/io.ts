@@ -308,6 +308,8 @@ export async function writeDataset(opts: {
   chunk?: number
   /** Append only: first delete live rows whose values in these columns match an incoming row (replays into "replace" datasets, TD-24). */
   replaceKeys?: string[]
+  /** Defined datasets: every schema column, so the table (or a replace run's staging copy) has them all even when this write maps only some. */
+  tableColumns?: OutputColumn[]
 }): Promise<{ written: number; tableName: string; rowCount: number }> {
   const tableName = opts.existingTableName ?? datasetTableName(opts.workspaceId, opts.datasetName)
   const target = `"nexus_data".${qIdent(tableName)}`
@@ -315,15 +317,16 @@ export async function writeDataset(opts: {
   try {
     await client.query('BEGIN')
     await client.query('CREATE SCHEMA IF NOT EXISTS "nexus_data"')
+    const tableColumns = [...(opts.tableColumns ?? []), ...opts.columns.filter((c) => !(opts.tableColumns ?? []).some((t) => t.name === c.name))]
     await client.query(
       `CREATE TABLE IF NOT EXISTS ${target} (${[
-        ...opts.columns.map((c) => `${qIdent(c.name)} ${PG_TYPES[c.type]}`),
+        ...tableColumns.map((c) => `${qIdent(c.name)} ${PG_TYPES[c.type]}`),
         ...SYSTEM_COLUMNS,
       ].join(', ')})`
     )
     for (const sys of SYSTEM_COLUMNS) await client.query(`ALTER TABLE ${target} ADD COLUMN IF NOT EXISTS ${sys}`)
     // Schema evolution: add columns introduced by newer pipeline versions.
-    for (const c of opts.columns) {
+    for (const c of tableColumns) {
       await client.query(`ALTER TABLE ${target} ADD COLUMN IF NOT EXISTS ${qIdent(c.name)} ${PG_TYPES[c.type]}`)
     }
     if (opts.mode === 'replace') await client.query(`TRUNCATE ${target}`)
