@@ -33,6 +33,7 @@ import { AccountSecurity } from '@/components/workspace/account-security'
 import { ApiKeys } from '@/components/workspace/api-keys'
 import { SsoSettings } from '@/components/workspace/sso-settings'
 import { Webhooks } from '@/components/workspace/webhooks'
+import { AlertChannels } from '@/components/workspace/alert-channels'
 import { EnvironmentsSettings } from '@/components/workspace/environments'
 import { ScimSettings } from '@/components/workspace/scim-settings'
 import { AgentsSettings } from '@/components/workspace/agents-settings'
@@ -97,6 +98,8 @@ export default function WorkspaceSettingsLayer({ tab }: { tab: SettingsTab }) {
             <ApiKeys />
           ) : tab === 'webhooks' ? (
             <Webhooks />
+          ) : tab === 'alerts' ? (
+            <AlertChannels />
           ) : (
             <AuditLog />
           )}

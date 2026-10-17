@@ -24,7 +24,7 @@ export function landingSection(role: Role): Section {
   return role === 'steward' ? 'quality' : 'overview'
 }
 
-export const SETTINGS_TABS = ['general', 'members', 'account', 'access', 'environments', 'agents', 'ai', 'api', 'webhooks', 'audit'] as const
+export const SETTINGS_TABS = ['general', 'members', 'account', 'access', 'environments', 'agents', 'ai', 'api', 'webhooks', 'alerts', 'audit'] as const
 export type SettingsTab = (typeof SETTINGS_TABS)[number]
 
 /** Tabs a role can't use are hidden (the server checks again). `null` = every member. */
@@ -38,6 +38,7 @@ export const SETTINGS_TAB_PERMISSION: Record<SettingsTab, Permission | null> = {
   ai: 'workspace:manage',
   api: 'api:manage',
   webhooks: 'api:manage',
+  alerts: 'workspace:manage',
   audit: 'audit:view',
 }
 

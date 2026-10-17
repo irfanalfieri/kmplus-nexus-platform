@@ -1,9 +1,10 @@
 'use client'
 
+import { VersionCompare } from './version-compare'
 import { RootCauseHint } from '@/components/monitoring/root-cause-hint'
 import { AiDiagnose } from '@/components/ai/ai-diagnose'
 import { useCallback, useEffect, useState } from 'react'
-import { ChevronDown, ChevronRight, History, Loader2, RotateCcw } from 'lucide-react'
+import { ChevronDown, ChevronRight, Download, History, Loader2, RotateCcw, StepForward } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Modal, useConfirm } from '@/components/ui/dialog'
 import { Notice } from '@/components/ui/notice'
@@ -12,7 +13,7 @@ import { StateMark, type FlowState } from '@/components/ui/flow-line'
 import { Table, THead, TBody, Tr, Th, Td } from '@/components/ui/data-table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
-import { getRunRejects, listRuns, listVersions, restoreVersion } from '@/lib/actions/pipelines'
+import { getRunRejects, listRuns, listVersions, restoreVersion, retryPipelineRun } from '@/lib/actions/pipelines'
 import type { DestinationResult, StepStat } from '@/lib/pipelines/engine'
 import { useCan } from '@/components/workspace/workspace-context'
 import { usePrefs } from '@/components/i18n/i18n-provider'
@@ -82,7 +83,7 @@ export default function RunHistory({
   onClose: () => void
   onRestored: () => void
 }) {
-  const [tab, setTab] = useState<'runs' | 'versions'>('runs')
+  const [tab, setTab] = useState<'runs' | 'versions' | 'compare'>('runs')
   const [runs, setRuns] = useState<Run[]>([])
   const [versions, setVersions] = useState<Version[]>([])
   const [selected, setSelected] = useState<Run | null>(null)
@@ -93,7 +94,9 @@ export default function RunHistory({
   const [restoring, setRestoring] = useState<number | null>(null)
   const [confirm, confirmDialog] = useConfirm()
   const canEdit = useCan('pipelines:edit')
+  const canRun = useCan('pipelines:run')
   const canPreview = useCan('data:preview')
+  const [retrying, setRetrying] = useState(false)
   const { t, locale, formatDateTime, formatNumber } = usePrefs()
   const when = (value: Date | string | null | undefined) =>
     value
@@ -121,6 +124,46 @@ export default function RunHistory({
   useEffect(() => {
     void load()
   }, [load])
+
+  /** MN-4: continue a failed run from its last checkpoint, or run again from the start. */
+  const retry = async (runId: string, mode: 'resume' | 'restart') => {
+    setRetrying(true)
+    setError('')
+    try {
+      const res = await retryPipelineRun(runId, mode)
+      if (res.status === 'skipped') setError(res.message)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('editor.history.retryFailed'))
+    } finally {
+      setRetrying(false)
+    }
+  }
+
+  /** MN-4: the run's log as a text file (what this person can see: the stack only for admins). */
+  const downloadLog = (run: Run) => {
+    const d = (run.executionDetails ?? {}) as { log?: { at: string; level: string; message: string }[]; attempts?: { attempt: number; error?: string; at: string }[]; errorStack?: string }
+    const lines = [
+      `${pipelineName} · run ${run.id}`,
+      `Status: ${run.status} · trigger: ${run.trigger ?? '—'} · version: ${run.pipelineVersion ?? '—'}`,
+      `Started: ${run.startTime ? new Date(run.startTime).toISOString() : '—'} · ended: ${run.endTime ? new Date(run.endTime).toISOString() : '—'}`,
+      `Rows read: ${run.recordsProcessed ?? 0} · written: ${run.recordsSuccess ?? 0} · held: ${run.recordsError ?? 0}`,
+      ...(run.errorMessage ? ['', `Error: ${run.errorMessage}`] : []),
+      ...(d.attempts?.length ? ['', 'Attempts:', ...d.attempts.map((a) => `  #${a.attempt} ${a.at}${a.error ? ` ${a.error}` : ''}`)] : []),
+      '',
+      'Log:',
+      ...(d.log ?? []).map((l) => `${l.at} ${l.level.toUpperCase().padEnd(5)} ${l.message}`),
+      ...(d.errorStack ? ['', 'Stack trace:', d.errorStack] : []),
+    ]
+    const url = URL.createObjectURL(new Blob([`${lines.join('\n')}\n`], { type: 'text/plain' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `run-${run.id}.log`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
 
   useEffect(() => {
     const flagged = Number((selected?.executionDetails as { flagged?: number } | null)?.flagged ?? 0)
@@ -163,6 +206,9 @@ export default function RunHistory({
     errorStack?: string
     /** MN-7: when the log lines and stack were removed (the workspace's detailed-log retention). */
     detailsPrunedAt?: string
+    /** MN-4: a failed run can continue from its last checkpoint until then. */
+    resumableUntil?: string
+    resumes?: number
     attempts?: { attempt: number; error?: string; at: string }[]
     watermark?: { column: string; value: string | null }
   }
@@ -188,6 +234,7 @@ export default function RunHistory({
             <History aria-hidden /> {t('editor.history.runs')}
           </TabsTrigger>
           <TabsTrigger value="versions">{t('editor.history.versions')}</TabsTrigger>
+          <TabsTrigger value="compare" disabled={versions.length === 0}>{t('editor.history.compare.tab')}</TabsTrigger>
         </TabsList>
 
         {error && (
@@ -301,6 +348,21 @@ export default function RunHistory({
                         </Notice>
                       )}
                       {(selected.status === 'failed' || selected.status === 'partial') && <RootCauseHint message={selected.errorMessage} />}
+                      {selected.status === 'failed' && canRun && (
+                        <div className="flex flex-wrap items-center gap-2">
+                          {details.resumableUntil && Date.parse(details.resumableUntil) > Date.now() && (
+                            <Button size="sm" disabled={retrying} onClick={() => void retry(selected.id, 'resume')}>
+                              {retrying ? <Loader2 className="animate-spin" aria-hidden /> : <StepForward aria-hidden />} {t('editor.history.resume')}
+                            </Button>
+                          )}
+                          <Button size="sm" variant="outline" disabled={retrying} onClick={() => void retry(selected.id, 'restart')}>
+                            <RotateCcw aria-hidden /> {t('editor.history.restart')}
+                          </Button>
+                          {details.resumableUntil && Date.parse(details.resumableUntil) > Date.now() && (
+                            <span className="text-xs text-muted-foreground">{t('editor.history.resumeUntil', { when: when(details.resumableUntil) })}</span>
+                          )}
+                        </div>
+                      )}
                       {(selected.status === 'failed' || selected.status === 'partial') && <AiDiagnose key={selected.id} runId={selected.id} onApplied={onRestored} />}
                       {details.errorStack && (
                         <details className="rounded-md border border-border p-2 text-xs">
@@ -367,6 +429,11 @@ export default function RunHistory({
                         </div>
                       )}
                       {details.detailsPrunedAt && <p className="text-xs text-muted-foreground">{t('editor.history.detailsPruned')}</p>}
+                      <div className="flex justify-end">
+                        <Button size="sm" variant="ghost" onClick={() => downloadLog(selected)}>
+                          <Download aria-hidden /> {t('editor.history.downloadLog')}
+                        </Button>
+                      </div>
                       {details.log && details.log.length > 0 && (
                         <div className="rounded-md border border-border">
                           <button
@@ -442,6 +509,9 @@ export default function RunHistory({
                   )}
                 </div>
               )}
+            </TabsContent>
+            <TabsContent value="compare" className="flex min-h-0 flex-1 flex-col">
+              {tab === 'compare' && versions.length > 0 && <VersionCompare pipelineId={pipelineId} versions={versions.map((v) => v.version)} />}
             </TabsContent>
             <TabsContent value="versions" className="flex min-h-0 flex-1 flex-col">
               {versions.length === 0 ? (

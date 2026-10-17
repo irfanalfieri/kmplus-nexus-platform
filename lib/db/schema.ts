@@ -193,6 +193,59 @@ export const dataSources = pgTable('data_sources', {
   updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [index('data_sources_workspace_idx').on(t.workspaceId), index('data_sources_health_due_idx').on(t.nextHealthCheckAt)])
 
+/** SC-4: maintenance windows / blackout dates (lib/pipelines/maintenance.ts): automatic runs inside are deferred or skipped. */
+export const maintenanceWindows = pgTable('maintenance_windows', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  /** The window as validated by maintenanceWindowSchema (name, kind, dates or weekly hours in WIB, action, pipelines). */
+  spec: jsonb('spec').notNull(),
+  createdBy: text('createdBy').notNull(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('maintenance_windows_workspace_idx').on(t.workspaceId)])
+
+/** SC-6: event ids already received per pipeline (senders retry), kept 7 days. */
+export const pipelineTriggerEvents = pgTable('pipeline_trigger_events', {
+  pipelineId: text('pipelineId').notNull(),
+  eventId: text('eventId').notNull(),
+  workspaceId: text('workspaceId').notNull(),
+  receivedAt: timestamp('receivedAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [primaryKey({ columns: [t.pipelineId, t.eventId] }), index('pipeline_trigger_events_received_idx').on(t.receivedAt), index('pipeline_trigger_events_workspace_idx').on(t.workspaceId)])
+
+/** MN-5: where alerts go besides the bell and email (Slack, Microsoft Teams, any webhook). */
+export const alertChannels = pgTable('alert_channels', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  name: text('name').notNull(),
+  /** slack | teams | webhook */
+  kind: text('kind').notNull(),
+  /** The webhook URL (and, for kind webhook, a signing secret), sealed like data source credentials. */
+  secret: jsonb('secret').notNull(),
+  /** Every pipeline's alerts, not only the pipelines that pick this channel. */
+  allPipelines: boolean('allPipelines').notNull().default(false),
+  lastStatus: text('lastStatus'),
+  lastError: text('lastError'),
+  lastSentAt: timestamp('lastSentAt', { withTimezone: true }),
+  createdBy: text('createdBy').notNull(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('alert_channels_workspace_idx').on(t.workspaceId)])
+
+/** MN-5: a pipeline's subscribers, channels, SLA and error-rate alerts (not versioned with the pipeline). */
+export const pipelineAlerts = pgTable('pipeline_alerts', {
+  pipelineId: text('pipelineId').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  /** As validated by pipelineAlertsSchema (lib/alerts/rules.ts). */
+  config: jsonb('config').notNull(),
+  /** SLA alerts already sent (SlaState), so each goes out once. */
+  state: jsonb('state').notNull().default({}),
+  /** When the cron tick next looks at the SLA; null = no SLA set. */
+  nextCheckAt: timestamp('nextCheckAt', { withTimezone: true }),
+  updatedBy: text('updatedBy').notNull(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('pipeline_alerts_workspace_idx').on(t.workspaceId), index('pipeline_alerts_check_idx').on(t.nextCheckAt)])
+
 /** DS-7: one row per health check of a data source (kept 30 days). */
 export const sourceHealthChecks = pgTable('source_health_checks', {
   id: text('id').primaryKey(),
@@ -251,6 +304,10 @@ export const pipelines = pgTable('pipelines', {
   state: jsonb('state'),
   /** SHA-256 of the inbound webhook trigger token (SC-1); null = webhook trigger off. */
   triggerTokenHash: text('triggerTokenHash'),
+  /** SC-6: event formats, type filter and Graph clientState hash for the webhook URL (triggerConfigSchema). */
+  triggerConfig: jsonb('triggerConfig').notNull().default({}),
+  /** SC-6: an event arrived while a run was active; run again when it finishes. */
+  eventPendingAt: timestamp('eventPendingAt', { withTimezone: true }),
   /** Same value in every environment a pipeline was promoted through (the id it had where it was created, GV-7). */
   promotionKey: text('promotionKey'),
   createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
@@ -588,10 +645,31 @@ export const dashboards = pgTable('dashboards', {
   widgets: jsonb('widgets').notNull().default([]),
   /** DB-4: dashboard-wide filters (date range / value), lib/analytics/definition.ts. */
   filters: jsonb('filters').notNull().default([]),
+  /** DB-5: whole workspace, or chosen roles and people (lib/analytics/sharing.ts). */
+  sharing: jsonb('sharing').notNull().default({}),
   createdBy: text('createdBy').notNull(),
   createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [index('dashboards_workspace_idx').on(t.workspaceId)])
+
+/** DB-5: secret links that show a dashboard read-only inside KMPlus apps. Only a SHA-256 of the token is stored. */
+export const dashboardEmbeds = pgTable('dashboard_embeds', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  dashboardId: text('dashboardId').notNull(),
+  tokenHash: text('tokenHash').notNull(),
+  label: text('label').notNull().default(''),
+  /** viewer | analyst: the role whose masks and row filters apply. */
+  role: text('role').notNull().default('viewer'),
+  /** Sites that may frame it (CSP frame-ancestors). */
+  allowedOrigins: jsonb('allowedOrigins').notNull().default([]),
+  expiresAt: timestamp('expiresAt', { withTimezone: true }),
+  revokedAt: timestamp('revokedAt', { withTimezone: true }),
+  lastUsedAt: timestamp('lastUsedAt', { withTimezone: true }),
+  views: integer('views').notNull().default(0),
+  createdBy: text('createdBy').notNull(),
+  createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex('dashboard_embeds_token_idx').on(t.tokenHash), index('dashboard_embeds_workspace_idx').on(t.workspaceId, t.dashboardId)])
 
 // Data Catalog (PRD Layer 8) + Virtualization (Layer 9). Datasets and source
 // tables are listed automatically; a row exists once someone documents one.

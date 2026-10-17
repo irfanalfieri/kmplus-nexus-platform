@@ -51,7 +51,7 @@ await build({
   minify: true,
   legalComments: 'none',
   // Optional native add-ons some packages probe for.
-  external: ['pg-native', 'cloudflare:sockets'],
+  external: ['pg-native', 'cloudflare:sockets', 'cpu-features', '*.node'],
   banner: { js: "#!/usr/bin/env node\nimport { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" },
   plugins: [lazyDrivers],
   logLevel: 'warning',

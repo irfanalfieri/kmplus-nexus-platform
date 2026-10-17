@@ -34,6 +34,8 @@ export async function notify(opts: {
   runId?: string
   /** Send email too. Empty list = the user's own address. */
   email?: { to: string[] }
+  /** false = email only (the caller already filled this person's bell). */
+  bell?: boolean
 }) {
   let emailStatus: string | null = null
   if (opts.email) {
@@ -44,6 +46,7 @@ export async function notify(opts: {
     }
     emailStatus = await sendEmail(to, { title: opts.title, lines: opts.lines, level: opts.level, pipelineId: opts.pipelineId })
   }
+  if (opts.bell === false) return { emailStatus }
   await db.insert(notifications).values({
     id: newId('ntf'),
     userId: opts.userId,

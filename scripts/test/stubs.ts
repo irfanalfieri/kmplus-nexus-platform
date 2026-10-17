@@ -54,6 +54,17 @@ export class NextResponse extends Response {
   static json(body: unknown, init: ResponseInit = {}) {
     return new Response(JSON.stringify(body), { ...init, headers: { 'content-type': 'application/json', ...(init.headers as Record<string, string>) } })
   }
+  static next() {
+    return new NextResponse(null)
+  }
+}
+
+export class NextRequest extends Request {
+  readonly nextUrl: URL
+  constructor(input: string, init?: RequestInit) {
+    super(input, init)
+    this.nextUrl = new URL(input)
+  }
 }
 
 // @/lib/auth

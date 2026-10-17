@@ -25,13 +25,26 @@ export async function runWidget(ctx: WorkspaceContext, input: Widget, dashboard?
   const scoped = dashboard ? applyDashboardFilters(input, dashboard.filters, dashboard.values, columns, new Set(Object.keys(access.masks))) : { widget: input, applied: [], skipped: [] }
   const widget = scoped.widget
   const table = `"nexus_data"."${dataset.tableName.replace(/"/g, '""')}"`
-  const { text, params } = buildWidgetSql(widget, table, columns, { blockedColumns: Object.keys(access.masks), rowFilters: access.rowFilters })
+  // DB-3: the joined dataset is read with the viewer's masks and row filters for it too.
+  let join: NonNullable<Parameters<typeof buildWidgetSql>[3]>['join']
+  if (widget.join) {
+    const [other] = await db
+      .select({ tableName: nexusDatasets.tableName, columns: nexusDatasets.columns })
+      .from(nexusDatasets)
+      .where(and(eq(nexusDatasets.workspaceId, ctx.workspaceId), eq(nexusDatasets.name, widget.join.dataset)))
+      .limit(1)
+    if (!other) throw new WidgetQueryError(`Dataset ${widget.join.dataset} no longer exists.`)
+    const otherAccess = await accessFor(ctx.workspaceId, widget.join.dataset, ctx.role)
+    join = { table: `"nexus_data"."${other.tableName.replace(/"/g, '""')}"`, columns: (other.columns as DatasetColumn[]) ?? [], blockedColumns: Object.keys(otherAccess.masks), rowFilters: otherAccess.rowFilters }
+  }
+  const { text, params } = buildWidgetSql(widget, table, columns, { blockedColumns: Object.keys(access.masks), rowFilters: access.rowFilters, join })
   const client = await pool.connect()
   try {
     await client.query('BEGIN READ ONLY')
     await client.query(`SET LOCAL statement_timeout = '${QUERY_TIMEOUT}'`)
     const exists = (await client.query<{ r: string | null }>('SELECT to_regclass($1)::text AS r', [table])).rows[0].r
-    const res = exists ? await client.query<{ label?: string | null; value: string | number | null }>(text, params) : { rows: [] }
+    const joinExists = !join || (await client.query<{ r: string | null }>('SELECT to_regclass($1)::text AS r', [join.table])).rows[0].r
+    const res = exists && joinExists ? await client.query<{ label?: string | null; value: string | number | null }>(text, params) : { rows: [] }
     await client.query('COMMIT')
     const rows = res.rows.map((r) => ({ label: r.label ?? null, value: r.value === null ? null : Number(r.value) }))
     const truncated = Boolean(widget.dimension) && rows.length > widget.limit

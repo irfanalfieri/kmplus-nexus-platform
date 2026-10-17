@@ -20,6 +20,12 @@ import * as grafana from './drivers/grafana'
 import * as s3 from './drivers/s3'
 import * as azureblob from './drivers/azureblob'
 import * as gcs from './drivers/gcs'
+import * as sharepoint from './drivers/sharepoint'
+import * as googlesheets from './drivers/googlesheets'
+import * as googledrive from './drivers/googledrive'
+import * as sftp from './drivers/sftp'
+import * as graphql from './drivers/graphql'
+import * as soap from './drivers/soap'
 import { secretManagerDriver } from '@/lib/secrets/managers'
 import { isSecretManager } from '@/lib/secrets/types'
 import type { Row } from './http'
@@ -71,6 +77,18 @@ export async function testConnectorConnection(
       return azureblob.testAzureBlobConnection(credentials)
     case 'gcs':
       return gcs.testGcsConnection(credentials)
+    case 'sharepoint':
+      return sharepoint.testSharePointConnection(credentials)
+    case 'googlesheets':
+      return googlesheets.testGoogleSheetsConnection(credentials)
+    case 'googledrive':
+      return googledrive.testGoogleDriveConnection(credentials)
+    case 'sftp':
+      return sftp.testSftpConnection(credentials)
+    case 'graphql':
+      return graphql.testGraphqlConnection(credentials)
+    case 'soap':
+      return soap.testSoapConnection(credentials)
     case 'vault':
     case 'awssecrets':
     case 'azurekeyvault':
@@ -129,6 +147,18 @@ export async function scanConnectorSchema(
       return azureblob.scanAzureBlobSchema(credentials)
     case 'gcs':
       return gcs.scanGcsSchema(credentials)
+    case 'sharepoint':
+      return sharepoint.scanSharePointSchema(credentials)
+    case 'googlesheets':
+      return googlesheets.scanGoogleSheetsSchema(credentials)
+    case 'googledrive':
+      return googledrive.scanGoogleDriveSchema(credentials)
+    case 'sftp':
+      return sftp.scanSftpSchema(credentials)
+    case 'graphql':
+      return graphql.scanGraphqlSchema(credentials)
+    case 'soap':
+      return soap.scanSoapSchema(credentials)
     case 'vault':
     case 'awssecrets':
     case 'azurekeyvault':
@@ -190,6 +220,18 @@ export async function sampleConnectorTable(
       return azureblob.sampleAzureBlobTable(credentials, tableName, limit)
     case 'gcs':
       return gcs.sampleGcsTable(credentials, tableName, limit)
+    case 'sharepoint':
+      return sharepoint.sampleSharePointTable(credentials, tableName, limit)
+    case 'googlesheets':
+      return googlesheets.sampleGoogleSheetsTable(credentials, tableName, limit)
+    case 'googledrive':
+      return googledrive.sampleGoogleDriveTable(credentials, tableName, limit)
+    case 'sftp':
+      return sftp.sampleSftpTable(credentials, tableName, limit)
+    case 'graphql':
+      return graphql.sampleGraphqlTable(credentials, tableName, limit)
+    case 'soap':
+      return soap.sampleSoapTable(credentials, tableName, limit)
     default:
       if (isSecretManager(slug)) throw Object.assign(new Error('Secrets managers are never read as data. Reference their secrets in other data sources’ credentials instead.'), { retryable: false })
       throw new Error(`Unsupported connector: ${slug}`)
@@ -216,6 +258,18 @@ export async function readConnectorRows(
       return { rows: await azureblob.readAzureBlobRows(credentials, table, maxRows), watermarkApplied: false }
     case 'gcs':
       return { rows: await gcs.readGcsRows(credentials, table, maxRows), watermarkApplied: false }
+    case 'sharepoint':
+      return { rows: await sharepoint.readSharePointRows(credentials, table, maxRows), watermarkApplied: false }
+    case 'googlesheets':
+      return { rows: await googlesheets.readGoogleSheetsRows(credentials, table, maxRows), watermarkApplied: false }
+    case 'googledrive':
+      return { rows: await googledrive.readGoogleDriveRows(credentials, table, maxRows), watermarkApplied: false }
+    case 'sftp':
+      return { rows: await sftp.readSftpRows(credentials, table, maxRows), watermarkApplied: false }
+    case 'graphql':
+      return { rows: await graphql.readGraphqlRows(credentials, table, maxRows), watermarkApplied: false }
+    case 'soap':
+      return { rows: await soap.readSoapRows(credentials, table, maxRows), watermarkApplied: false }
     case 'elasticsearch':
       return { rows: await elasticsearch.readElasticsearchRows(credentials, table, maxRows, watermark), watermarkApplied: Boolean(watermark) }
     default:

@@ -26,6 +26,14 @@ async function startInfra() {
   return () => undefined
 }
 
+// ── SFTP: a local ssh2 server with files in memory ──
+let sftpMock: Awaited<ReturnType<typeof import('./test/sftp-mock').startSftpMock>> | null = null
+async function startSftp() {
+  process.env.NEXUS_ALLOW_PRIVATE_URLS = 'true'
+  if (!sftpMock) sftpMock = await (await import('./test/sftp-mock')).startSftpMock()
+  return () => undefined
+}
+
 type Case = { slug: ConnectorSlug; label: string; publicEndpoint?: boolean; credentials?: ConnectorCredentials; sampleTable?: string; skip?: string; setup?: () => Promise<() => void | Promise<void>>; infra?: boolean; secretPath?: string; expectValue?: string; /** A custom check instead of test → scan → sample (e.g. writes). */ run?: () => Promise<string> }
 type Outcome = { label: string; slug: string; status: 'PASS' | 'FAIL' | 'SKIP' | 'UNREACHABLE'; detail: string; ms: number }
 
@@ -186,6 +194,12 @@ const cases: Case[] = [
   { slug: 's3', label: 'S3-compatible (local mock, verifies Signature V4)', setup: startInfra, infra: true, sampleTable: 'daily/*.csv' },
   { slug: 'azureblob', label: 'Azure Blob (local mock, SAS token)', setup: startInfra, infra: true, sampleTable: 'reference/orgs.ndjson' },
   { slug: 'gcs', label: 'Google Cloud Storage (local mock, verifies the JWT)', setup: startInfra, infra: true, sampleTable: 'daily/employees_2026-10-01.csv' },
+  { slug: 'sharepoint', label: 'Microsoft 365 / SharePoint (local mock of Graph: list paging, library files)', setup: startInfra, infra: true, sampleTable: 'lists/Employees' },
+  { slug: 'googlesheets', label: 'Google Sheets (local mock, verifies the JWT)', setup: startInfra, infra: true, sampleTable: 'Employees' },
+  { slug: 'googledrive', label: 'Google Drive (local mock: folders, a Sheets file as CSV)', setup: startInfra, infra: true, sampleTable: 'monthly/*.csv' },
+  { slug: 'graphql', label: 'GraphQL API (local mock, cursor paging)', setup: startInfra, infra: true, sampleTable: 'employees' },
+  { slug: 'soap', label: 'SOAP 1.1 web service (local mock, basic auth)', setup: startInfra, infra: true, sampleTable: 'employees' },
+  { slug: 'sftp', label: 'SFTP (local ssh2 server, password, pinned host key)', setup: startSftp, sampleTable: 'daily/*.csv' },
   { slug: 'vault', label: 'HashiCorp Vault (local mock, AppRole, KV v2)', setup: startInfra, infra: true, secretPath: 'hr/db#password', expectValue: 'p@ss' },
   { slug: 'awssecrets', label: 'AWS Secrets Manager (local mock, verifies Signature V4)', setup: startInfra, infra: true, secretPath: 'hr/db#password', expectValue: 'p@ss' },
   { slug: 'azurekeyvault', label: 'Azure Key Vault (local mock, Entra ID client credentials)', setup: startInfra, infra: true, secretPath: 'hr-db-password', expectValue: 'p@ss' },
@@ -285,6 +299,7 @@ async function runCase(c: Case): Promise<Outcome> {
       : c.slug === 'postgres' && !c.credentials ? { connectionString: postgresFixtureUrl, schema: fixtureSchema }
       : c.slug === 'file' ? { storageKey: FILE_KEY }
       : c.slug === 'kmplus' ? { product: 'LMS', baseUrl: kmplusMock!.baseUrl, apiToken: kmplusMock!.token }
+      : c.slug === 'sftp' && sftpMock ? sftpMock.credentials
       : c.infra ? infraMock!.credentials[c.slug]
       : c.credentials!
     const test = await testConnectorConnection(c.slug, credentials)
@@ -349,6 +364,7 @@ console.log('\nNegative checks:')
 for (const line of await negativeChecks()) console.log(`  ${line}`)
 if (missing.length) console.log(`\nWARNING: catalog connectors without a test case: ${missing.join(', ')}`)
 await infraMock?.stop()
+await sftpMock?.stop()
 const failed = outcomes.filter((o) => o.status === 'FAIL').length
 console.log(`\n${outcomes.filter((o) => o.status === 'PASS').length} passed, ${failed} failed, ${outcomes.filter((o) => o.status === 'UNREACHABLE').length} unreachable, ${outcomes.filter((o) => o.status === 'SKIP').length} skipped`)
 process.exit(failed ? 1 : 0)

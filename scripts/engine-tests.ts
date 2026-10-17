@@ -39,6 +39,7 @@ import { healthTests } from './test/health-tests'
 import { transferTests } from './test/transfer-tests'
 import { dashboardTests } from './test/dashboard-tests'
 import { mapperTests } from './test/mapper-tests'
+import { backlogTests } from './test/backlog-tests'
 import { localizeStepTitle } from '@/components/pipelines/step-title'
 import { alertEmail, inviteEmail, passwordChangedEmail, resetPasswordEmail } from '@/lib/email-templates'
 import { BUILTIN_MAPPING_TEMPLATES, PIPELINE_TEMPLATES, applyMappingTemplate, buildPipelineTemplate, mapToEntity } from '@/lib/pipelines/templates'
@@ -1088,7 +1089,10 @@ async function main() {
     const find = (q: string, extra: (c: (typeof CONNECTOR_CATALOG)[number]) => string[] = () => []) => CONNECTOR_CATALOG.filter((c) => connectorMatches(c, q, extra(c))).map((c) => c.slug)
     assert.deepEqual(find('hris'), ['talenta'])
     assert.deepEqual(find('Mekari'), ['talenta'])
-    assert.deepEqual(find('excel'), ['file', 's3', 'azureblob', 'gcs'], 'uploads and cloud storage files')
+    assert.deepEqual(find('excel'), ['file', 's3', 'azureblob', 'gcs', 'sharepoint', 'googledrive', 'sftp'], 'uploads, cloud storage and shared files')
+    assert.deepEqual(find('spreadsheet'), ['file', 'googlesheets'])
+    assert.deepEqual(find('wsdl'), ['soap'])
+    assert.deepEqual(find('graphql').sort(), ['graphql', 'rest'])
     assert.deepEqual(find('apm'), ['prometheus', 'elasticsearch', 'datadog', 'newrelic'])
     assert.deepEqual(find('minio'), ['s3'])
     assert.deepEqual(find('vault'), ['vault', 'azurekeyvault'])
@@ -1529,6 +1533,7 @@ async function main() {
   await transferTests(test)
   await dashboardTests(test)
   await mapperTests(test)
+  await backlogTests(test)
 
   console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`)
 }

@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { Fragment, useCallback, useEffect, useState } from 'react'
-import { ArrowDown, ArrowUp, BarChart3, Database, LayoutDashboard, Loader2, Pencil, Plus, RefreshCw, Save, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, BarChart3, Code2, Database, FileDown, ImageDown, LayoutDashboard, Loader2, Lock, Pencil, Plus, RefreshCw, Save, Share2, Trash2 } from 'lucide-react'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Notice } from '@/components/ui/notice'
@@ -18,11 +18,27 @@ import type { Widget } from '@/lib/analytics/definition'
 import { WidgetView, freshnessT } from '@/components/analytics/charts'
 import WidgetEditor, { newWidget } from '@/components/analytics/widget-editor'
 import { AiAsk } from '@/components/ai/ai-ask'
+import { EmbedDashboardDialog, ShareDashboardDialog } from '@/components/analytics/dashboard-sharing'
+import { downloadWidgetPng } from '@/lib/analytics/png'
 
 type List = Awaited<ReturnType<typeof listDashboards>>
 type Dash = List['dashboards'][number]
 type Datasets = Awaited<ReturnType<typeof getAnalyticsDatasets>>
 type Results = Awaited<ReturnType<typeof getDashboardData>>['results']
+
+/** The viewer's filter choices as `?f.<id>=…` for the print view (DB-5). */
+function printQuery(values: DashboardFilterValues) {
+  const q = new URLSearchParams()
+  for (const [id, v] of Object.entries(values)) {
+    if (v.value) q.set(`f.${id}`, v.value)
+    else if (v.preset === 'custom') {
+      if (v.from) q.set(`f.${id}.from`, v.from)
+      if (v.to) q.set(`f.${id}.to`, v.to)
+    } else if (v.preset && v.preset !== 'all') q.set(`f.${id}`, v.preset)
+  }
+  const s = q.toString()
+  return s ? `?${s}` : ''
+}
 
 export default function AnalyticsDashboardLayer() {
   const { t, formatDateTime } = usePrefs()
@@ -43,6 +59,9 @@ export default function AnalyticsDashboardLayer() {
   const [filterValues, setFilterValues] = useState<DashboardFilterValues>({})
   const [filterOptions, setFilterOptions] = useState<Record<string, string[]>>({})
   const [editingFilters, setEditingFilters] = useState(false)
+  // DB-5: sharing and embedding dialogs.
+  const [sharing, setSharing] = useState(false)
+  const [embedding, setEmbedding] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -170,6 +189,8 @@ export default function AnalyticsDashboardLayer() {
     <div className="space-y-6">
       <PageHeader title={t('pages.analytics.title')} description={t('pages.analytics.description')} />
       {confirmEl}
+      {sharing && dash && <ShareDashboardDialog dashboardId={dash.id} name={dash.name} sharing={dash.sharing} onClose={() => setSharing(false)} onSaved={() => void load()} />}
+      {embedding && dash && <EmbedDashboardDialog dashboardId={dash.id} name={dash.name} filterIds={dash.filters.map((f) => f.id)} onClose={() => setEmbedding(false)} />}
       {editing && dash && (
         <WidgetEditor
           datasets={datasets}
@@ -282,7 +303,14 @@ export default function AnalyticsDashboardLayer() {
                   </form>
                 ) : (
                   <div className="min-w-0">
-                    <h2 className="text-lg font-semibold">{dash.name}</h2>
+                    <h2 className="flex items-center gap-2 text-lg font-semibold">
+                      {dash.name}
+                      {dash.sharing.mode === 'restricted' && (
+                        <span className="inline-flex items-center gap-1 rounded-sm border border-border px-1.5 py-px text-xs font-normal text-muted-foreground">
+                          <Lock className="size-3" aria-hidden /> {t('insights.share.restrictedBadge')}
+                        </span>
+                      )}
+                    </h2>
                     <p className="text-xs text-muted-foreground">
                       {dash.description ? `${dash.description} · ` : ''}
                       {t('insights.analytics.updated').split('{when}').map((part, i) => (
@@ -299,6 +327,26 @@ export default function AnalyticsDashboardLayer() {
                     <Button size="sm" variant="outline" onClick={() => void loadData(dash.id, filterValues)} disabled={loadingData || !dash.widgets.length}>
                       <RefreshCw className={cn('mr-1 h-4 w-4', loadingData && 'animate-spin')} aria-hidden /> {t('common.refresh')}
                     </Button>
+                    {dash.widgets.length > 0 && (
+                      <a
+                        className={buttonVariants({ size: 'sm', variant: 'outline' })}
+                        href={`/print/dashboards/${dash.id}${printQuery(filterValues)}`}
+                        target="_blank"
+                        rel="noopener"
+                      >
+                        <FileDown className="mr-1 h-4 w-4" aria-hidden /> {t('insights.analytics.exportPdf')}
+                      </a>
+                    )}
+                    {dash.canShare && (
+                      <Button size="sm" variant="outline" onClick={() => setSharing(true)}>
+                        <Share2 className="mr-1 h-4 w-4" aria-hidden /> {t('insights.share.open')}
+                      </Button>
+                    )}
+                    {list.canEmbed && (
+                      <Button size="sm" variant="outline" onClick={() => setEmbedding(true)}>
+                        <Code2 className="mr-1 h-4 w-4" aria-hidden /> {t('insights.embed.open')}
+                      </Button>
+                    )}
                     {list.canEdit && (
                       <>
                         <Button size="sm" onClick={() => setEditing(newWidget(datasets[0].name))} disabled={dash.widgets.length >= 24}>
@@ -356,14 +404,27 @@ export default function AnalyticsDashboardLayer() {
                               </p>
                             ) : null}
                           </div>
-                          {list.canEdit && (
-                            <div className="flex shrink-0">
-                              <Button size="icon-sm" variant="ghost" onClick={() => move(i, -1)} disabled={busy || i === 0} aria-label={t('insights.analytics.moveUp', { name: w.title })}><ArrowUp className="h-4 w-4" aria-hidden /></Button>
-                              <Button size="icon-sm" variant="ghost" onClick={() => move(i, 1)} disabled={busy || i === dash.widgets.length - 1} aria-label={t('insights.analytics.moveDown', { name: w.title })}><ArrowDown className="h-4 w-4" aria-hidden /></Button>
-                              <Button size="icon-sm" variant="ghost" onClick={() => setEditing(w)} aria-label={t('insights.analytics.editWidget', { name: w.title })}><Pencil className="h-4 w-4" aria-hidden /></Button>
-                              <Button size="icon-sm" variant="ghost" disabled={busy} onClick={() => void removeWidget(dash, w)} aria-label={t('insights.analytics.removeWidgetLabel', { name: w.title })}><Trash2 className="h-4 w-4" aria-hidden /></Button>
-                            </div>
-                          )}
+                          <div className="flex shrink-0">
+                            {r?.ok && (
+                              <Button
+                                size="icon-sm"
+                                variant="ghost"
+                                onClick={() => void downloadWidgetPng(w, r.result, w.title, `${dash.name} · ${when(new Date())}`).catch((err) => setError(err instanceof Error ? err.message : t('insights.analytics.pngFailed')))}
+                                aria-label={t('insights.analytics.downloadPng', { name: w.title })}
+                                title={t('insights.analytics.downloadPng', { name: w.title })}
+                              >
+                                <ImageDown className="h-4 w-4" aria-hidden />
+                              </Button>
+                            )}
+                            {list.canEdit && (
+                              <>
+                                <Button size="icon-sm" variant="ghost" onClick={() => move(i, -1)} disabled={busy || i === 0} aria-label={t('insights.analytics.moveUp', { name: w.title })}><ArrowUp className="h-4 w-4" aria-hidden /></Button>
+                                <Button size="icon-sm" variant="ghost" onClick={() => move(i, 1)} disabled={busy || i === dash.widgets.length - 1} aria-label={t('insights.analytics.moveDown', { name: w.title })}><ArrowDown className="h-4 w-4" aria-hidden /></Button>
+                                <Button size="icon-sm" variant="ghost" onClick={() => setEditing(w)} aria-label={t('insights.analytics.editWidget', { name: w.title })}><Pencil className="h-4 w-4" aria-hidden /></Button>
+                                <Button size="icon-sm" variant="ghost" disabled={busy} onClick={() => void removeWidget(dash, w)} aria-label={t('insights.analytics.removeWidgetLabel', { name: w.title })}><Trash2 className="h-4 w-4" aria-hidden /></Button>
+                              </>
+                            )}
+                          </div>
                         </div>
                         {!r ? (
                           <div className="flex h-32 items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> {t('common.loading')}</div>

@@ -238,6 +238,22 @@ export const helpId: HelpContent = {
           ],
         },
         {
+          id: 'productivity',
+          title: 'File kantor, SFTP, GraphQL, dan SOAP',
+          blocks: [
+            {
+              kind: 'list',
+              items: [
+                '**Microsoft 365 / SharePoint**: setiap list SharePoint menjadi tabel (`lists/Employees`), dan file di pustaka dokumen situs menjadi tabel seperti penyimpanan cloud (`files/exports/*.csv`). Masuk dengan app registration yang memiliki `Sites.Read.All` (atau `Sites.Selected` pada situs tersebut).',
+                '**Google Sheets**: setiap tab menjadi tabel, baris pertamanya nama kolom. **Google Drive**: file CSV, JSON, dan Excel di sebuah folder (beserta subfoldernya) menjadi tabel; file Google Sheets dibaca sebagai CSV. Bagikan spreadsheet atau folder ke alamat email service account.',
+                '**SFTP**: file di server menjadi tabel. Masuk dengan kata sandi atau private key, dan kunci host key server dengan fingerprint `SHA256:` agar Nexus menolak server palsu. Server di dalam jaringan Anda melalui Nexus Agent.',
+                '**GraphQL**: tulis setiap kueri di bawah baris `### nama`; list pertamanya (termasuk `edges { node }`) menjadi baris. Kueri dengan variabel `$after` dibaca per halaman lewat `pageInfo`.',
+                '**SOAP**: tempel setiap envelope permintaan di bawah `### nama`, dengan baris `SOAPAction:` bila layanan memerlukannya. Elemen berulang di jawaban (atau yang Anda sebutkan) menjadi baris; SOAP fault menghentikan eksekusi dengan pesannya.',
+              ],
+            },
+          ],
+        },
+        {
           id: 'destinations',
           title: 'Tujuan: produk KMPlus, database Anda, dan REST API',
           blocks: [
@@ -484,6 +500,7 @@ export const helpId: HelpContent = {
                 'Setiap penerbitan adalah versi dengan catatan perubahan opsional. Riwayat versi bisa **memulihkan** versi sebelumnya: versi itu menjadi versi yang berjalan (setelah disetujui, jika workspace Anda mewajibkannya).',
                 'Saat eksekusi gagal, **Diagnosis dengan AI** menjelaskan kegagalan dari pesan langkah (tidak pernah nilai baris) dan bisa menyarankan perbaikan sebagai draf baru.',
                 '**Ekspor JSON** (di menu pipeline) mengunduh pipeline beserta nama sumber data, aturan bisnis, dan skema dataset yang dipakainya, tidak pernah kredensial atau baris. **Impor** di layar Pipeline membaca file tersebut ke ruang kerja lain: sumber data dicocokkan menurut nama dan tipe (atau Anda memilih yang setipe), aturan dan skema dataset yang belum ada dibuat, dan pipeline masuk sebagai draf dengan jadwal mati.',
+                '**Riwayat → Bandingkan** menampilkan apa yang berubah di antara dua versi mana pun: langkah yang ditambah, dihapus, atau diubah (dengan setiap pengaturan sebelum dan sesudah), perubahan pemetaan field per langkah Map, sambungan, pengaturan eksekusi, dan jadwal.',
               ],
             },
           ],
@@ -500,10 +517,12 @@ export const helpId: HelpContent = {
                 ['Jadwal', 'Setiap jam, harian, mingguan, atau bulanan pada jam tertentu (WIB), atau ekspresi cron.'],
                 ['Setelah pipeline lain', 'Saat pipeline yang dipilih selesai (berhasil, berhasil sebagian, atau selalu), untuk rangkaian seperti “karyawan, lalu unit organisasi”. Putaran ditolak.'],
                 ['Webhook', 'Panggilan HTTP ke URL rahasia pipeline, mis. dari sistem SDM Anda saat data berubah.'],
+                ['Event', 'URL yang sama menerima event dari sistem sumber: CloudEvents (SAP Event Mesh, S/4HANA, SuccessFactors), Azure Event Grid, dan notifikasi perubahan Microsoft Graph. Nexus menjawab handshake pendaftarannya, hanya berjalan untuk tipe event yang Anda cantumkan (`sap.s4.beh.businesspartner.v1.*`), mengabaikan event berulang, dan berjalan sekali lagi bila event tiba selama eksekusi. Atur di Pemicu webhook → **Event dari sistem sumber**.'],
                 ['Data API', '`POST /api/v1/pipelines/{id}/runs` dengan kunci yang memiliki cakupan `pipelines:run`.'],
               ],
             },
             { kind: 'p', text: 'Hanya satu eksekusi per pipeline yang aktif pada satu waktu. Eksekusi memproses 5.000 baris per potongan dan menyimpan checkpoint setelah masing-masing, sehingga eksekusi panjang dilanjutkan dari titik berhenti alih-alih mulai dari awal.' },
+            { kind: 'p', text: '**Jendela pemeliharaan** (tombol **Pemeliharaan** di layar Pipeline) menahan eksekusi otomatis: jam mingguan seperti Minggu 01:00–05:00 saat HRIS di-patch (waktu selesai sebelum waktu mulai berarti melewati tengah malam), atau tanggal blackout seperti tutup buku akhir tahun, untuk semua pipeline atau yang dipilih. Eksekusi terjadwal atau berantai yang jatuh di dalamnya **menunggu sampai jendela berakhir** atau **dilewati** ke jadwal berikutnya. Eksekusi yang dimulai manual, oleh webhook, atau Data API tidak ditahan. Pemberitahuan di layar Pipeline tampil selama jendela aktif.' },
           ],
         },
         {
@@ -645,7 +664,9 @@ export const helpId: HelpContent = {
               kind: 'list',
               items: [
                 '**Batalkan** pekerjaan yang antre atau berjalan.',
-                '**Ulangi** eksekusi yang sudah selesai. Eksekusi dilanjutkan dari checkpoint terakhir alih-alih mulai dari awal.',
+                '**Jalankan lagi dari awal** mengantrekan eksekusi baru pipeline.',
+                '**Lanjutkan dari titik berhenti** (detail eksekusi yang gagal, selama 48 jam): setelah penyebabnya diperbaiki, eksekusi yang sama berlanjut dari checkpoint terakhirnya. Potongan yang sudah selesai tidak dibaca atau ditulis ulang, dan lane yang di-staging (Join, Aggregate) tetap disimpan.',
+                '**Unduh log** menyimpan log langkah, total, dan galat eksekusi sebagai file teks, mis. untuk dilampirkan ke tiket dukungan.',
                 'Masalah sementara (batas waktu jaringan) diulang otomatis; masalah konfigurasi (kata sandi salah, tabel tidak ada) tidak, jadi perbaiki lalu jalankan lagi.',
                 'Watermark inkremental hanya bergeser setelah seluruh eksekusi berhasil, jadi eksekusi yang gagal tidak pernah melewatkan baris.',
               ],
@@ -656,7 +677,15 @@ export const helpId: HelpContent = {
           id: 'alerts',
           title: 'Peringatan dan notifikasi',
           blocks: [
-            { kind: 'p', text: 'Eksekusi yang gagal membuat notifikasi di lonceng dan email ke orang yang perlu tahu; pipeline juga bisa memberi peringatan untuk baris tertahan (Pengaturan eksekusi). Peringatan tidak pernah menggagalkan eksekusi. Untuk sistem lain, gunakan webhook (lihat Data API dan webhook).' },
+            { kind: 'p', text: 'Eksekusi yang gagal membuat notifikasi di lonceng dan email ke orang yang perlu tahu; pipeline juga bisa memberi peringatan untuk baris tertahan (Pengaturan eksekusi). Peringatan tidak pernah menggagalkan eksekusi.' },
+            {
+              kind: 'list',
+              items: [
+                '**Kanal peringatan** (Pengaturan → Kanal peringatan, admin): incoming webhook Slack dan Microsoft Teams, atau endpoint HTTPS apa pun (ditandatangani seperti webhook keluar). Sebuah kanal menerima peringatan semua pipeline, atau hanya pipeline yang memilihnya. **Kirim uji** untuk memeriksanya.',
+                '**Per pipeline** (menu pipeline → **Peringatan**): pelanggan yang menerima setiap peringatan di lonceng dan lewat email, kanal yang dipakai, dan peringatan dini: baris ditahan di atas persentase tertentu, eksekusi lebih lama dari N menit, atau tidak ada eksekusi berhasil selama N jam. Masing-masing dikirim sekali (per eksekusi, atau per keberhasilan yang terlewat).',
+                '**Berlangganan** sendiri ke pipeline mana pun dari dialog yang sama, apa pun peran Anda.',
+              ],
+            },
           ],
         },
       ],
@@ -865,6 +894,7 @@ export const helpId: HelpContent = {
               items: [
                 'Pilih dataset dan jenis widget.',
                 'Pilih **ukuran** (jumlah, jumlah unik, total, rata-rata, minimum, maksimum) dan **kelompokkan menurut**, dengan rentang waktu untuk tanggal (hari, minggu, bulan, kuartal, tahun).',
+                'Untuk menggabungkan sistem, **Gabungkan dengan dataset lain**: pilih dataset dan kunci yang sama-sama dimiliki (disarankan dari field domain, mis. employee_code = PERNR). Kolomnya tampil sebagai dataset.kolom. Dataset lain memberi satu baris per kunci, sehingga total tidak berlipat; baris tanpa pasangan disertakan atau dikeluarkan, sesuai pilihan Anda.',
                 'Tambahkan filter, urutan, dan batas; pratinjau diperbarui seiring Anda bekerja. Simpan dasbor.',
               ],
             },
@@ -882,6 +912,14 @@ export const helpId: HelpContent = {
           title: 'Yang dilihat pembaca',
           blocks: [
             { kind: 'p', text: 'Kueri hanya-baca dan berhenti setelah 15 detik. Setiap pembaca melihat dasbor lewat perannya sendiri: kolom tersamar tidak bisa dikelompokkan atau disaring, dan filter baris berlaku untuk setiap angka.' },
+            {
+              kind: 'list',
+              items: [
+                '**Bagikan** membatasi dasbor untuk peran dan orang tertentu (pembuat dan admin selalu dapat melihatnya); secara bawaan seluruh ruang kerja dapat melihatnya.',
+                '**Sematkan** (admin) membuat tautan rahasia yang menampilkan dasbor secara baca-saja di dalam aplikasi KMPlus: data dikueri sebagai Viewer atau Analyst, sehingga kolom tersamar tetap tersamar, dan hanya situs yang Anda cantumkan yang boleh menampilkannya. Tautan dapat kedaluwarsa dan dicabut; aplikasi penampung dapat mengirim `?lang=id` dan pilihan filter (`?f.<filter>=…`).',
+                '**Ekspor PDF** membuka halaman bersih dengan filter saat ini dan dialog cetak (pilih Simpan sebagai PDF). Tombol gambar pada widget mengunduhnya sebagai **PNG**.',
+              ],
+            },
           ],
         },
       ],
@@ -986,6 +1024,7 @@ export const helpId: HelpContent = {
                 ['Nexus Agent', 'Agent di jaringan Anda dan statusnya.'],
                 ['Asisten AI', 'Model open-source yang dipakai asisten: milik server, yang berjalan di dekat agent, atau nonaktif.'],
                 ['Kunci API · Webhook', 'Kunci Data API dan webhook keluar.'],
+                ['Kanal peringatan', 'Kanal Slack, Microsoft Teams, dan webhook untuk peringatan pipeline.'],
                 ['Log audit', 'Setiap perubahan dan setiap tampilan data asli, dengan siapa, kapan, dan dari mana.'],
               ],
             },

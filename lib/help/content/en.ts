@@ -238,6 +238,22 @@ export const helpEn: HelpContent = {
           ],
         },
         {
+          id: 'productivity',
+          title: 'Office files, SFTP, GraphQL and SOAP',
+          blocks: [
+            {
+              kind: 'list',
+              items: [
+                '**Microsoft 365 / SharePoint**: each SharePoint list is a table (`lists/Employees`), and files in the site’s document library are tables like cloud storage (`files/exports/*.csv`). Sign in with an app registration that has `Sites.Read.All` (or `Sites.Selected` on the site).',
+                '**Google Sheets**: each tab is a table, its first row the column names. **Google Drive**: CSV, JSON and Excel files in a folder (and its subfolders) are tables; Google Sheets files are read as CSV. Share the spreadsheet or folder with the service account’s email address.',
+                '**SFTP**: files on the server become tables. Sign in with a password or a private key, and pin the server’s host key with its `SHA256:` fingerprint so Nexus refuses an impostor. Servers inside your network go through a Nexus Agent.',
+                '**GraphQL**: write each query under a line `### name`; its first list (also `edges { node }`) becomes rows. A query with an `$after` variable is read page by page through `pageInfo`.',
+                '**SOAP**: paste each request envelope under `### name`, with a `SOAPAction:` line when the service needs one. The repeated element of the answer (or the one you name) becomes rows; a SOAP fault stops the run with its message.',
+              ],
+            },
+          ],
+        },
+        {
           id: 'destinations',
           title: 'Destinations: KMPlus products, your databases and REST APIs',
           blocks: [
@@ -484,6 +500,7 @@ export const helpEn: HelpContent = {
                 'Every publish is a version with an optional change note. The version history can **restore** an earlier version: it becomes the running version (after approval, if your workspace requires it).',
                 'When a run fails, **Diagnose with AI** explains the failure from the step messages (never the row values) and can suggest a fix as a new draft.',
                 '**Export JSON** (in a pipeline’s menu) downloads the pipeline with the names of the data sources, business rules and dataset schemas it uses, never credentials or rows. **Import** on the Pipelines screen reads such a file into another workspace: data sources are matched by name and type (or you pick one of the same type), missing rules and dataset schemas are created, and the pipeline arrives as a draft with its schedule off.',
+                '**History → Compare** shows what changed between any two versions: steps added, removed or changed (with each setting before and after), field mapping changes per Map step, connections, run settings and the schedule.',
               ],
             },
           ],
@@ -500,10 +517,12 @@ export const helpEn: HelpContent = {
                 ['Schedule', 'Hourly, daily, weekly or monthly at a time (WIB), or a cron expression.'],
                 ['After another pipeline', 'When a chosen pipeline finishes (successfully, also partly, or always), for chains like “employees, then org units”. Loops are refused.'],
                 ['Webhook', 'An HTTP call to the pipeline’s secret URL, e.g. from your HR system when data changes.'],
+                ['Event', 'The same URL receives events from source systems: CloudEvents (SAP Event Mesh, S/4HANA, SuccessFactors), Azure Event Grid and Microsoft Graph change notifications. Nexus answers their sign-up handshake, runs only on the event types you list (`sap.s4.beh.businesspartner.v1.*`), ignores repeated events, and runs once more when an event arrives during a run. Set it up under Webhook trigger → **Events from source systems**.'],
                 ['Data API', '`POST /api/v1/pipelines/{id}/runs` with a key that has the `pipelines:run` scope.'],
               ],
             },
             { kind: 'p', text: 'Only one run per pipeline is active at a time. Runs process 5,000 rows per chunk and save a checkpoint after each, so a long run resumes where it stopped instead of starting over.' },
+            { kind: 'p', text: '**Maintenance windows** (the **Maintenance** button on the Pipelines screen) pause automatic runs: weekly hours such as Sunday 01:00–05:00 while the HRIS is patched (an end before the start runs past midnight), or blackout dates such as year-end closing, for every pipeline or chosen ones. A scheduled or chained run that falls inside either **waits until the window ends** or **is skipped** to its next scheduled time. Runs started by hand, by a webhook or the Data API are not held. A notice on the Pipelines screen shows while a window is active.' },
           ],
         },
         {
@@ -645,7 +664,9 @@ export const helpEn: HelpContent = {
               kind: 'list',
               items: [
                 '**Cancel** a queued or running job.',
-                '**Retry** a finished run. It resumes from the last checkpoint instead of starting over.',
+                '**Run again from the start** queues a new run of the pipeline.',
+                '**Continue from where it stopped** (run details of a failed run, for 48 hours): after you fix the cause, the same run carries on from its last checkpoint. Finished chunks are not read or written again, and staged lanes (Join, Aggregate) are kept.',
+                '**Download log** saves a run’s step log, totals and error as a text file, e.g. to attach to a support ticket.',
                 'Temporary problems (a network timeout) retry automatically; configuration problems (a wrong password, a missing table) don’t, so fix them and run again.',
                 'Incremental watermarks move only after the whole run succeeds, so a failed run never skips rows.',
               ],
@@ -656,7 +677,15 @@ export const helpEn: HelpContent = {
           id: 'alerts',
           title: 'Alerts and notifications',
           blocks: [
-            { kind: 'p', text: 'A failed run creates a notification in the bell and an email to the people who should know; a pipeline can also alert on held rows (Run settings). Alerting never fails a run. For other systems, use webhooks (see Data API and webhooks).' },
+            { kind: 'p', text: 'A failed run creates a notification in the bell and an email to the people who should know; a pipeline can also alert on held rows (Run settings). Alerting never fails a run.' },
+            {
+              kind: 'list',
+              items: [
+                '**Alert channels** (Settings → Alert channels, admins): Slack and Microsoft Teams incoming webhooks, or any HTTPS endpoint (signed like outbound webhooks). A channel gets every pipeline’s alerts, or only the pipelines that pick it. **Send test** checks it.',
+                '**Per pipeline** (pipeline menu → **Alerts**): subscribers who get every alert in their bell and by email, the channels to use, and early alerts: held rows above a percentage, a run taking longer than N minutes, or no successful run for N hours. Each is sent once (per run, or per missed success).',
+                '**Subscribe** yourself to any pipeline from the same dialog, whatever your role.',
+              ],
+            },
           ],
         },
       ],
@@ -865,6 +894,7 @@ export const helpEn: HelpContent = {
               items: [
                 'Choose the dataset and the widget type.',
                 'Pick a **measure** (count, distinct count, sum, average, minimum, maximum) and a **group by**, with a time grain for dates (day, week, month, quarter, year).',
+                'To combine systems, **Combine with another dataset**: pick it and the key both share (suggested from domain fields, e.g. employee_code = PERNR). Its columns appear as dataset.column. The other dataset gives one row per key, so totals don’t double; rows without a match are kept or left out, as you choose.',
                 'Add filters, a sort and a limit; the preview updates as you go. Save the dashboard.',
               ],
             },
@@ -882,6 +912,14 @@ export const helpEn: HelpContent = {
           title: 'What readers see',
           blocks: [
             { kind: 'p', text: 'Queries are read-only and stop after 15 seconds. Each reader sees the dashboard through their own role: masked columns can’t be grouped or filtered, and row filters apply to every number.' },
+            {
+              kind: 'list',
+              items: [
+                '**Share** limits a dashboard to chosen roles and people (its creator and admins always see it); by default the whole workspace sees it.',
+                '**Embed** (admins) creates a secret link that shows the dashboard read-only inside a KMPlus app: it is queried as Viewer or Analyst, so masked columns stay masked, and only the sites you list may show it. Links expire and can be revoked; the host app can pass `?lang=id` and filter choices (`?f.<filter>=…`).',
+                '**Export PDF** opens a clean page with the current filters and the print dialog (choose Save as PDF). The image button on a widget downloads it as a **PNG**.',
+              ],
+            },
           ],
         },
       ],
@@ -986,6 +1024,7 @@ export const helpEn: HelpContent = {
                 ['Nexus Agents', 'Agents in your network and their status.'],
                 ['AI assistant', 'Which open-source model the assistant uses: the server’s, one next to an agent, or off.'],
                 ['API keys · Webhooks', 'Data API keys and outbound webhooks.'],
+                ['Alert channels', 'Slack, Microsoft Teams and webhook channels for pipeline alerts.'],
                 ['Audit log', 'Every change and every view of real data, with who, when and from where.'],
               ],
             },

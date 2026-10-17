@@ -1,9 +1,11 @@
 'use client'
 
+import { ActiveMaintenanceNotice, MaintenanceWindowsDialog } from '@/components/pipelines/maintenance-windows'
+import { PipelineAlertsDialog } from '@/components/pipelines/pipeline-alerts'
 import { ImportPipelineDialog, downloadPipelineExport } from '@/components/pipelines/pipeline-import'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { ArrowUpRight, ClipboardCheck, Edit, Eye, FileDown, FileUp, History, Loader2, Lock, MoreHorizontal, Pause, Play, Plus, Rocket, RotateCcw, Search, Trash2, Undo2, Workflow } from 'lucide-react'
+import { ArrowUpRight, BellRing, CalendarOff, ClipboardCheck, Edit, Eye, FileDown, FileUp, History, Loader2, Lock, MoreHorizontal, Pause, Play, Plus, Rocket, RotateCcw, Search, Trash2, Undo2, Workflow } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Notice, type NoticeTone } from '@/components/ui/notice'
@@ -66,6 +68,9 @@ export default function PipelineDesignerLayer() {
   const [notice, setNotice] = useState<{ id: string; tone: NoticeTone; text: string } | null>(null)
   const [editing, setEditing] = useState<EditablePipeline | null>(null)
   const [importing, setImporting] = useState(false)
+  const [maintenance, setMaintenance] = useState(false)
+  const [alertsFor, setAlertsFor] = useState<PipelineRow | null>(null)
+  const [maintenanceKey, setMaintenanceKey] = useState(0)
   const [picking, setPicking] = useState(false)
   const [historyFor, setHistoryFor] = useState<PipelineRow | null>(null)
   const [running, setRunning] = useState<string | null>(null)
@@ -275,6 +280,7 @@ export default function PipelineDesignerLayer() {
           }}
         />
       )}
+      {alertsFor && <PipelineAlertsDialog pipelineId={alertsFor.id} pipelineName={alertsFor.name} onClose={() => setAlertsFor(null)} />}
       {historyFor && (
         <RunHistory
           pipelineId={historyFor.id}
@@ -296,6 +302,7 @@ export default function PipelineDesignerLayer() {
         onConfirm={remove}
       />
 
+      {maintenance && <MaintenanceWindowsDialog onClose={() => setMaintenance(false)} onChanged={() => setMaintenanceKey((k) => k + 1)} />}
       {importing && (
         <ImportPipelineDialog
           onClose={() => setImporting(false)}
@@ -319,6 +326,9 @@ export default function PipelineDesignerLayer() {
             <Button variant="outline" aria-pressed={approvalHistory} onClick={() => setApprovalHistory((v) => !v)}>
               <ClipboardCheck /> {t('approvals.history')}
             </Button>
+            <Button variant="outline" onClick={() => setMaintenance(true)}>
+              <CalendarOff /> {t('pipelines.maintenance.open')}
+            </Button>
             {canEdit && !workspace.locked && (
               <Button variant="outline" onClick={() => setImporting(true)}>
                 <FileUp /> {t('pipelines.transfer.import')}
@@ -339,6 +349,7 @@ export default function PipelineDesignerLayer() {
           </Notice>
         )}
 
+        <ActiveMaintenanceNotice refreshKey={maintenanceKey} />
         <ApprovalsPanel refreshKey={approvalsKey} onDecided={() => void load()} history={approvalHistory} onHistoryChange={setApprovalHistory} />
 
         <section data-tour="pipelines-board" aria-labelledby="pipelines-board" className="rounded-lg border border-border bg-card">
@@ -488,6 +499,9 @@ export default function PipelineDesignerLayer() {
                               )}
                               <MenuItem onClick={() => setHistoryFor(p)}>
                                 <History aria-hidden /> {t('pipelines.history')}
+                              </MenuItem>
+                              <MenuItem onClick={() => setAlertsFor(p)}>
+                                <BellRing aria-hidden /> {t('pipelines.alerts.open')}
                               </MenuItem>
                               <MenuItem onClick={() => void downloadPipelineExport(p.id).catch((err) => setError(err instanceof Error ? err.message : t('pipelines.transfer.exportFailed')))}>
                                 <FileDown aria-hidden /> {t('pipelines.transfer.export')}

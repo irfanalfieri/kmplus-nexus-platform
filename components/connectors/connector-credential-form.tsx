@@ -76,6 +76,18 @@ export default function ConnectorCredentialForm({
               {label}
               {!field.required && !label.endsWith(optional) ? ` ${optional}` : ''}
             </Label>
+            {field.type === 'textarea' ? (
+              <textarea
+                id={`${uid}-${field.key}`}
+                rows={6}
+                spellCheck={false}
+                className='w-full rounded-md border border-input bg-transparent px-3 py-2 font-mono text-xs outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring'
+                placeholder={field.placeholder ?? label}
+                value={values[field.key] ?? ''}
+                onChange={(e) => onChange(field.key, e.target.value)}
+                required={field.required}
+              />
+            ) : (
             <Input
               id={`${uid}-${field.key}`}
               // A secret reference is not a secret: show it as text.
@@ -85,6 +97,7 @@ export default function ConnectorCredentialForm({
               onChange={(e) => onChange(field.key, e.target.value)}
               required={field.required}
             />
+            )}
             {field.type === 'password' && <SecretRefPicker fieldLabel={label} onPick={(ref) => onChange(field.key, ref)} />}
           </div>
         )

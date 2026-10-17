@@ -147,6 +147,17 @@ export default function EditCredentialsDialog({ sourceId, sourceName, onClose, o
                     {credentialFieldLabel(t, f)}
                     {f.required ? ' *' : ''}
                   </Label>
+                  {f.type === 'textarea' ? (
+                    <textarea
+                      id={inputId}
+                      rows={6}
+                      spellCheck={false}
+                      className='w-full rounded-md border border-input bg-transparent px-3 py-2 font-mono text-xs outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring'
+                      value={values[f.key] ?? ''}
+                      placeholder={f.placeholder}
+                      onChange={(e) => setValue(f.key, e.target.value)}
+                    />
+                  ) : (
                   <Input
                     id={inputId}
                     type={f.type === 'password' && !hasSecretRefs({ v: values[f.key] ?? '' }) ? 'password' : f.type === 'number' ? 'number' : 'text'}
@@ -155,6 +166,7 @@ export default function EditCredentialsDialog({ sourceId, sourceName, onClose, o
                     autoComplete="off"
                     onChange={(e) => setValue(f.key, e.target.value)}
                   />
+                  )}
                   {f.type === 'password' && <SecretRefPicker fieldLabel={credentialFieldLabel(t, f)} onPick={(ref) => setValue(f.key, ref)} />}
                 </div>
               )

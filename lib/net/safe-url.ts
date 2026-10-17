@@ -116,6 +116,17 @@ export async function assertConnectorUrl(raw: string, opts: { httpsOnly?: boolea
   return url
 }
 
+/** The same check for a connector that opens a TCP connection itself (SFTP): host name or IP. */
+export async function assertConnectorHost(rawHost: string): Promise<string> {
+  const host = rawHost.trim().replace(/^\[|\]$/g, '')
+  if (!host || /[\s/]/.test(host)) throw new UnsafeUrlError('Enter the server’s host name or IP address.')
+  if (privateNetworkAllowed()) return host
+  const reason = await privateHostReason(host)
+  if (reason === 'unresolved') throw new UnsafeUrlError(`${host} could not be found in public DNS. If it is an address inside your company network, connect it through a Nexus Agent in that network (Settings → Nexus Agents).`)
+  if (reason) throw new UnsafeUrlError(`${host} is inside a private network, so KMPlus Nexus can't reach it from the cloud. Connect it through a Nexus Agent running in that network (Settings → Nexus Agents).`)
+  return host
+}
+
 const REDIRECTS = new Set([301, 302, 303, 307, 308])
 
 /**

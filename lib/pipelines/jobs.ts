@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
-import { and, eq, inArray, lt, sql } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, lt, sql } from 'drizzle-orm'
 import { db, pool } from '@/lib/db'
-import { executionLogs, pipelineJobPairs, pipelineJobSeen, pipelineJobs, pipelineRunRejects, pipelines } from '@/lib/db/schema'
+import { executionLogs, pipelineJobPairs, pipelineJobSeen, pipelineJobs, pipelineRunRejects, pipelines, pipelineTriggerEvents } from '@/lib/db/schema'
 import { newId } from '@/lib/auth/session'
 import { recordAudit } from '@/lib/audit'
 import { MAX_STAGED_ROWS, destinationTarget, scheduleSchema, stepTitle, type AggregateStep, type ColumnType, type DedupeStep, type DestinationStep, type JoinStep, type PipelineDefinition, type PipelineNode, type SourceStep } from './definition'
@@ -15,6 +15,8 @@ import { joinKey } from './join'
 import { joinPrefix, lanePlan, passNodes, replayBlocked, type LanePlan, type Pass } from './lanes'
 import { aggregateGroup, aggregateKey, aggregateOutputTypes, dedupeKey, duplicateMessage, pickSurvivor } from './aggregate'
 import { activeAliases, loadSchema, type StoredSchema } from '@/lib/datasets/store'
+import { holdRun } from './maintenance'
+import { loadMaintenanceWindows } from './maintenance-store'
 import { prepareDefinedWrite } from '@/lib/datasets/write'
 import { exposedColumns } from '@/lib/datasets/schema'
 import type { OutputColumn } from './columns'
@@ -52,6 +54,8 @@ export const WORKER_BUDGET_MS = 240_000
 const QUARANTINE_CAP = 10_000
 const MAX_LOG_LINES = 200
 const DONE_JOB_RETENTION_DAYS = 30
+/** MN-4: how long a failed run can still continue from its last checkpoint. */
+export const RESUMABLE_HOURS = 48
 
 type Attempt = { attempt: number; error?: string; at: string }
 type LogLine = { at: string; level: 'info' | 'warn' | 'error'; message: string }
@@ -74,6 +78,8 @@ interface JobProgress {
   capped?: boolean
   /** Run log (MN-3). */
   log?: LogLine[]
+  /** SC-6: the event that started the run. */
+  event?: string
   /** Last error's stack, shown to admins only. */
   errorStack?: string
   /** Quarantine replay (DQ-3): these quarantined rows re-enter the graph at the step that held them, instead of reading the source. */
@@ -88,6 +94,10 @@ interface JobProgress {
   apiCalls?: Record<string, number>
   /** Incremental sync per Source: rows after these values (fixed for the whole run). */
   watermarksAfter?: Record<string, string | null>
+  /** MN-4: a failed run keeps its staging until then, so it can continue from its last checkpoint. */
+  resumableUntil?: string
+  /** Times the run was continued after failing. */
+  resumes?: number
 }
 
 interface PassProgress {
@@ -113,7 +123,7 @@ export type EnqueueOutcome = { runId: string; status: 'queued' | 'skipped'; mess
 // ── Enqueue ──────────────────────────────────────────────────────────────────
 
 /** Queues a run of the pipeline's published version. At most one active run per pipeline. */
-export async function enqueueRun(pipelineId: string, scope: RunScope, trigger: 'manual' | 'schedule' | 'replay' | 'api' | 'webhook' | 'chain', opts: { replayIds?: string[] } = {}): Promise<EnqueueOutcome> {
+export async function enqueueRun(pipelineId: string, scope: RunScope, trigger: 'manual' | 'schedule' | 'replay' | 'api' | 'webhook' | 'chain', opts: { replayIds?: string[]; event?: string } = {}): Promise<EnqueueOutcome> {
   const [pipeline] = await db
     .select()
     .from(pipelines)
@@ -133,6 +143,7 @@ export async function enqueueRun(pipelineId: string, scope: RunScope, trigger: '
   const runId = newId('run')
   const progress: JobProgress = { config: pipeline.config, version: pipeline.version ?? 1, watermarkAfter, watermarksAfter, offset: 0, exhausted: false, chunks: 0, rejectsKept: 0, attempts: [] }
   if (opts.replayIds) progress.replay = { rejectIds: opts.replayIds.slice(0, REPLAY_MAX_ROWS) }
+  if (opts.event) progress.event = opts.event.slice(0, 300)
 
   const queued = await db.transaction(async (tx) => {
     // The partial unique index (one non-done job per pipeline) makes this race-free.
@@ -362,7 +373,7 @@ async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promi
 
   if (!progress.startedAt) {
     progress.startedAt = new Date().toISOString()
-    log(progress, 'info', `Run started (v${progress.version}, ${job.trigger})`)
+    log(progress, 'info', `Run started (v${progress.version}, ${job.trigger}${progress.event ? `, ${progress.event}` : ''})`)
     await db.update(executionLogs).set({ status: 'running', startTime: new Date(progress.startedAt), updatedAt: new Date() }).where(eq(executionLogs.id, job.id))
   } else {
     log(progress, 'info', `Resumed at row ${progress.offset.toLocaleString()}`)
@@ -720,7 +731,8 @@ async function runJobSlice(job: Job, deadline: number, maxChunks: number): Promi
       await db.update(executionLogs).set({ errorMessage: `Attempt ${failures} failed, retrying in ${delaySec}s: ${info.message}`, updatedAt: new Date() }).where(eq(executionLogs.id, job.id))
       return 'retrying'
     }
-    return finishJob(job, progress, def, { error: info.message })
+    // Failed while reading and writing: the run can continue from its last checkpoint (MN-4).
+    return finishJob(job, progress, def, { error: info.message, resumable: true })
   }
   return finishJob(job, progress, def, (await isCancelling(job.id)) ? { cancelled: true } : {})
 }
@@ -784,8 +796,11 @@ type ChunkPairs = { nodeId: string; key: string; manager: string; field: string;
 const jsonSafe = (row: Row) => JSON.parse(JSON.stringify(row, (_k, v) => (typeof v === 'bigint' ? v.toString() : v)))
 
 /** Completes a run: manager checks, dataset swaps/soft deletes, run log, pipeline state, rule actions, audit, alerts. */
-async function finishJob(job: Job, progress: JobProgress, def: PipelineDefinition | null, outcome: { error?: string; cancelled?: boolean }): Promise<string> {
+async function finishJob(job: Job, progress: JobProgress, def: PipelineDefinition | null, outcome: { error?: string; cancelled?: boolean; resumable?: boolean }): Promise<string> {
   const cancelled = Boolean(outcome.cancelled)
+  // A failed run keeps its staging (replace copies, Join and blocking-step stages) for RESUMABLE_HOURS.
+  const keepStaging = Boolean(outcome.error && outcome.resumable && !cancelled && !progress.replay)
+  progress.resumableUntil = keepStaging ? new Date(Date.now() + RESUMABLE_HOURS * 3_600_000).toISOString() : undefined
   const scope: RunScope = { workspaceId: job.workspaceId, actorId: job.actorId }
   const totals = upgradeTotals(progress.totals ?? (def ? newRunTotals(def) : ({ steps: [], rowsRead: 0, rowsWritten: 0, rejectedCount: 0, columns: [] } as unknown as RunTotals)))
   let error = outcome.error
@@ -820,7 +835,7 @@ async function finishJob(job: Job, progress: JobProgress, def: PipelineDefinitio
         const defined = await loadSchema(scope.workspaceId, dest.datasetName).catch(() => null)
         const columns = defined ? exposedColumns(defined.schema).map((c) => ({ name: c.name, type: c.type })) : totals.columnsByDest[dest.id]?.length ? totals.columnsByDest[dest.id] : outputColumns(def!, [], {}, dest.id)
         if (error || cancelled) {
-          if (dest.mode === 'replace' && !replay) await dropDatasetTable(staging).catch(() => undefined)
+          if (dest.mode === 'replace' && !replay && !keepStaging) await dropDatasetTable(staging).catch(() => undefined)
           continue
         }
         let rowCount: number | undefined
@@ -872,7 +887,7 @@ async function finishJob(job: Job, progress: JobProgress, def: PipelineDefinitio
     if (st.type !== 'join' || !st.rowsIn) continue
     log(progress, 'info', `${st.label}: ${(st.matched ?? 0).toLocaleString('en-US')} of ${st.rowsIn.toLocaleString('en-US')} rows matched${st.multiplied ? `; rows multiplied: ${st.multiplied.toLocaleString('en-US')}` : ''}${st.rejected ? `; ${st.rejected.toLocaleString('en-US')} without a partner quarantined` : ''}`)
   }
-  await dropStageTables(job.id).catch((err) => console.error(`[jobs] ${job.id}: dropping staging failed:`, errorInfo(err).message))
+  if (!keepStaging) await dropStageTables(job.id).catch((err) => console.error(`[jobs] ${job.id}: dropping staging failed:`, errorInfo(err).message))
 
   const status: EngineResult['status'] = error ? 'failed' : totalsStatus(totals)
   const runStatus = cancelled ? 'cancelled' : status
@@ -921,6 +936,8 @@ async function finishJob(job: Job, progress: JobProgress, def: PipelineDefinitio
         held: totals.heldCount,
         log: progress.log ?? [],
         errorStack: error ? progress.errorStack : undefined,
+        resumableUntil: progress.resumableUntil,
+        resumes: progress.resumes,
       },
       updatedAt: endTime,
     })
@@ -972,6 +989,7 @@ async function finishJob(job: Job, progress: JobProgress, def: PipelineDefinitio
   if (def && status !== 'failed' && !replay && !progress.capped) await supersedeOlderQuarantine(def, job, scope)
   if (def && status !== 'failed') await ruleSideEffects(def, totals, scope, pipeline?.name ?? 'Pipeline', job)
   await runDependents(scope, job.pipelineId, status)
+  await runPendingEvent(scope, job.pipelineId)
   if (def && status !== 'failed') await snapshotQuality(scope, def, totals, results)
   await emitRunEvents(scope.workspaceId, job, runStatus, totals, results, error)
   const message = summarize(result)
@@ -1016,18 +1034,46 @@ async function supersedeOlderQuarantine(def: PipelineDefinition, job: Job, scope
  * this one run when it finishes with an outcome they accept. Catalog caches
  * that refresh after a pipeline use the same schedule type.
  */
+/** SC-6: event ids are kept 7 days for de-duplication (cron tick). */
+export async function pruneTriggerEvents() {
+  await db.delete(pipelineTriggerEvents).where(lt(pipelineTriggerEvents.receivedAt, new Date(Date.now() - 7 * 86_400_000)))
+}
+
+/** SC-6: an event arrived while this run was active; run once more so its change is read. */
+async function runPendingEvent(scope: RunScope, pipelineId: string) {
+  const cleared = await db
+    .update(pipelines)
+    .set({ eventPendingAt: null })
+    .where(and(eq(pipelines.id, pipelineId), isNotNull(pipelines.eventPendingAt)))
+    .returning({ userId: pipelines.userId })
+  if (!cleared.length) return
+  try {
+    await enqueueRun(pipelineId, { workspaceId: scope.workspaceId, actorId: cleared[0].userId }, 'webhook', { event: 'events received during the previous run' })
+  } catch (err) {
+    console.error('[jobs] follow-up run for events failed:', err instanceof Error ? err.message : err)
+  }
+}
+
 async function runDependents(scope: RunScope, pipelineId: string, status: EngineResult['status']) {
   try {
     const dependents = await db
       .select({ id: pipelines.id, userId: pipelines.userId, schedule: pipelines.schedule, version: pipelines.version })
       .from(pipelines)
       .where(and(eq(pipelines.workspaceId, scope.workspaceId), eq(pipelines.enabled, true), sql`${pipelines.schedule}->>'type' = 'after'`, sql`${pipelines.schedule}->>'afterPipelineId' = ${pipelineId}`))
+    const windows = dependents.length ? await loadMaintenanceWindows(scope.workspaceId) : []
     for (const d of dependents) {
       const schedule = scheduleSchema.safeParse(d.schedule ?? {})
       if (!schedule.success || !d.version || d.id === pipelineId) continue
       const on = schedule.data.afterOn
       const ok = on === 'any' || status === 'success' || (on === 'success_or_partial' && status === 'partial')
-      if (ok) await enqueueRun(d.id, { workspaceId: scope.workspaceId, actorId: d.userId }, 'chain')
+      if (!ok) continue
+      // SC-4: inside a maintenance window a chained run waits for its end (the scheduler runs it then) or is skipped.
+      const held = holdRun(windows, d.id)
+      if (held.hold) {
+        if (held.action === 'defer') await db.update(pipelines).set({ nextRunAt: held.until }).where(eq(pipelines.id, d.id))
+        continue
+      }
+      await enqueueRun(d.id, { workspaceId: scope.workspaceId, actorId: d.userId }, 'chain')
     }
   } catch (err) {
     // Chained runs must never fail a finished run.
@@ -1117,4 +1163,66 @@ export async function activeJobs(workspaceId: string) {
     .from(pipelineJobs)
     .where(and(eq(pipelineJobs.workspaceId, workspaceId), inArray(pipelineJobs.status, ['queued', 'running', 'cancelling'])))
     .orderBy(pipelineJobs.createdAt)
+}
+
+// ── Continue a failed run (MN-4) ─────────────────────────────────────────────
+
+/**
+ * Continues a failed run from its last checkpoint (the chunk that failed),
+ * with its staging kept since it failed: completed chunks stay written
+ * (exactly-once), incremental watermarks were never advanced, and the run
+ * keeps its id, totals and log.
+ */
+export async function resumeRun(runId: string, scope: RunScope): Promise<EnqueueOutcome> {
+  const [job] = await db.select().from(pipelineJobs).where(and(eq(pipelineJobs.id, runId), eq(pipelineJobs.workspaceId, scope.workspaceId))).limit(1)
+  const [run] = await db.select({ status: executionLogs.status }).from(executionLogs).where(and(eq(executionLogs.id, runId), eq(executionLogs.workspaceId, scope.workspaceId))).limit(1)
+  const progress = job?.progress as JobProgress | undefined
+  if (!job || !run || run.status !== 'failed' || job.status !== 'done' || !progress?.resumableUntil || Date.parse(progress.resumableUntil) < Date.now()) {
+    throw new Error('This run can no longer continue from where it stopped. Run the pipeline again from the start.')
+  }
+  progress.resumableUntil = undefined
+  progress.resumes = (progress.resumes ?? 0) + 1
+  progress.errorStack = undefined
+  log(progress, 'info', 'Continued from the last checkpoint')
+  try {
+    const reopened = await db
+      .update(pipelineJobs)
+      .set({ status: 'queued', attempts: 0, availableAt: new Date(), leaseUntil: null, progress, updatedAt: new Date() })
+      .where(and(eq(pipelineJobs.id, runId), eq(pipelineJobs.status, 'done')))
+      .returning({ id: pipelineJobs.id })
+    if (!reopened.length) throw new Error('This run can no longer continue from where it stopped. Run the pipeline again from the start.')
+  } catch (err) {
+    // One active run per pipeline (partial unique index).
+    if (/unique|duplicate/i.test(errorInfo(err).message)) return { runId, status: 'skipped', message: 'Another run of this pipeline is active. Try again when it finishes.' }
+    throw err
+  }
+  await db.update(executionLogs).set({ status: 'running', errorMessage: null, endTime: null, updatedAt: new Date() }).where(eq(executionLogs.id, runId))
+  return { runId, status: 'queued', message: 'Continuing from the last checkpoint.' }
+}
+
+/** Failed runs past RESUMABLE_HOURS: their kept staging is dropped (cron tick). */
+export async function expireResumableRuns() {
+  const rows = await db
+    .select({ id: pipelineJobs.id, workspaceId: pipelineJobs.workspaceId, progress: pipelineJobs.progress })
+    .from(pipelineJobs)
+    .where(and(eq(pipelineJobs.status, 'done'), sql`${pipelineJobs.progress}->>'resumableUntil' < ${new Date().toISOString()}`))
+    .limit(50)
+  for (const r of rows) {
+    const progress = r.progress as JobProgress
+    try {
+      const def = parseDefinition(progress.config)
+      for (const d of def.nodes) {
+        if (d.type !== 'destination' || d.kind !== 'dataset' || d.mode !== 'replace') continue
+        const table = await datasetTable(r.workspaceId, d.datasetName)
+        await dropDatasetTable(stagingTableName(table, `${r.id}:${d.id}`)).catch(() => undefined)
+      }
+    } catch {
+      // A definition that no longer parses had nothing more to clean.
+    }
+    await dropStageTables(r.id).catch(() => undefined)
+    progress.resumableUntil = undefined
+    await db.update(pipelineJobs).set({ progress }).where(eq(pipelineJobs.id, r.id))
+    await db.update(executionLogs).set({ executionDetails: sql`coalesce(${executionLogs.executionDetails}, '{}'::jsonb) - 'resumableUntil'` }).where(eq(executionLogs.id, r.id))
+  }
+  return rows.length
 }

@@ -27,6 +27,29 @@ export const SORT_INFO: Record<(typeof SORTS)[number], string> = { value_desc: '
 export const NUMERIC_TYPES = ['integer', 'numeric'] as const
 export const TIME_TYPES = ['date', 'timestamp'] as const
 
+/**
+ * DB-3: a widget can look up a second dataset by a shared key (a domain key
+ * such as employee_code). Its columns are named `join:<column>`; the joined
+ * dataset gives at most one row per key (the most recently loaded), so a
+ * join never multiplies the widget's rows.
+ */
+export const JOIN_PREFIX = 'join:'
+export const JOIN_KINDS = ['left', 'inner'] as const
+export const widgetJoinSchema = z.object({
+  dataset: z.string().trim().min(1, 'Choose the dataset to join').max(63),
+  /** Key column in the widget's dataset. */
+  left: z.string().min(1, 'Choose the key columns').max(128),
+  /** Key column in the joined dataset. */
+  right: z.string().min(1, 'Choose the key columns').max(128),
+  /** left = keep rows without a match; inner = only rows with one. */
+  kind: z.enum(JOIN_KINDS).default('left'),
+})
+export type WidgetJoin = z.infer<typeof widgetJoinSchema>
+export const isJoinedColumn = (name: string) => name.startsWith(JOIN_PREFIX)
+export const joinedColumn = (name: string) => `${JOIN_PREFIX}${name}`
+/** A column as people read it: `dataset.column` for joined ones. */
+export const columnLabel = (name: string, join: WidgetJoin | null | undefined) => (join && isJoinedColumn(name) ? `${join.dataset}.${name.slice(JOIN_PREFIX.length)}` : name)
+
 export const filterSchema = z.object({
   column: z.string().min(1).max(128),
   op: z.enum(FILTER_OPS),
@@ -39,6 +62,7 @@ export const widgetSchema = z
     title: z.string().trim().max(120).default(''),
     type: z.enum(WIDGET_TYPES),
     dataset: z.string().trim().min(1, 'Choose a dataset').max(63),
+    join: widgetJoinSchema.nullable().default(null),
     measure: z.object({ agg: z.enum(AGGREGATIONS), column: z.string().max(128).default('') }),
     dimension: z.object({ column: z.string().min(1).max(128), grain: z.enum(GRAINS).default('none') }).nullable().default(null),
     filters: z.array(filterSchema).max(10).default([]),
@@ -50,8 +74,41 @@ export const widgetSchema = z
     if (w.measure.agg !== 'count' && !w.measure.column) ctx.addIssue({ code: 'custom', path: ['measure', 'column'], message: 'Choose the column to aggregate' })
     if (w.type === 'kpi' && w.dimension) ctx.addIssue({ code: 'custom', path: ['dimension'], message: 'A single number has no "group by"' })
     if (w.type !== 'kpi' && !w.dimension) ctx.addIssue({ code: 'custom', path: ['dimension'], message: 'Choose a column to group by' })
+    const refs = [w.measure.column, w.dimension?.column ?? '', ...w.filters.map((f) => f.column)]
+    if (!w.join && refs.some(isJoinedColumn)) ctx.addIssue({ code: 'custom', path: ['join'], message: 'Columns of a joined dataset need a join' })
+    if (w.join && w.join.dataset === w.dataset) ctx.addIssue({ code: 'custom', path: ['join', 'dataset'], message: 'Join a different dataset' })
   })
 export type Widget = z.infer<typeof widgetSchema>
+
+/**
+ * Key pairs to join two datasets on: columns that mean the same domain field
+ * (employee_code ↔ PERNR ↔ NIP, org_code ↔ ORGEH …) first, then same names.
+ */
+export function suggestJoinKeys(left: { name: string }[], right: { name: string }[], canonical: (column: string) => string | null): { left: string; right: string; field: string | null }[] {
+  const out: { left: string; right: string; field: string | null }[] = []
+  const seen = new Set<string>()
+  const add = (l: string, r: string, field: string | null) => {
+    const k = JSON.stringify([l, r])
+    if (seen.has(k)) return
+    seen.add(k)
+    out.push({ left: l, right: r, field })
+  }
+  const KEYS = ['employee_code', 'org_code', 'position_code', 'manager_code', 'company_code']
+  const rightByField = new Map<string, string>()
+  for (const c of right) {
+    const f = canonical(c.name)
+    if (f && !rightByField.has(f)) rightByField.set(f, c.name)
+  }
+  const matches = left.flatMap((c) => {
+    const f = canonical(c.name)
+    return f && rightByField.has(f) ? [{ left: c.name, right: rightByField.get(f)!, field: f }] : []
+  })
+  matches.sort((a, b) => (KEYS.includes(a.field) ? KEYS.indexOf(a.field) : 99) - (KEYS.includes(b.field) ? KEYS.indexOf(b.field) : 99))
+  for (const m of matches.filter((m) => KEYS.includes(m.field))) add(m.left, m.right, m.field)
+  const rightNames = new Set(right.map((c) => c.name))
+  for (const c of left) if (rightNames.has(c.name) && !c.name.startsWith('_nexus_')) add(c.name, c.name, canonical(c.name))
+  return out
+}
 
 /** A date range or one value (e.g. an org unit), applied to every widget whose dataset has the column. */
 export const DASHBOARD_FILTER_KINDS = ['date', 'value'] as const
@@ -85,13 +142,13 @@ export interface WidgetResult {
   filtersSkipped?: { id: string; reason: 'missing' | 'masked' | 'type' }[]
 }
 
-export function describeMeasure(w: Pick<Widget, 'measure'>) {
-  return w.measure.agg === 'count' ? 'Rows' : `${AGG_INFO[w.measure.agg]} of ${w.measure.column}`
+export function describeMeasure(w: Pick<Widget, 'measure'> & { join?: WidgetJoin | null }) {
+  return w.measure.agg === 'count' ? 'Rows' : `${AGG_INFO[w.measure.agg]} of ${columnLabel(w.measure.column, w.join)}`
 }
 
-export function defaultTitle(w: Pick<Widget, 'measure' | 'dimension' | 'dataset'>) {
+export function defaultTitle(w: Pick<Widget, 'measure' | 'dimension' | 'dataset'> & { join?: WidgetJoin | null }) {
   const measure = describeMeasure(w)
-  return w.dimension ? `${measure} by ${w.dimension.column}${w.dimension.grain !== 'none' ? ` (${w.dimension.grain})` : ''}` : `${measure} · ${w.dataset}`
+  return w.dimension ? `${measure} by ${columnLabel(w.dimension.column, w.join)}${w.dimension.grain !== 'none' ? ` (${w.dimension.grain})` : ''}` : `${measure} · ${w.dataset}`
 }
 
 // ── Dashboard-wide filters (DB-4) ────────────────────────────────────────────

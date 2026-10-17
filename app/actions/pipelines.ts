@@ -1,5 +1,6 @@
 'use server'
 
+import { DEFAULT_TRIGGER_CONFIG, EVENT_FORMATS, triggerConfigSchema } from '@/lib/pipelines/events'
 import { isSecretManager } from '@/lib/secrets/types'
 import { createHash, randomBytes } from 'node:crypto'
 import { z } from 'zod'
@@ -23,13 +24,14 @@ import { agentRestRequest } from '@/lib/connectors/rest/agent-request'
 import type { ApiTestResult } from '@/lib/connectors/rest/write'
 import type { ColumnPolicy } from '@/lib/governance/definition'
 import { currentWatermark, testRunDefinition } from '@/lib/pipelines/runner'
-import { assertPipelinesEditable, computeNextRun, getOwnedPipeline, publishOrRequest, savePipelineAs, type saveInput } from '@/lib/pipelines/publish'
-import { cancelRun, enqueueRun } from '@/lib/pipelines/jobs'
+import { assertPipelinesEditable, computeNextRun, getOwnedPipeline, publishOrRequest, savePipelineAs, versionDefinition, type saveInput } from '@/lib/pipelines/publish'
+import { cancelRun, enqueueRun, resumeRun } from '@/lib/pipelines/jobs'
 import { nudgeWorker, startWorker } from '@/lib/pipelines/worker'
 import { readDatasetSample } from '@/lib/pipelines/io'
 import { applyMasks, accessFor } from '@/lib/governance/masking'
 import type { SchemaScanResult } from '@/lib/connectors/types'
 import { guard } from '@/lib/server-action'
+import { diffVersions } from '@/lib/pipelines/version-diff'
 import { loadSchemas } from '@/lib/datasets/store'
 
 const idSchema = z.string().trim().min(1).max(100)
@@ -213,6 +215,19 @@ async function listVersionsImpl(rawPipelineId: string) {
     .orderBy(desc(pipelineVersions.version))
 }
 
+/** VC-3: what changed from one saved version to another (steps, field mappings, connections, settings, schedule). */
+async function compareVersionsImpl(rawPipelineId: string, rawFrom: number, rawTo: number) {
+  const ctx = await requireWorkspace()
+  const pipelineId = idSchema.parse(rawPipelineId)
+  const [from, to] = [z.number().int().min(0).parse(rawFrom), z.number().int().min(1).parse(rawTo)]
+  await getOwned(ctx, pipelineId)
+  const load = async (version: number) => {
+    const { snapshot, definition } = await versionDefinition(ctx, pipelineId, version)
+    return { definition, schedule: (snapshot.config as { schedule?: unknown }).schedule ?? {} }
+  }
+  return { from, to, diff: diffVersions(from ? await load(from) : null, await load(to)) }
+}
+
 async function getDatasetPreviewImpl(rawName: string) {
   const ctx = await requireWorkspace('data:preview')
   const name = z.string().trim().min(1).max(64).parse(rawName)
@@ -281,6 +296,37 @@ async function createWebhookTriggerImpl(rawId: string) {
   const origin = process.env.BETTER_AUTH_URL ?? `${h.get('x-forwarded-proto') ?? 'https'}://${h.get('host')}`
   revalidatePath('/dashboard', 'layout')
   return { url: `${origin.replace(/\/+$/, '')}/api/hooks/pipelines/${id}/${token}` }
+}
+
+const triggerInput = z.object({
+  format: z.enum(EVENT_FORMATS),
+  eventTypes: z.array(z.string().trim().min(1).max(200)).max(30),
+  /** Microsoft Graph clientState: a new value, null to remove, left out to keep. */
+  clientState: z.string().trim().min(8, 'The clientState needs at least 8 characters').max(128).nullable().optional(),
+})
+
+/** SC-6: which events the webhook URL accepts (no secret is returned). */
+async function getTriggerConfigImpl(rawId: string) {
+  const ctx = await requireWorkspace()
+  const existing = await getOwned(ctx, idSchema.parse(rawId))
+  const parsed = triggerConfigSchema.safeParse(existing.triggerConfig ?? {})
+  const config = parsed.success ? parsed.data : DEFAULT_TRIGGER_CONFIG
+  return { format: config.format, eventTypes: config.eventTypes, hasClientState: Boolean(config.clientStateHash) }
+}
+
+async function saveTriggerConfigImpl(rawId: string, input: z.input<typeof triggerInput>) {
+  const ctx = await requireWorkspace('pipelines:edit')
+  const id = idSchema.parse(rawId)
+  const existing = await getOwned(ctx, id)
+  const data = triggerInput.parse(input)
+  const before = triggerConfigSchema.safeParse(existing.triggerConfig ?? {})
+  const previous = before.success ? before.data : DEFAULT_TRIGGER_CONFIG
+  const clientStateHash = data.clientState === undefined ? previous.clientStateHash : data.clientState === null ? null : createHash('sha256').update(data.clientState).digest('hex')
+  const config = triggerConfigSchema.parse({ format: data.format, eventTypes: Array.from(new Set(data.eventTypes)), clientStateHash })
+  await db.update(pipelines).set({ triggerConfig: config, updatedAt: new Date() }).where(and(eq(pipelines.id, id), eq(pipelines.workspaceId, ctx.workspaceId)))
+  await audit(ctx, 'UPDATE', id, { eventTrigger: { format: config.format, eventTypes: config.eventTypes, clientState: data.clientState === undefined ? 'kept' : data.clientState === null ? 'removed' : 'changed' } })
+  revalidatePath('/dashboard', 'layout')
+  return { format: config.format, eventTypes: config.eventTypes, hasClientState: Boolean(config.clientStateHash) }
 }
 
 async function disableWebhookTriggerImpl(rawId: string) {
@@ -379,9 +425,14 @@ async function cancelPipelineRunImpl(rawRunId: string) {
 }
 
 /** Runs a finished run's pipeline again (Monitoring → Retry). Uses the current published version. */
-async function retryPipelineRunImpl(rawRunId: string) {
+/**
+ * Retries a finished run: `restart` queues a new run from the start; `resume`
+ * continues a failed run from its last checkpoint (MN-4, within 48 hours).
+ */
+async function retryPipelineRunImpl(rawRunId: string, rawMode: 'restart' | 'resume' = 'restart') {
   const ctx = await requireWorkspace('pipelines:run')
   const runId = idSchema.parse(rawRunId)
+  const mode = z.enum(['restart', 'resume']).parse(rawMode)
   const [run] = await db
     .select({ pipelineId: executionLogs.pipelineId, status: executionLogs.status, trigger: executionLogs.trigger })
     .from(executionLogs)
@@ -390,9 +441,9 @@ async function retryPipelineRunImpl(rawRunId: string) {
   if (!run) throw new Error('Run not found')
   if (run.status === 'queued' || run.status === 'running') throw new Error('This run is still in progress.')
   if (run.trigger === 'replay') throw new Error('This was a quarantine replay. Replay the rows again from Data Quality.')
-  const outcome = await enqueueRun(run.pipelineId, scope(ctx), 'manual')
+  const outcome = mode === 'resume' ? await resumeRun(runId, scope(ctx)) : await enqueueRun(run.pipelineId, scope(ctx), 'manual')
   if (outcome.status === 'queued') startWorker()
-  await audit(ctx, 'RETRY', run.pipelineId, { previousRunId: runId, runId: outcome.runId })
+  await audit(ctx, 'RETRY', run.pipelineId, { previousRunId: runId, runId: outcome.runId, mode })
   revalidatePath('/dashboard', 'layout')
   return outcome
 }
@@ -645,10 +696,22 @@ export async function createWebhookTrigger(...args: Parameters<typeof createWebh
   return guard(() => createWebhookTriggerImpl(...args))
 }
 
+export async function getTriggerConfig(...args: Parameters<typeof getTriggerConfigImpl>) {
+  return guard(() => getTriggerConfigImpl(...args))
+}
+
+export async function saveTriggerConfig(...args: Parameters<typeof saveTriggerConfigImpl>) {
+  return guard(() => saveTriggerConfigImpl(...args))
+}
+
 export async function disableWebhookTrigger(...args: Parameters<typeof disableWebhookTriggerImpl>) {
   return guard(() => disableWebhookTriggerImpl(...args))
 }
 
 export async function discardDraft(...args: Parameters<typeof discardDraftImpl>) {
   return guard(() => discardDraftImpl(...args))
+}
+
+export async function compareVersions(...args: Parameters<typeof compareVersionsImpl>) {
+  return guard(() => compareVersionsImpl(...args))
 }

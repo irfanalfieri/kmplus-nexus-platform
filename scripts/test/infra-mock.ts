@@ -8,7 +8,9 @@ import { signAwsRequest } from '@/lib/net/aws-sigv4'
  * services (connector harness and integration tests), on 127.0.0.1. Each
  * service lives under its own path and checks credentials the way the real one
  * does: Signature V4 is recomputed, Google JWTs are verified with the test key,
- * Vault AppRole and Entra ID client credentials are checked.
+ * Vault AppRole and Entra ID client credentials are checked. It also stands in
+ * for Microsoft Graph (SharePoint), Google Sheets and Drive, a GraphQL API and a
+ * SOAP service (DS-9).
  */
 
 export const MOCK = {
@@ -25,6 +27,10 @@ export const MOCK = {
   azure: { tenantId: 'tenant-1', clientId: 'client-1', clientSecret: 'client-secret' },
   doppler: 'dp.st.mock',
   bucket: 'hr-exports',
+  gqlKey: 'gql-key',
+  soap: { user: 'soap-user', password: 'soap-pass' },
+  spreadsheetId: '1HrRosterSpreadsheetIdForTests0123',
+  driveFolder: 'folderRoot0123456',
 }
 
 const json = (res: ServerResponse, status: number, body: unknown) => {
@@ -44,6 +50,22 @@ const FILES: Record<string, string> = {
   'reference/orgs.ndjson': '{"org_code":"O1","name":"Finance"}\n{"org_code":"O2","name":"Sales"}\n',
   'readme.txt': 'not a table',
 }
+
+/** SharePoint document library files (downloaded from their pre-authenticated links). */
+const SP_FILES: Record<string, string> = {
+  'orgs.csv': 'org_code,name\nO1,Finance\nO2,Sales\n',
+  'exports/people_1.csv': 'employee_code,org_code\nE1,O1\n',
+  'exports/people_2.csv': 'employee_code,org_code\nE2,O2\nE3,O1\n',
+}
+
+/** A Google Drive folder: a CSV, a Google Sheets file and a subfolder of monthly CSVs. */
+const DRIVE: { id: string; parent: string; name: string; mimeType: string; content: string }[] = [
+  { id: 'people', parent: 'folderRoot0123456', name: 'people.csv', mimeType: 'text/csv', content: 'employee_code,full_name\nE1,Ana\nE2,Budi\n' },
+  { id: 'orgsheet', parent: 'folderRoot0123456', name: 'Org units', mimeType: 'application/vnd.google-apps.spreadsheet', content: 'org_code,name\nO1,Finance\n' },
+  { id: 'monthly', parent: 'folderRoot0123456', name: 'monthly', mimeType: 'application/vnd.google-apps.folder', content: '' },
+  { id: 'm09', parent: 'monthly', name: '2026-09.csv', mimeType: 'text/csv', content: 'employee_code,hours\nE1,160\n' },
+  { id: 'm10', parent: 'monthly', name: '2026-10.csv', mimeType: 'text/csv', content: 'employee_code,hours\nE1,152\nE2,168\n' },
+]
 
 const LOGS = Array.from({ length: 5 }, (_, i) => ({ _id: `doc${i + 1}`, _source: { '@timestamp': `2026-10-14T0${i}:00:00Z`, service: { name: 'hr-api' }, message: `request ${i + 1}`, http: { status: i === 3 ? 500 : 200 } } }))
 
@@ -231,6 +253,73 @@ export async function startInfraMock() {
       return json(res, 200, { DOPPLER_PROJECT: 'hr', DOPPLER_CONFIG: 'prd', HR_DB_PASSWORD: 'p@ss', HR_DB_URL: vaultSecrets['hr/db'].url })
     }
 
+    // ── Microsoft Graph (SharePoint site: one list, a document library) ──
+    if (service === 'spdl') {
+      const file = SP_FILES[path.slice(1)]
+      return file === undefined ? json(res, 404, {}) : void res.writeHead(200, { 'content-type': 'application/octet-stream' }).end(file)
+    }
+    if (service === 'graph') {
+      if (auth !== 'Bearer azure-token') return json(res, 401, { error: { code: 'InvalidAuthenticationToken' } })
+      if (path === '/v1.0/sites/contoso.sharepoint.com:/sites/HR') return json(res, 200, { id: 'site-1' })
+      if (path === '/v1.0/sites/site-1/lists')
+        return json(res, 200, { value: [{ id: 'l1', displayName: 'Employees', list: { template: 'genericList' } }, { id: 'd1', displayName: 'Documents', list: { template: 'documentLibrary' } }, { id: 'h1', displayName: 'Hidden', list: { hidden: true } }] })
+      if (path === '/v1.0/sites/site-1/lists/l1/items') {
+        const page = url.searchParams.get('page')
+        const item = (i: number) => ({ id: String(i), fields: { '@odata.etag': 'x', Title: `E${i}`, FullName: `Employee ${i}`, OrgCode: i % 2 ? 'HR' : 'FIN', ContentType: 'Item' } })
+        return page ? json(res, 200, { value: [item(3)] }) : json(res, 200, { value: [item(1), item(2)], '@odata.nextLink': `${base}/graph/v1.0/sites/site-1/lists/l1/items?page=2` })
+      }
+      if (path === '/v1.0/sites/site-1/drive') return json(res, 200, { id: 'drive-1' })
+      const file = (name: string, key: string) => ({ name, size: SP_FILES[key].length, file: {}, lastModifiedDateTime: '2026-10-01T00:00:00Z', '@microsoft.graph.downloadUrl': `${base}/spdl/${key}` })
+      if (path === '/v1.0/drives/drive-1/root/children') return json(res, 200, { value: [{ name: 'exports', folder: { childCount: 2 } }, file('orgs.csv', 'orgs.csv')] })
+      if (path === '/v1.0/drives/drive-1/root:/exports:/children') return json(res, 200, { value: [file('people_1.csv', 'exports/people_1.csv'), file('people_2.csv', 'exports/people_2.csv')] })
+      return json(res, 404, { error: { code: 'itemNotFound' } })
+    }
+
+    // ── Google Sheets and Drive (the google token from /google/token) ──
+    if (service === 'sheets') {
+      if (auth !== 'Bearer google-token') return json(res, 401, { error: { message: 'unauthenticated' } })
+      const root = `/v4/spreadsheets/${MOCK.spreadsheetId}`
+      if (path === root) return json(res, 200, { properties: { title: 'HR roster' }, sheets: [{ properties: { title: 'Employees', sheetType: 'GRID', gridProperties: { rowCount: 4 } } }, { properties: { title: 'Chart', sheetType: 'OBJECT' } }] })
+      if (path.startsWith(`${root}/values/`)) return json(res, 200, { values: [['employee_code', 'full_name', 'salary'], ['E1', 'Ana', 1000], ['E2', 'Budi', 2000], ['E3', 'Citra', 3000]] })
+      return json(res, 404, { error: { message: 'Requested entity was not found.' } })
+    }
+    if (service === 'gdrive') {
+      if (auth !== 'Bearer google-token') return json(res, 401, { error: { message: 'unauthenticated' } })
+      if (path === '/drive/v3/files') {
+        const parent = /'([^']+)' in parents/.exec(url.searchParams.get('q') ?? '')?.[1] ?? ''
+        return json(res, 200, { files: DRIVE.filter((f) => f.parent === parent).map(({ parent: _p, content: _c, ...f }) => ({ ...f, ...(f.mimeType.startsWith('application/vnd.google-apps') ? {} : { size: String(DRIVE.find((x) => x.id === f.id)!.content.length) }) })) })
+      }
+      const m = /^\/drive\/v3\/files\/([^/]+)(\/export)?$/.exec(path)
+      const f = m ? DRIVE.find((x) => x.id === m[1]) : undefined
+      if (!f) return json(res, 404, { error: { message: 'File not found' } })
+      return void res.writeHead(200, { 'content-type': 'text/csv' }).end(f.content)
+    }
+
+    // ── A GraphQL API with cursor paging (x-api-key) ──
+    if (service === 'gql') {
+      if (req.headers['x-api-key'] !== MOCK.gqlKey) return json(res, 401, { errors: [{ message: 'Unauthorized' }] })
+      const q = JSON.parse(body || '{}') as { query?: string; variables?: { after?: string | null } }
+      if (q.query?.includes('__typename')) return json(res, 200, { data: { __typename: 'Query' } })
+      if (q.query?.includes('broken')) return json(res, 200, { data: null, errors: [{ message: 'Cannot query field "broken"' }] })
+      const all = [{ code: 'E1', name: 'Ana', org: { code: 'HR' } }, { code: 'E2', name: 'Budi', org: { code: 'FIN' } }, { code: 'E3', name: 'Citra', org: { code: 'HR' } }]
+      const start = q.variables?.after === 'c2' ? 2 : 0
+      const nodes = all.slice(start, start + 2)
+      return json(res, 200, { data: { employees: { nodes, pageInfo: { hasNextPage: start + 2 < all.length, endCursor: start + 2 < all.length ? 'c2' : null } } } })
+    }
+
+    // ── A SOAP 1.1 service with basic auth ──
+    if (service === 'soap') {
+      if (auth !== `Basic ${Buffer.from(`${MOCK.soap.user}:${MOCK.soap.password}`).toString('base64')}`) return void res.writeHead(401).end()
+      const action = String(req.headers.soapaction ?? '').replace(/"/g, '')
+      res.writeHead(action === 'urn:GetEmployees' ? 200 : 500, { 'content-type': 'text/xml; charset=utf-8' })
+      if (action !== 'urn:GetEmployees') return void res.end('<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><soap:Fault><faultcode>soap:Client</faultcode><faultstring>Unknown operation</faultstring></soap:Fault></soap:Body></soap:Envelope>')
+      return void res.end(
+        '<?xml version="1.0"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><GetEmployeesResponse xmlns="urn:hr">' +
+          ['E1|Ana|HR', 'E2|Budi|FIN', 'E3|Citra|HR'].map((r) => r.split('|')).map(([c, n, o]) => `<Employee><Code>${c}</Code><Name>${n}</Name><Org><Code>${o}</Code></Org></Employee>`).join('') +
+          '</GetEmployeesResponse></soap:Body></soap:Envelope>'
+      )
+    }
+
     json(res, 404, { error: 'unknown mock route' })
   })
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
@@ -257,6 +346,11 @@ export async function startInfraMock() {
       azurekeyvault: { vaultUrl: `${base}/akv`, authorityHost: `${base}/azure-login`, ...MOCK.azure },
       gcpsecrets: { apiEndpoint: `${base}/gsm`, serviceAccountJson: serviceAccount },
       doppler: { apiUrl: `${base}/doppler`, serviceToken: MOCK.doppler },
+      sharepoint: { siteUrl: 'https://contoso.sharepoint.com/sites/HR', graphEndpoint: `${base}/graph`, authorityHost: `${base}/azure-login`, ...MOCK.azure },
+      googlesheets: { spreadsheet: `https://docs.google.com/spreadsheets/d/${MOCK.spreadsheetId}/edit`, apiEndpoint: `${base}/sheets`, serviceAccountJson: serviceAccount },
+      googledrive: { folder: `https://drive.google.com/drive/folders/${MOCK.driveFolder}`, apiEndpoint: `${base}/gdrive`, serviceAccountJson: serviceAccount },
+      graphql: { endpoint: `${base}/gql`, authHeader: 'x-api-key', authValue: MOCK.gqlKey, queries: '### employees\nquery ($after: String) {\n  employees(first: 2, after: $after) { nodes { code name org { code } } pageInfo { hasNextPage endCursor } }\n}' },
+      soap: { endpoint: `${base}/soap`, username: MOCK.soap.user, password: MOCK.soap.password, operations: '### employees\nSOAPAction: urn:GetEmployees\n<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><GetEmployees xmlns="urn:hr"/></soap:Body></soap:Envelope>' },
     } as Record<string, Record<string, string>>,
     stop: () => new Promise<void>((r) => server.close(() => r())),
   }

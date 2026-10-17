@@ -1,7 +1,7 @@
 'use client'
 
 import { useId, useMemo, useState } from 'react'
-import type { Widget, WidgetResult } from '@/lib/analytics/definition'
+import { columnLabel, type Widget, type WidgetResult } from '@/lib/analytics/definition'
 import { isTimeSeries } from '@/lib/analytics/query'
 import { Table, TBody, THead, Td, Th, Tr } from '@/components/ui/data-table'
 import { usePrefs } from '@/components/i18n/i18n-provider'
@@ -26,19 +26,20 @@ const fmt = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 })
 export const formatValue = (v: number | null) => (v === null ? '—' : fmt.format(v))
 
 /** `describeMeasure` in the interface language ("Rows", "Average of salary"). */
-export function describeMeasureT(w: Pick<Widget, 'measure'>, t: Translate) {
+export function describeMeasureT(w: Pick<Widget, 'measure'> & { join?: Widget['join'] }, t: Translate) {
   return w.measure.agg === 'count'
     ? t('insights.charts.rowsMeasure')
-    : t('insights.charts.measureOf', { agg: t(`insights.widgetEditor.aggs.${w.measure.agg}` as MessageKey), column: w.measure.column })
+    : t('insights.charts.measureOf', { agg: t(`insights.widgetEditor.aggs.${w.measure.agg}` as MessageKey), column: columnLabel(w.measure.column, w.join) })
 }
 
 /** `defaultTitle` in the interface language ("Rows by department (month)"). */
-export function defaultTitleT(w: Pick<Widget, 'measure' | 'dimension' | 'dataset'>, t: Translate) {
+export function defaultTitleT(w: Pick<Widget, 'measure' | 'dimension' | 'dataset'> & { join?: Widget['join'] }, t: Translate) {
   const measure = describeMeasureT(w, t)
-  if (!w.dimension) return t('insights.charts.ofDataset', { measure, dataset: w.dataset })
+  if (!w.dimension) return t('insights.charts.ofDataset', { measure, dataset: w.join ? `${w.dataset} + ${w.join.dataset}` : w.dataset })
+  const column = columnLabel(w.dimension.column, w.join)
   return w.dimension.grain !== 'none'
-    ? t('insights.charts.byGrain', { measure, column: w.dimension.column, grain: t(`insights.widgetEditor.grains.${w.dimension.grain}` as MessageKey) })
-    : t('insights.charts.by', { measure, column: w.dimension.column })
+    ? t('insights.charts.byGrain', { measure, column, grain: t(`insights.widgetEditor.grains.${w.dimension.grain}` as MessageKey) })
+    : t('insights.charts.by', { measure, column })
 }
 
 /** `freshness()` from lib/catalog/definition in the interface language ("12 min ago"). */

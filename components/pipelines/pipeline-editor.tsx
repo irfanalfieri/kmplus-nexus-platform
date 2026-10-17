@@ -50,7 +50,9 @@ import {
 import { describeScheduleT, nextRunTimes } from '@/lib/pipelines/schedule'
 import { AFTER_OUTCOMES } from '@/lib/pipelines/definition'
 import type { EngineResult, StepStat } from '@/lib/pipelines/engine'
-import { createWebhookTrigger, disableWebhookTrigger, savePipeline, testPipeline } from '@/lib/actions/pipelines'
+import { createWebhookTrigger, disableWebhookTrigger, getTriggerConfig, savePipeline, saveTriggerConfig, testPipeline } from '@/lib/actions/pipelines'
+import { EVENT_FORMATS, type EventFormat } from '@/lib/pipelines/events'
+import { nativeSelectClass } from '@/components/workspace/settings-panel'
 import { localizeCheck } from '@/lib/pipelines/check-messages'
 import { localizeStepTitle } from './step-title'
 import { ApiCallEditor, EnrichEditor } from './api-step-editors'
@@ -1258,7 +1260,101 @@ function WebhookTrigger({ pipelineId, exists, onChange }: { pipelineId?: string;
         </Notice>
       )}
       {error && <Notice tone="danger">{error}</Notice>}
+      {pipelineId && exists && <EventTriggerSettings pipelineId={pipelineId} />}
     </section>
+  )
+}
+
+/** SC-6: which events the webhook URL accepts (CloudEvents / SAP Event Mesh, Event Grid, Microsoft Graph). */
+function EventTriggerSettings({ pipelineId }: { pipelineId: string }) {
+  const t = useT()
+  const [saved, setSaved] = useState<Awaited<ReturnType<typeof getTriggerConfig>> | null>(null)
+  const [format, setFormat] = useState<EventFormat>('auto')
+  const [types, setTypes] = useState('')
+  const [clientState, setClientState] = useState<string | null | undefined>(undefined)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<{ tone: 'info' | 'danger'; text: string } | null>(null)
+  useEffect(() => {
+    getTriggerConfig(pipelineId)
+      .then((c) => {
+        setSaved(c)
+        setFormat(c.format)
+        setTypes(c.eventTypes.join('\n'))
+      })
+      .catch(() => undefined)
+  }, [pipelineId])
+  if (!saved) return null
+  const eventTypes = types.split(/\n|,/).map((x) => x.trim()).filter(Boolean)
+  const dirty = format !== saved.format || eventTypes.join('\n') !== saved.eventTypes.join('\n') || clientState !== undefined
+  const save = async () => {
+    setBusy(true)
+    setMessage(null)
+    try {
+      const next = await saveTriggerConfig(pipelineId, { format, eventTypes, ...(clientState !== undefined ? { clientState } : {}) })
+      setSaved(next)
+      setClientState(undefined)
+      setMessage({ tone: 'info', text: t('editor.webhook.events.saved') })
+    } catch (err) {
+      setMessage({ tone: 'danger', text: err instanceof Error ? err.message : t('editor.webhook.failed') })
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <details className="rounded-md border border-border p-3 text-xs" open={saved.format !== 'auto' || saved.eventTypes.length > 0}>
+      <summary className="cursor-pointer text-sm font-medium">{t('editor.webhook.events.title')}</summary>
+      <div className="mt-2 space-y-3">
+        <p className="text-muted-foreground">{t('editor.webhook.events.body')}</p>
+        <div className="space-y-1">
+          <Label htmlFor="trigger-format">{t('editor.webhook.events.format')}</Label>
+          <select id="trigger-format" className={nativeSelectClass} value={format} onChange={(e) => setFormat(e.target.value as EventFormat)}>
+            {EVENT_FORMATS.map((f) => (
+              <option key={f} value={f}>
+                {t(`editor.webhook.events.formats.${f}`)}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor="trigger-types">{t('editor.webhook.events.types')}</Label>
+          <textarea
+            id="trigger-types"
+            rows={3}
+            className="w-full rounded-md border border-input bg-transparent px-2 py-1.5 font-mono text-xs"
+            value={types}
+            placeholder={'sap.s4.beh.businesspartner.v1.*\nsap.sf.employment.*'}
+            onChange={(e) => setTypes(e.target.value)}
+          />
+          <p className="text-muted-foreground">{t('editor.webhook.events.typesHint')}</p>
+        </div>
+        {(format === 'auto' || format === 'graph') && (
+          <div className="space-y-1">
+            <Label htmlFor="trigger-client-state">{t('editor.webhook.events.clientState')}</Label>
+            <div className="flex flex-wrap gap-2">
+              <Input
+                id="trigger-client-state"
+                type="password"
+                autoComplete="off"
+                className="max-w-xs font-mono text-xs"
+                value={clientState ?? ''}
+                placeholder={saved.hasClientState ? t('editor.webhook.events.clientStateKept') : t('editor.webhook.events.clientStateNone')}
+                onChange={(e) => setClientState(e.target.value || undefined)}
+              />
+              {saved.hasClientState && clientState !== null && (
+                <Button size="sm" variant="ghost" onClick={() => setClientState(null)}>
+                  {t('editor.webhook.events.clientStateRemove')}
+                </Button>
+              )}
+            </div>
+            <p className="text-muted-foreground">{t('editor.webhook.events.clientStateHint')}</p>
+          </div>
+        )}
+        <Button size="sm" variant="outline" disabled={busy || !dirty} onClick={() => void save()}>
+          {busy && <Loader2 className="animate-spin" aria-hidden />} {t('editor.webhook.events.save')}
+        </Button>
+        {message && <Notice tone={message.tone}>{message.text}</Notice>}
+      </div>
+    </details>
   )
 }
 

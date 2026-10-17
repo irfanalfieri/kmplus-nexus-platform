@@ -4,7 +4,7 @@ import { db } from '@/lib/db'
 import { pipelines } from '@/lib/db/schema'
 import { scheduleSchema } from '@/lib/pipelines/definition'
 import { nextRunAt } from '@/lib/pipelines/schedule'
-import { enqueueRun, processJobs, WORKER_BUDGET_MS } from '@/lib/pipelines/jobs'
+import { enqueueRun, expireResumableRuns, processJobs, pruneTriggerEvents, WORKER_BUDGET_MS } from '@/lib/pipelines/jobs'
 import { applyDueRetention } from '@/lib/governance/retention'
 import { deliverDueWebhooks } from '@/lib/webhooks/deliver'
 import { pruneRateLimits } from '@/lib/api/rate-limit'
@@ -14,6 +14,9 @@ import { sweepStageTables } from '@/lib/pipelines/stage'
 import { purgeApiCache } from '@/lib/pipelines/api-runtime'
 import { pruneHealthChecks, runDueHealthChecks } from '@/lib/connectors/health'
 import { pruneDueRunLogs } from '@/lib/monitoring/log-retention'
+import type { MaintenanceWindow } from '@/lib/pipelines/maintenance'
+import { holdDuePipeline } from '@/lib/pipelines/maintenance-store'
+import { checkAlertSlas } from '@/lib/alerts/send'
 
 /**
  * Scheduler tick. Called every minute by Supabase pg_cron (see
@@ -23,7 +26,8 @@ import { pruneDueRunLogs } from '@/lib/monitoring/log-retention'
  * enforces dataset retention policies (hourly per dataset), retries webhook
  * deliveries, prunes rate-limit counters, drops run staging older than 48 h
  * (runs that never finished), removes expired API answers from the Enrich cache
- * re-seals old credential envelopes, and runs data source health checks that
+ * re-seals old credential envelopes, holds runs inside maintenance windows
+ * (SC-4), sends SLA alerts that are due (MN-5), runs data source health checks that
  * are due (DS-7, at most 60 s per tick; history kept 30 days), and prunes run
  * logs hourly per workspace (MN-7).
  */
@@ -53,7 +57,14 @@ async function tick(request: Request) {
     .limit(MAX_ENQUEUE_PER_TICK)
 
   const queued: { id: string; status: string }[] = []
+  // SC-4: maintenance windows per workspace, loaded once per tick.
+  const windows = new Map<string, MaintenanceWindow[]>()
   for (const p of due) {
+    const held = await holdDuePipeline(p, now, windows)
+    if (held) {
+      queued.push({ id: p.id, status: held })
+      continue
+    }
     const schedule = scheduleSchema.safeParse(p.schedule ?? {})
     const upcoming = schedule.success ? nextRunAt(schedule.data, now) : null
     // Claim: advance nextRunAt only if no other tick already did.
@@ -78,15 +89,18 @@ async function tick(request: Request) {
   await pruneRateLimits().catch(() => undefined)
   await pruneAgentTasks().catch(() => undefined)
   await sweepStageTables()
+  await expireResumableRuns().catch((err) => console.error('[cron] resumable runs:', err instanceof Error ? err.message : err))
   await purgeApiCache()
+  await pruneTriggerEvents().catch(() => undefined)
   const credentials = await upgradeCredentialEnvelopes().catch((err) => (console.error('[cron] credentials:', err instanceof Error ? err.message : err), { upgraded: 0, failed: 0 }))
   const ssoSecrets = await upgradeSsoSecrets().catch((err) => (console.error('[cron] SSO secrets:', err instanceof Error ? err.message : err), { upgraded: 0, failed: 0 }))
   const health = await runDueHealthChecks({ budgetMs: 60_000 }).catch((err) => (console.error('[cron] health checks:', err instanceof Error ? err.message : err), 0))
   await pruneHealthChecks().catch(() => undefined)
   const runLogs = await pruneDueRunLogs().catch((err) => (console.error('[cron] run logs:', err instanceof Error ? err.message : err), null))
+  const slas = await checkAlertSlas().catch((err) => (console.error('[cron] SLA alerts:', err instanceof Error ? err.message : err), null))
   // Health checks share the slice: the worker gets what is left of its budget.
   const processed = await processJobs({ budgetMs: Math.max(30_000, WORKER_BUDGET_MS - (Date.now() - started)) })
-  return Response.json({ due: due.length, queued, processed, webhooks, credentials, ssoSecrets, health, runLogs })
+  return Response.json({ due: due.length, queued, processed, webhooks, credentials, ssoSecrets, health, runLogs, slas })
 }
 
 export const GET = tick

@@ -21,6 +21,13 @@ export type ConnectorSlug =
   | 's3'
   | 'azureblob'
   | 'gcs'
+  // Productivity and file transfer (DS-9 remainder)
+  | 'sharepoint'
+  | 'googlesheets'
+  | 'googledrive'
+  | 'sftp'
+  | 'graphql'
+  | 'soap'
   // Secrets managers: supply credentials to other data sources, never read as data
   | 'vault'
   | 'awssecrets'
@@ -31,7 +38,8 @@ export type ConnectorSlug =
 export interface CredentialField {
   key: string
   label: string
-  type: 'text' | 'password' | 'number'
+  /** textarea: several lines (GraphQL queries, SOAP envelopes, private keys). */
+  type: 'text' | 'password' | 'number' | 'textarea'
   required: boolean
   placeholder?: string
 }

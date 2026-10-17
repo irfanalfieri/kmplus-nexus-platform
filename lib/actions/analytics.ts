@@ -3,4 +3,4 @@
 import * as actions from '@/app/actions/analytics'
 import { unwrapActions } from '@/lib/action-result'
 
-export const { getAnalyticsDatasets, listDashboards, saveDashboard, deleteDashboard, previewWidget, getDashboardData, getDashboardFilterOptions } = unwrapActions(actions)
+export const { getAnalyticsDatasets, listDashboards, saveDashboard, deleteDashboard, previewWidget, getDashboardData, getDashboardFilterOptions, setDashboardSharing, listDashboardEmbeds, createDashboardEmbed, revokeDashboardEmbed } = unwrapActions(actions)

@@ -13,18 +13,19 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { and, eq, inArray, like } from 'drizzle-orm'
 import { db, pool } from '@/lib/db'
-import { agentTasks as agentTaskTable, agents as agentTable, apiCallCache, apiCallLedger, apiKeys, apiRateLimits, auditLogs, businessRuleVersions, businessRules, catalogEntries, connectorInstalls, dashboards, dataSources, datasetPolicies, datasetQualitySnapshots, domainMappings, mappingTemplates, notifications, pipelineApprovals, scimGroups, scimTokens, scimUsers, ssoProvider, webhookDeliveries, webhooks, workspaceSso, executionLogs, nexusDatasets, pipelineJobs, pipelineRunRejects, pipelines, pipelineStageTables, pipelineVersions, session, user, verification, workspaceInvites, workspaceMembers, workspaces, datasetColumnAliases, datasetSchemaVersions, datasetSchemas, upgradeNoticeDismissals, sourceHealthChecks } from '@/lib/db/schema'
+import { agentTasks as agentTaskTable, agents as agentTable, apiCallCache, apiCallLedger, apiKeys, apiRateLimits, auditLogs, businessRuleVersions, businessRules, catalogEntries, connectorInstalls, dashboards, dataSources, datasetPolicies, datasetQualitySnapshots, domainMappings, mappingTemplates, notifications, pipelineApprovals, scimGroups, scimTokens, scimUsers, ssoProvider, webhookDeliveries, webhooks, workspaceSso, executionLogs, nexusDatasets, pipelineJobs, pipelineRunRejects, pipelines, pipelineStageTables, pipelineVersions, session, user, verification, workspaceInvites, workspaceMembers, workspaces, datasetColumnAliases, datasetSchemaVersions, datasetSchemas, upgradeNoticeDismissals, sourceHealthChecks, pipelineAlerts, alertChannels, maintenanceWindows, dashboardEmbeds, pipelineTriggerEvents } from '@/lib/db/schema'
 import { acceptInvite, changeMemberRole, createAccountFromInvite, createInvite, describeInvite, getWorkspaceContext, listMembers, resetMemberTwoFactor, switchWorkspace } from '@/lib/actions/workspaces'
 import { installConnector } from '@/lib/actions/connectors'
 import { createDataSource, deleteDataSource, getDataSources, getEditableCredentials, listSecretManagers, listSecretNames, renameDataSource, setDataSourceRole, testConnection, updateDataSourceCredentials, getSourceHealth, setHealthCheckInterval, reviewSchemaDrift } from '@/lib/actions/data-sources'
 import { checkSourceHealth, runDueHealthChecks } from '@/lib/connectors/health'
 import { pruneWorkspaceLogs } from '@/lib/monitoring/log-retention'
 import { startInfraMock } from './test/infra-mock'
+import { startSftpMock } from './test/sftp-mock'
 import { writeDataset } from '@/lib/pipelines/io'
 import { startKmplusMock } from './test/kmplus-mock'
 import { startRestWriteMock } from './test/rest-write-mock'
 import { autoBindBody, bodyLeaves, parseBodySample, setRowsArray, updateBodyNode } from '@/lib/pipelines/body-template'
-import { cancelPipelineRun, createWebhookTrigger, discardDraft, getBuilderOptions, getDatasetPreview, getRunStatus, listPipelines, listRuns, publishPipeline, retryPipelineRun, runPipelineNow, savePipeline, sendApiTestRequest, testPipeline, clearStepCache } from '@/lib/actions/pipelines'
+import { getTriggerConfig, saveTriggerConfig, cancelPipelineRun, createWebhookTrigger, discardDraft, getBuilderOptions, getDatasetPreview, getRunStatus, listPipelines, listRuns, publishPipeline, retryPipelineRun, runPipelineNow, savePipeline, sendApiTestRequest, testPipeline, clearStepCache } from '@/lib/actions/pipelines'
 import { createSamlProvider, createSsoProvider, deleteSsoProvider, listSsoProviders, setSamlIdp, updateSsoProvider, verifySsoDomain } from '@/lib/actions/sso'
 import { approveRequest, cancelRequest, listApprovals, rejectRequest } from '@/lib/actions/approvals'
 import { listPromotionStatus, previewPromotion, promotePipeline, setApprovalPolicy, setupEnvironments, unlinkEnvironment } from '@/lib/actions/environments'
@@ -51,7 +52,7 @@ import { upgradeSsoSecrets } from '@/lib/security/upgrade'
 import { Kysely, PostgresDialect } from 'kysely'
 import { createWebhook, deleteWebhook, listWebhooks, testWebhook } from '@/lib/actions/webhooks'
 import { deleteMappingTemplate, saveMappingTemplate } from '@/lib/actions/templates'
-import { POST as postHook } from '@/app/api/hooks/pipelines/[id]/[token]/route'
+import { OPTIONS as optionsHook, POST as postHook } from '@/app/api/hooks/pipelines/[id]/[token]/route'
 import { POST as postRuns } from '@/app/api/v1/pipelines/[id]/runs/route'
 import { GET as getRun } from '@/app/api/v1/runs/[id]/route'
 import { deleteRule, listRuleVersions, listRules, saveRule, testRule } from '@/lib/actions/rules'
@@ -66,9 +67,22 @@ import { uploadFilePart } from '@/lib/actions/files'
 import { GET as getDataset } from '@/app/api/v1/datasets/[name]/route'
 import { GET as getDomain } from '@/app/api/v1/domains/[entity]/route'
 import { eraseRecords, findErasureMatches, getGovernanceOverview, saveDatasetPolicy } from '@/lib/actions/governance'
-import { getDashboardData, getDashboardFilterOptions, listDashboards, previewWidget, saveDashboard } from '@/lib/actions/analytics'
+import { createDashboardEmbed, deleteDashboard, getDashboardData, getDashboardFilterOptions, listDashboardEmbeds, listDashboards, previewWidget, revokeDashboardEmbed, saveDashboard, setDashboardSharing } from '@/lib/actions/analytics'
+import { dashboardResults, loadEmbed } from '@/lib/analytics/dashboards'
+import { proxy } from '../proxy'
+import { NextRequest } from 'next/server'
 import { listAuditLogs } from '@/lib/actions/audit'
 import { processJobs, CHUNK_ROWS } from '@/lib/pipelines/jobs'
+import { deleteMaintenanceWindow, listMaintenanceWindows, saveMaintenanceWindow } from '@/lib/actions/maintenance'
+import { holdDuePipeline } from '@/lib/pipelines/maintenance-store'
+import { wibToDate } from '@/lib/pipelines/maintenance'
+import { nextRunAt } from '@/lib/pipelines/schedule'
+import { scheduleSchema } from '@/lib/pipelines/definition'
+import { createAlertChannel, deleteAlertChannel, getPipelineAlerts, listAlertChannels, savePipelineAlerts, setPipelineSubscription, testAlertChannel } from '@/lib/actions/alerts'
+import { checkAlertSlas } from '@/lib/alerts/send'
+import { alertIfNeeded } from '@/lib/pipelines/runner'
+import { signPayload } from '@/lib/webhooks/deliver'
+import { createServer } from 'node:http'
 import { createStageTable, sweepStageTables } from '@/lib/pipelines/stage'
 import { setTestUser, takeAfterCallbacks, type TestUser } from './test/stubs'
 
@@ -1707,6 +1721,396 @@ async function main() {
       assert.equal((await listDashboards()).dashboards.find((d) => d.id === id)!.filters.length, 3)
     })
 
+    await test('MN-4: a failed run continues from its last checkpoint with its staging kept; the log downloads; a second continue is refused', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const S = `"${FIXTURE_SCHEMA}"`
+      await pool.query(`CREATE TABLE ${S}.resume_people (id int PRIMARY KEY, org text)`)
+      await pool.query(`INSERT INTO ${S}.resume_people SELECT g, 'O' || (g % 3) FROM generate_series(1, 1200) g`)
+      await pool.query(`CREATE TABLE ${S}.resume_orgs (org text PRIMARY KEY, org_name text)`)
+      await pool.query(`INSERT INTO ${S}.resume_orgs VALUES ('O0', 'Zero'), ('O1', 'One'), ('O2', 'Two')`)
+      const dataset = `${RUN}_resumed`
+      const saved = await savePipeline({
+        publish: true,
+        name: `${RUN} resumable`,
+        definition: {
+          schemaVersion: 2,
+          nodes: [
+            { id: 'p', type: 'source', position: { x: 0, y: 0 }, dataSourceId: sourceId, table: 'resume_people', driver: true },
+            { id: 'o', type: 'source', position: { x: 0, y: 200 }, dataSourceId: sourceId, table: 'resume_orgs' },
+            { id: 'j', type: 'join', position: { x: 300, y: 0 }, keys: [{ left: 'org', right: 'org' }] },
+            { id: 'd', type: 'destination', position: { x: 600, y: 0 }, kind: 'dataset', datasetName: dataset, mode: 'replace' },
+          ],
+          edges: [
+            { id: 'e1', from: 'p', to: 'j', port: 'left' },
+            { id: 'e2', from: 'o', to: 'j', port: 'right' },
+            { id: 'e3', from: 'j', to: 'd' },
+          ],
+          settings: { batchSize: 500, retries: 0 },
+        },
+        schedule: { type: 'manual' } as never,
+      })
+      const run = await runPipelineNow(saved.id)
+      takeAfterCallbacks()
+      // The org lane is staged and the first chunk of people written; then the people table disappears.
+      for (let i = 0; i < 4; i++) {
+        await processJobs({ maxChunksPerSlice: 1, maxJobs: 1 })
+        const [j] = await db.select().from(pipelineJobs).where(eq(pipelineJobs.id, run.runId))
+        if (((j.progress as { passes?: Record<string, { chunks: number }> }).passes?.p?.chunks ?? 0) >= 1) break
+      }
+      await pool.query(`ALTER TABLE ${S}.resume_people RENAME TO resume_people_gone`)
+      await processJobs({ maxJobs: 1 })
+      let status = await getRunStatus(run.runId)
+      assert.equal(status.status, 'failed')
+      const [failedRun] = (await listRuns(saved.id, 5)).filter((r) => r.id === run.runId)
+      const details = failedRun.executionDetails as { resumableUntil?: string; log?: unknown[] }
+      assert.ok(details.resumableUntil && Date.parse(details.resumableUntil) > Date.now() + 47 * 3_600_000, 'resumable for 48 hours')
+      assert.ok((await db.select().from(pipelineStageTables).where(eq(pipelineStageTables.runId, run.runId))).length > 0, 'the Join staging is kept')
+      // The table is back: the run continues where it stopped and finishes with every row once.
+      await pool.query(`ALTER TABLE ${S}.resume_people_gone RENAME TO resume_people`)
+      const resumed = await retryPipelineRun(run.runId, 'resume')
+      assert.equal(resumed.runId, run.runId, 'the same run continues')
+      takeAfterCallbacks()
+      for (let i = 0; i < 6; i++) {
+        status = await getRunStatus(run.runId)
+        if (status.status !== 'running' && status.status !== 'queued') break
+        await processJobs({})
+      }
+      assert.equal(status.status, 'success', status.errorMessage ?? '')
+      const [ds] = await db.select().from(nexusDatasets).where(and(eq(nexusDatasets.workspaceId, adminWs), eq(nexusDatasets.name, dataset)))
+      const { rows } = await pool.query(`SELECT count(*)::int AS n, count(DISTINCT id)::int AS ids, count(org_name)::int AS named FROM "nexus_data"."${ds.tableName}" WHERE "_nexus_deleted_at" IS NULL`)
+      assert.deepEqual(rows[0], { n: 1200, ids: 1200, named: 1200 }, 'every row once, every row joined')
+      assert.equal((await db.select().from(pipelineStageTables).where(eq(pipelineStageTables.runId, run.runId))).length, 0, 'staging dropped when the run finished')
+      const [done] = (await listRuns(saved.id, 5)).filter((r) => r.id === run.runId)
+      assert.equal((done.executionDetails as { resumes?: number }).resumes, 1)
+      await rejectsWith(() => retryPipelineRun(run.runId, 'resume'), /no longer continue/)
+      // Restart still queues a new run.
+      const again = await retryPipelineRun(run.runId, 'restart')
+      assert.notEqual(again.runId, run.runId)
+      takeAfterCallbacks()
+      await processJobs({})
+    })
+
+    await test('SC-4: maintenance windows are saved per workspace and hold scheduled runs (defer to the end, or skip to the next time)', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const [p] = await db.select().from(pipelines).where(eq(pipelines.workspaceId, adminWs)).limit(1)
+      const wibLocal = (ms: number) => new Date(ms + 7 * 3_600_000).toISOString().slice(0, 16)
+      const start = wibLocal(Date.now() - 3_600_000)
+      const end = wibLocal(Date.now() + 2 * 3_600_000)
+      const saved = await saveMaintenanceWindow({ window: { name: `${RUN} patch`, kind: 'once', startsAt: start, endsAt: end, pipelineIds: [p.id, 'not-a-pipeline'] } })
+      const listed = await listMaintenanceWindows()
+      const mine = listed.windows.find((w) => w.id === saved.id)!
+      assert.deepEqual(mine.pipelineIds, [p.id], 'unknown pipelines are dropped')
+      assert.ok(listed.pipelines.some((x) => x.id === p.id))
+      assert.ok((await db.select().from(auditLogs).where(and(eq(auditLogs.resourceId, saved.id), eq(auditLogs.action, 'CREATE')))).length)
+      await rejectsWith(() => saveMaintenanceWindow({ window: { name: 'x', kind: 'once', startsAt: end, endsAt: start } }), /must end after it starts/)
+
+      const schedule = { type: 'daily', time: '06:00' }
+      const due = { id: p.id, workspaceId: adminWs, schedule, nextRunAt: new Date(Date.now() - 60_000) }
+      await db.update(pipelines).set({ nextRunAt: due.nextRunAt }).where(eq(pipelines.id, p.id))
+      const held = await holdDuePipeline(due, new Date(), new Map())
+      assert.match(held ?? '', /held by/)
+      const [deferred] = await db.select({ nextRunAt: pipelines.nextRunAt }).from(pipelines).where(eq(pipelines.id, p.id))
+      assert.equal(deferred.nextRunAt?.toISOString(), wibToDate(end).toISOString(), 'deferred to the end of the window')
+
+      // Skip: the next scheduled time after the window; other pipelines are not held.
+      await saveMaintenanceWindow({ id: saved.id, window: { ...mine, action: 'skip' } })
+      await db.update(pipelines).set({ nextRunAt: due.nextRunAt }).where(eq(pipelines.id, p.id))
+      assert.ok(await holdDuePipeline(due, new Date(), new Map()))
+      const [skipped] = await db.select({ nextRunAt: pipelines.nextRunAt }).from(pipelines).where(eq(pipelines.id, p.id))
+      assert.ok(skipped.nextRunAt! > wibToDate(end), 'skipped past the window')
+      assert.equal(skipped.nextRunAt!.toISOString(), nextRunAt(scheduleSchema.parse(schedule), wibToDate(end))!.toISOString())
+      assert.equal(await holdDuePipeline({ ...due, id: 'other-pipeline' }, new Date(), new Map()), null)
+
+      setTestUser(viewer)
+      await switchWorkspace(adminWs)
+      assert.ok((await listMaintenanceWindows()).windows.some((w) => w.id === saved.id), 'everyone sees the windows')
+      await rejectsWith(() => deleteMaintenanceWindow(saved.id), /Your role/)
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      await deleteMaintenanceWindow(saved.id)
+      await rejectsWith(() => deleteMaintenanceWindow(saved.id), /Maintenance window not found/)
+      await db.update(pipelines).set({ nextRunAt: null }).where(eq(pipelines.id, p.id))
+    })
+
+    await test('MN-5: alert channels (signed webhook), per-pipeline subscribers and channels, error-rate and stale alerts sent once', async () => {
+      const prevFlag = process.env.NEXUS_ALLOW_PRIVATE_URLS
+      process.env.NEXUS_ALLOW_PRIVATE_URLS = 'true'
+      const received: { body: Record<string, unknown>; raw: string; signature: string }[] = []
+      const server = createServer((req, res) => {
+        let raw = ''
+        req.on('data', (c) => (raw += c))
+        req.on('end', () => {
+          received.push({ body: JSON.parse(raw), raw, signature: String(req.headers['nexus-signature'] ?? '') })
+          res.writeHead(202).end()
+        })
+      })
+      await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+      const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/alerts`
+      try {
+        setTestUser(viewer)
+        await switchWorkspace(adminWs)
+        await rejectsWith(() => createAlertChannel({ name: 'x', kind: 'webhook', url }), /Your role/)
+        setTestUser(admin)
+        await switchWorkspace(adminWs)
+        await rejectsWith(() => createAlertChannel({ name: 'Slack', kind: 'slack', url: 'https://example.com/hook' }), /hooks\.slack\.com/)
+        const channel = await createAlertChannel({ name: `${RUN} on-call`, kind: 'webhook', url })
+        assert.match(channel.signingSecret ?? '', /^whsec_/)
+        const listed = (await listAlertChannels()).find((c) => c.id === channel.id)!
+        assert.equal(listed.host, new URL(url).host)
+        assert.ok(!JSON.stringify(listed).includes('/alerts'), 'the URL path is never sent back')
+        const test = await testAlertChannel(channel.id)
+        assert.equal(test.ok, true, test.error ?? '')
+        assert.equal(received[0].body.kind, 'test')
+        const ts = Number(received[0].signature.match(/t=(\d+)/)![1])
+        assert.equal(received[0].signature, signPayload(channel.signingSecret!, received[0].raw, ts), 'signed with the channel secret')
+
+        // A pipeline that picks the channel, with a subscriber and an error-rate limit.
+        const saved = await savePipeline({
+          name: `${RUN} alerting`,
+          definition: {
+            schemaVersion: 2,
+            nodes: [
+              { id: 's', type: 'source', position: { x: 0, y: 0 }, dataSourceId: sourceId, table: 'resume_orgs' },
+              { id: 'd', type: 'destination', position: { x: 300, y: 0 }, kind: 'dataset', datasetName: `${RUN}_alerting`, mode: 'replace' },
+            ],
+            edges: [{ id: 'e1', from: 's', to: 'd' }],
+          },
+          schedule: { type: 'manual' } as never,
+        })
+        const config = await savePipelineAlerts(saved.id, { subscribers: [viewer.id, 'not-a-member'], channelIds: [channel.id, 'not-a-channel'], errorRatePercent: 5 })
+        assert.deepEqual(config.subscribers, [viewer.id])
+        assert.deepEqual(config.channelIds, [channel.id])
+        const base = { def: null, pipelineName: `${RUN} alerting`, pipelineId: saved.id, scope: { workspaceId: adminWs, actorId: admin.id }, trigger: 'schedule', attempts: 1 }
+        const result = (status: 'success' | 'failed', rowsRead: number, rejectedCount: number) => ({ status, rowsRead, rejectedCount, rowsWritten: rowsRead - rejectedCount, steps: [], rejects: [], columns: [] }) as never
+        received.length = 0
+        await alertIfNeeded({ ...base, runId: `${RUN}_r1`, result: result('failed', 0, 0), message: 'connect ETIMEDOUT' })
+        await alertIfNeeded({ ...base, runId: `${RUN}_r2`, result: result('success', 1000, 30), message: 'ok' })
+        await alertIfNeeded({ ...base, runId: `${RUN}_r3`, result: result('success', 1000, 80), message: '80 rows held' })
+        assert.deepEqual(received.map((r) => r.body.kind), ['failed', 'errorRate'], 'failure and 8% held alert; 3% does not')
+        assert.equal((received[1].body.pipeline as { id: string }).id, saved.id)
+        const viewerBell = await db.select().from(notifications).where(and(eq(notifications.userId, viewer.id), eq(notifications.pipelineId, saved.id)))
+        assert.equal(viewerBell.length, 2, 'the subscriber gets both in their bell')
+
+        // Stale: no successful run for 1 hour since the alerts were set up, sent once.
+        await savePipelineAlerts(saved.id, { ...config, staleHours: 1 })
+        await db.update(pipelineAlerts).set({ createdAt: new Date(Date.now() - 2 * 3_600_000), nextCheckAt: new Date(Date.now() - 1000) }).where(eq(pipelineAlerts.pipelineId, saved.id))
+        received.length = 0
+        await checkAlertSlas()
+        assert.deepEqual(received.map((r) => r.body.kind), ['stale'])
+        await db.update(pipelineAlerts).set({ nextCheckAt: new Date(Date.now() - 1000) }).where(eq(pipelineAlerts.pipelineId, saved.id))
+        await checkAlertSlas()
+        assert.equal(received.length, 1, 'sent once')
+
+        // Anyone can subscribe themselves.
+        setTestUser(viewer)
+        await switchWorkspace(adminWs)
+        await setPipelineSubscription(saved.id, false)
+        assert.equal((await getPipelineAlerts(saved.id)).subscribed, false)
+        await rejectsWith(() => savePipelineAlerts(saved.id, { staleHours: 2 }), /Your role/)
+        setTestUser(admin)
+        await switchWorkspace(adminWs)
+        await deleteAlertChannel(channel.id)
+        await rejectsWith(() => testAlertChannel(channel.id), /Alert channel not found/)
+      } finally {
+        server.close()
+        if (prevFlag === undefined) delete process.env.NEXUS_ALLOW_PRIVATE_URLS
+        else process.env.NEXUS_ALLOW_PRIVATE_URLS = prevFlag
+      }
+    })
+
+    await test('SC-6: event triggers answer SAP Event Mesh / Graph handshakes, filter by type, drop repeats and run again for events during a run', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const saved = await savePipeline({
+        publish: true,
+        name: `${RUN} event triggered`,
+        definition: {
+          schemaVersion: 2,
+          nodes: [
+            { id: 's', type: 'source', position: { x: 0, y: 0 }, dataSourceId: sourceId, table: 'resume_orgs' },
+            { id: 'd', type: 'destination', position: { x: 300, y: 0 }, kind: 'dataset', datasetName: `${RUN}_events`, mode: 'replace' },
+          ],
+          edges: [{ id: 'e1', from: 's', to: 'd' }],
+        },
+        schedule: { type: 'manual' } as never,
+      })
+      const { url } = await createWebhookTrigger(saved.id)
+      const token = url.split('/').pop()!
+      const params = { params: Promise.resolve({ id: saved.id, token }) }
+      await saveTriggerConfig(saved.id, { format: 'auto', eventTypes: ['sap.s4.beh.businesspartner.v1.*'], clientState: 'graph-secret-1' })
+      const cfg = await getTriggerConfig(saved.id)
+      assert.deepEqual(cfg, { format: 'auto', eventTypes: ['sap.s4.beh.businesspartner.v1.*'], hasClientState: true })
+      const [row] = await db.select({ triggerConfig: pipelines.triggerConfig }).from(pipelines).where(eq(pipelines.id, saved.id))
+      assert.ok(!JSON.stringify(row.triggerConfig).includes('graph-secret-1'), 'only a hash of the clientState is stored')
+
+      // Handshakes.
+      const opt = await optionsHook(new Request(url, { method: 'OPTIONS', headers: { 'WebHook-Request-Origin': 'eventmesh.example' } }), params)
+      assert.equal(opt.status, 200)
+      assert.equal(opt.headers.get('WebHook-Allowed-Origin'), 'eventmesh.example')
+      const graphValidation = await postHook(new Request(`${url}?validationToken=abc%20123`, { method: 'POST' }), params)
+      assert.equal(await graphValidation.text(), 'abc 123')
+
+      const ce = (id: string, type = 'sap.s4.beh.businesspartner.v1.BusinessPartner.Changed.v1') =>
+        postHook(new Request(url, { method: 'POST', headers: { 'content-type': 'application/cloudevents+json' }, body: JSON.stringify({ specversion: '1.0', id, type, source: '/default/sap.s4.beh/S4H' }) }), params)
+      const ignored = await ce('x1', 'sap.s4.beh.salesorder.v1.SalesOrder.Created.v1')
+      assert.deepEqual(await ignored.json(), { status: 'ignored', reason: 'No event matches the event types this pipeline runs on.' })
+      const first = await ce('bp-1')
+      assert.equal(first.status, 202)
+      const { run_id } = (await first.json()) as { run_id: string }
+      assert.deepEqual(await (await ce('bp-1')).json(), { status: 'duplicate' }, 'a retried event is dropped')
+      const whileQueued = await ce('bp-2')
+      assert.equal(whileQueued.status, 202)
+      assert.equal(((await whileQueued.json()) as { status: string }).status, 'pending')
+      const [notPending] = await db.select({ at: pipelines.eventPendingAt }).from(pipelines).where(eq(pipelines.id, saved.id))
+      assert.equal(notPending.at, null, 'the queued run will read that change anyway')
+      takeAfterCallbacks()
+      // An event during the run: one more run follows.
+      await db.update(pipelines).set({ eventPendingAt: new Date() }).where(eq(pipelines.id, saved.id))
+      await processJobs({})
+      const runs = await db.select().from(executionLogs).where(eq(executionLogs.pipelineId, saved.id))
+      const firstRun = runs.find((r) => r.id === run_id)!
+      assert.equal(firstRun.status, 'success', firstRun.errorMessage ?? '')
+      assert.ok(JSON.stringify(firstRun.executionDetails).includes('CloudEvents: sap.s4.beh.businesspartner.v1.BusinessPartner.Changed.v1'), 'the run log names the event')
+      assert.equal(runs.length, 2, 'the follow-up run was queued')
+      await processJobs({})
+
+      // Graph notifications must carry the clientState.
+      const graph = (clientState: string) => postHook(new Request(url, { method: 'POST', body: JSON.stringify({ value: [{ subscriptionId: 's1', changeType: 'updated', resource: 'users/1', clientState }] }) }), params)
+      assert.equal((await graph('wrong')).status, 401)
+      assert.equal(((await (await graph('graph-secret-1')).json()) as { status: string }).status, 'ignored', 'right secret, but graph.updated is not in the filter')
+
+      setTestUser(viewer)
+      await switchWorkspace(adminWs)
+      await rejectsWith(() => saveTriggerConfig(saved.id, { format: 'plain', eventTypes: [] }), /Your role/)
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+    })
+
+    await test('DB-3: a widget joins a second dataset on a key; the joined side never multiplies rows', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      // From the MN-4 and SC-6 tests: 1,200 people with an org code, and the 3 orgs. Load the orgs twice so the key repeats.
+      const [orgs] = await db.select().from(nexusDatasets).where(and(eq(nexusDatasets.workspaceId, adminWs), eq(nexusDatasets.name, `${RUN}_events`)))
+      await pool.query(`INSERT INTO "nexus_data"."${orgs.tableName}" (org, org_name, "_nexus_loaded_at") SELECT org, org_name || ' (old)', now() - interval '1 day' FROM "nexus_data"."${orgs.tableName}"`)
+      const widget = {
+        id: 'j',
+        title: '',
+        type: 'bar' as const,
+        dataset: `${RUN}_resumed`,
+        join: { dataset: `${RUN}_events`, left: 'org', right: 'org', kind: 'left' as const },
+        measure: { agg: 'count' as const, column: '' },
+        dimension: { column: 'join:org_name', grain: 'none' as const },
+        filters: [],
+        sort: 'label_asc' as const,
+        limit: 10,
+        size: 'small' as const,
+      }
+      const res = await previewWidget(widget)
+      assert.ok(res.ok, res.ok ? '' : res.message)
+      if (res.ok) assert.deepEqual(res.result.rows, [{ label: 'One', value: 400 }, { label: 'Two', value: 400 }, { label: 'Zero', value: 400 }], 'the latest org row per key, each person once')
+      const kpi = await previewWidget({ ...widget, type: 'kpi', dimension: null, filters: [{ column: 'join:org_name', op: 'eq', value: 'Zero' }] })
+      assert.ok(kpi.ok && kpi.result.rows[0].value === 400)
+      const missing = await previewWidget({ ...widget, join: { ...widget.join, dataset: `${RUN}_nope` } })
+      assert.ok(!missing.ok && /no longer exists/.test(missing.message))
+    })
+
+    await test('DB-5: restricted dashboards are hidden from others; embed links render as their role inside allowed sites until revoked', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const widget = { id: 'k', title: 'People', type: 'kpi' as const, dataset: `${RUN}_resumed`, join: null, measure: { agg: 'count' as const, column: '' }, dimension: null, filters: [], sort: 'value_desc' as const, limit: 5, size: 'small' as const }
+      const { id } = await saveDashboard({ name: `${RUN} shared`, widgets: [widget] })
+      await setDashboardSharing(id, { mode: 'restricted', roles: ['steward'], userIds: [] })
+      setTestUser(viewer)
+      await switchWorkspace(adminWs)
+      assert.ok(!(await listDashboards()).dashboards.some((d) => d.id === id), 'a viewer does not see it')
+      await rejectsWith(() => getDashboardData(id), /Dashboard not found/)
+      await rejectsWith(() => createDashboardEmbed(id, { allowedOrigins: ['https://kms.kmplus.co.id'] }), /Your role|not found/)
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      await setDashboardSharing(id, { mode: 'restricted', roles: [], userIds: [viewer.id] })
+      setTestUser(viewer)
+      await switchWorkspace(adminWs)
+      assert.ok((await listDashboards()).dashboards.some((d) => d.id === id), 'now shared with them by name')
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+
+      const created = await createDashboardEmbed(id, { label: 'KMS', role: 'viewer', allowedOrigins: ['https://kms.kmplus.co.id', 'https://*.kmplus.co.id'], expiresInDays: 30 })
+      const token = created.url.split('/').pop()!
+      assert.match(token, /^nxe_/)
+      const [stored] = await db.select().from(dashboardEmbeds).where(eq(dashboardEmbeds.id, created.id))
+      assert.ok(!JSON.stringify(stored).includes(token), 'only a hash of the token is stored')
+      const found = await loadEmbed(token)
+      assert.ok(found && found.embed.role === 'viewer' && found.dashboard.id === id)
+      const results = await dashboardResults({ userId: `embed:${created.id}`, email: '', name: 'KMS', workspaceId: adminWs, workspaceName: '', role: 'viewer' }, [widget], [], {})
+      assert.deepEqual(results.k, { ok: true, result: { rows: [{ label: null, value: 1200 }], truncated: false, lastLoadedAt: (results.k as { result: { lastLoadedAt: unknown } }).result.lastLoadedAt, filtersApplied: [], filtersSkipped: [] } })
+      const res = await proxy(new NextRequest(`http://localhost:3000/embed/dashboards/${token}`))
+      assert.equal(res.headers.get('Content-Security-Policy'), 'frame-ancestors https://kms.kmplus.co.id https://*.kmplus.co.id')
+      assert.equal((await proxy(new NextRequest('http://localhost:3000/embed/dashboards/nxe_unknown_token_value_123456'))).headers.get('Content-Security-Policy'), "frame-ancestors 'none'")
+      const list = await listDashboardEmbeds(id)
+      assert.equal(list.length, 1)
+      assert.ok(!('tokenHash' in list[0]))
+      await revokeDashboardEmbed(created.id)
+      assert.equal(await loadEmbed(token), null, 'a revoked link stops working')
+      await deleteDashboard(id)
+    })
+
+    await test('DS-9: SFTP, SharePoint, Google Sheets / Drive, GraphQL and SOAP sources load datasets through pipelines', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const prevFlag = process.env.NEXUS_ALLOW_PRIVATE_URLS
+      process.env.NEXUS_ALLOW_PRIVATE_URLS = 'true'
+      const infra = await startInfraMock()
+      const sftp = await startSftpMock()
+      try {
+        const sources: [string, string, Record<string, string>, string, number][] = [
+          ['sftp', 'file transfer', sftp.credentials, 'daily/*.csv', 3],
+          ['sharepoint', 'productivity', infra.credentials.sharepoint, 'lists/Employees', 3],
+          ['googlesheets', 'productivity', infra.credentials.googlesheets, 'Employees', 3],
+          ['googledrive', 'productivity', infra.credentials.googledrive, 'monthly/*.csv', 3],
+          ['graphql', 'api', infra.credentials.graphql, 'employees', 3],
+          ['soap', 'api', infra.credentials.soap, 'employees', 3],
+        ]
+        for (const [slug, type, credentials, table, expected] of sources) {
+          await installConnector(slug)
+          const id = await createDataSource({ name: `${RUN} ${slug}`, type, sourceType: slug, config: { role: 'source' }, credentials })
+          const tested = await testConnection(id)
+          assert.ok(tested.tables > 0, `${slug}: no tables scanned`)
+          const saved = await savePipeline({
+            publish: true,
+            name: `${RUN} from ${slug}`,
+            definition: {
+              schemaVersion: 2,
+              nodes: [
+                { id: 's', type: 'source', position: { x: 0, y: 0 }, dataSourceId: id, table },
+                { id: 'd', type: 'destination', position: { x: 300, y: 0 }, kind: 'dataset', datasetName: `${RUN}_${slug}`, mode: 'replace' },
+              ],
+              edges: [{ id: 'e1', from: 's', to: 'd' }],
+              settings: { retries: 0 },
+            },
+            schedule: { type: 'manual' } as never,
+          })
+          const run = await runPipelineNow(saved.id)
+          takeAfterCallbacks()
+          await processJobs({})
+          const st = await getRunStatus(run.runId)
+          assert.equal(st.status, 'success', `${slug}: ${st.errorMessage ?? ''}`)
+          assert.equal(st.recordsProcessed, expected, `${slug} rows`)
+        }
+        // Credentials stay sealed; a wrong host key is refused.
+        const [row] = await db.select({ credentials: dataSources.credentials }).from(dataSources).where(and(eq(dataSources.workspaceId, adminWs), eq(dataSources.name, `${RUN} sftp`)))
+        assert.ok(!JSON.stringify(row.credentials).includes(sftp.credentials.password))
+        const pinned = await createDataSource({ name: `${RUN} sftp pinned`, type: 'file transfer', sourceType: 'sftp', config: { role: 'source' }, credentials: { ...sftp.credentials, hostKeyFingerprint: `SHA256:${'A'.repeat(43)}` } })
+        await rejectsWith(() => testConnection(pinned), /does not match the fingerprint/)
+      } finally {
+        await infra.stop()
+        await sftp.stop()
+        if (prevFlag === undefined) delete process.env.NEXUS_ALLOW_PRIVATE_URLS
+        else process.env.NEXUS_ALLOW_PRIVATE_URLS = prevFlag
+      }
+    })
+
     await test('TD-24: a full run supersedes older quarantine (fixes carry over); replays into a replace dataset replace by key', async () => {
       setTestUser(admin)
       await switchWorkspace(adminWs)
@@ -2495,7 +2899,7 @@ async function cleanup(userIds: string[]) {
   if (pipeIds.length) await db.delete(apiRateLimits).where(inArray(apiRateLimits.bucket, pipeIds))
   const sso = await db.select({ providerId: workspaceSso.providerId }).from(workspaceSso).where(inArray(workspaceSso.workspaceId, ws))
   if (sso.length) await db.delete(ssoProvider).where(inArray(ssoProvider.providerId, sso.map((x) => x.providerId)))
-  for (const t of [agentTaskTable, agentTable, pipelineApprovals, scimTokens, scimUsers, scimGroups, notifications, workspaceSso, webhookDeliveries, webhooks, mappingTemplates, datasetQualitySnapshots, apiKeys, catalogEntries, domainMappings, businessRuleVersions, businessRules, datasetPolicies, dashboards, sourceHealthChecks, datasetColumnAliases, datasetSchemaVersions, datasetSchemas, upgradeNoticeDismissals, nexusDatasets, pipelineRunRejects, executionLogs, pipelineStageTables, apiCallCache, apiCallLedger, pipelineJobs, pipelineVersions, pipelines, dataSources, connectorInstalls, workspaceInvites, auditLogs, workspaceMembers]) {
+  for (const t of [dashboardEmbeds, pipelineTriggerEvents, pipelineAlerts, alertChannels, maintenanceWindows, agentTaskTable, agentTable, pipelineApprovals, scimTokens, scimUsers, scimGroups, notifications, workspaceSso, webhookDeliveries, webhooks, mappingTemplates, datasetQualitySnapshots, apiKeys, catalogEntries, domainMappings, businessRuleVersions, businessRules, datasetPolicies, dashboards, sourceHealthChecks, datasetColumnAliases, datasetSchemaVersions, datasetSchemas, upgradeNoticeDismissals, nexusDatasets, pipelineRunRejects, executionLogs, pipelineStageTables, apiCallCache, apiCallLedger, pipelineJobs, pipelineVersions, pipelines, dataSources, connectorInstalls, workspaceInvites, auditLogs, workspaceMembers]) {
     await db.delete(t).where(inArray(t.workspaceId, ws))
   }
   await db.delete(auditLogs).where(inArray(auditLogs.userId, userIds))

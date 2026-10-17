@@ -1,4 +1,6 @@
 import { and, eq, inArray } from 'drizzle-orm'
+import { deliverAlert, loadPipelineAlerts, pipelineLink } from '@/lib/alerts/send'
+import { errorRate, errorRateBreached, type AlertKind } from '@/lib/alerts/rules'
 import { rootCause } from '@/lib/monitoring/root-cause'
 import { hints as hintsEn } from '@/lib/i18n/messages/en/hints'
 import { withResolvedSecrets } from '@/lib/secrets/resolve'
@@ -150,7 +152,11 @@ export function summarize(result: EngineResult) {
   )
 }
 
-/** Alerts for a finished run: bell for admins/stewards/operators and the actor, email once. */
+/**
+ * Alerts for a finished run: bell for admins/stewards/operators and the actor,
+ * email once; then the pipeline's subscribers and alert channels (MN-5), which
+ * also hear about an error rate above the pipeline's threshold.
+ */
 export async function alertIfNeeded(opts: {
   def: PipelineDefinition | null
   pipelineName: string
@@ -166,18 +172,29 @@ export async function alertIfNeeded(opts: {
   const alertOn = settings?.alertOn ?? 'failure'
   const failed = opts.result.status === 'failed'
   const rejected = opts.result.status === 'partial'
-  if (!failed && !(rejected && alertOn === 'failure_or_rejects')) return
-  const title = failed ? `${opts.pipelineName} failed` : `${opts.pipelineName} rejected ${opts.result.rejectedCount} rows`
-  const lines = [
-    `Pipeline: ${opts.pipelineName}`,
-    `Result: ${opts.message}`,
-    `Trigger: ${opts.trigger}${opts.attempts > 1 ? ` · ${opts.attempts} attempts` : ''}`,
-    `Time: ${new Date().toISOString()}`,
-  ]
-  // MN-6: the likely cause and what to do (alerts are English, like other background mail).
-  const cause = rootCause(opts.message)
-  if (cause) lines.push(`Likely cause: ${hintsEn.causes[cause].title}`, `What to do: ${hintsEn.causes[cause].fix}`)
   try {
+    const config = await loadPipelineAlerts(opts.scope.workspaceId, opts.pipelineId)
+    const held = opts.result.rejectedCount
+    const highErrorRate = !failed && errorRateBreached(config, opts.result.rowsRead, held)
+    const kind: AlertKind | null = failed ? 'failed' : rejected && alertOn === 'failure_or_rejects' ? 'rejects' : highErrorRate ? 'errorRate' : null
+    if (!kind) return
+    const title =
+      kind === 'failed'
+        ? `${opts.pipelineName} failed`
+        : kind === 'rejects'
+          ? `${opts.pipelineName} rejected ${opts.result.rejectedCount} rows`
+          : `${opts.pipelineName} held ${errorRate(opts.result.rowsRead, held).toFixed(1)}% of its rows`
+    const lines = [
+      `Pipeline: ${opts.pipelineName}`,
+      `Result: ${opts.message}`,
+      `Trigger: ${opts.trigger}${opts.attempts > 1 ? ` · ${opts.attempts} attempts` : ''}`,
+      `Time: ${new Date().toISOString()}`,
+    ]
+    if (kind === 'errorRate') lines.splice(2, 0, `Held rows: ${held} of ${opts.result.rowsRead} (alert above ${config.errorRatePercent}%)`)
+    // MN-6: the likely cause and what to do (alerts are English, like other background mail).
+    const cause = rootCause(opts.message)
+    if (cause) lines.push(`Likely cause: ${hintsEn.causes[cause].title}`, `What to do: ${hintsEn.causes[cause].fix}`)
+    const level = failed ? 'error' : 'warning'
     // Everyone who can act on a failure gets it in their bell; email is sent once (configured list or owner).
     const recipients = await db
       .select({ userId: workspaceMembers.userId })
@@ -188,7 +205,7 @@ export async function alertIfNeeded(opts: {
       await notify({
         userId,
         workspaceId: opts.scope.workspaceId,
-        level: failed ? 'error' : 'warning',
+        level,
         title,
         lines,
         pipelineId: opts.pipelineId,
@@ -196,6 +213,11 @@ export async function alertIfNeeded(opts: {
         email: alertOn === 'never' || i > 0 ? undefined : { to: settings?.alertEmails ?? [] },
       })
     }
+    await deliverAlert(
+      opts.scope.workspaceId,
+      { kind, level, title, lines, pipelineId: opts.pipelineId, pipelineName: opts.pipelineName, runId: opts.runId, link: pipelineLink(opts.pipelineId), at: new Date().toISOString() },
+      { config, notified: ids }
+    )
   } catch (err) {
     // Alerts must never turn a finished run into an error.
     console.error('[runner] alert failed:', err instanceof Error ? err.message : err)
