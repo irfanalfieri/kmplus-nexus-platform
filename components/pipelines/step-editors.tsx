@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Plus, Scale, Sparkles, Trash2, Wand2, X } from 'lucide-react'
+import { Columns2, Plus, Scale, Sparkles, Trash2, Wand2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Notice, type NoticeTone } from '@/components/ui/notice'
@@ -46,6 +46,7 @@ import { useT } from '@/components/i18n/i18n-provider'
 import { getConnectorDefinition } from '@/lib/connectors/catalog'
 import { ApiDestinationFields, newApiDestination } from './api-destination-editor'
 import { SchemaMappingFields, schemaFor } from './schema-mapping'
+import { TwoPaneMapper } from './two-pane-mapper'
 import { recencyColumn } from '@/lib/pipelines/aggregate'
 import type { steps as stepsMessages } from '@/lib/i18n/messages/en/steps'
 
@@ -325,6 +326,7 @@ export function MapEditor({ step, columns, options, source, onChange }: { step: 
   const [templateMsg, setTemplateMsg] = useState<{ tone: NoticeTone; text: string } | null>(null)
   const [templateName, setTemplateName] = useState<string | null>(null)
   const [savingTemplate, setSavingTemplate] = useState(false)
+  const [mapperOpen, setMapperOpen] = useState(false)
   const autoMap = () => {
     // HR synonyms (PERNR → employee_code, TGL_LAHIR → birth_date …), else a safe snake_case name.
     const existing = new Set(step.fields.map((f) => f.from))
@@ -361,7 +363,22 @@ export function MapEditor({ step, columns, options, source, onChange }: { step: 
   }
   return (
     <div className="space-y-2">
+      {mapperOpen && (
+        <TwoPaneMapper
+          step={step}
+          columns={columns}
+          options={options}
+          onClose={() => setMapperOpen(false)}
+          onApply={(fields) => {
+            onChange({ ...step, fields })
+            setMapperOpen(false)
+          }}
+        />
+      )}
       <div className="flex flex-wrap items-center gap-2">
+        <Button size="sm" variant="outline" onClick={() => setMapperOpen(true)} disabled={!columns.length}>
+          <Columns2 aria-hidden /> {t('steps.map.mapper.open')}
+        </Button>
         <Button size="sm" variant="outline" onClick={autoMap} disabled={!columns.length}>
           <Wand2 aria-hidden /> {t('steps.map.autoMap')}
         </Button>

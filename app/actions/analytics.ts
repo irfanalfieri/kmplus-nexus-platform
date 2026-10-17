@@ -8,9 +8,9 @@ import { dashboards, nexusDatasets } from '@/lib/db/schema'
 import { newId, requireWorkspace, type WorkspaceContext } from '@/lib/auth/session'
 import { can } from '@/lib/auth/permissions'
 import { recordAudit } from '@/lib/audit'
-import { dashboardInputSchema, widgetSchema, type Widget, type WidgetResult } from '@/lib/analytics/definition'
+import { dashboardFilterSchema, dashboardFilterValuesSchema, dashboardInputSchema, widgetSchema, type DashboardFilter, type Widget, type WidgetResult } from '@/lib/analytics/definition'
 import { type DatasetColumn } from '@/lib/analytics/query'
-import { runWidget } from '@/lib/analytics/run'
+import { distinctValues, runWidget } from '@/lib/analytics/run'
 import { accessFor, masksFor } from '@/lib/governance/masking'
 import { guard } from '@/lib/server-action'
 
@@ -44,15 +44,22 @@ async function getAnalyticsDatasetsImpl() {
 async function listDashboardsImpl() {
   const ctx = await requireWorkspace()
   const rows = await db
-    .select({ id: dashboards.id, name: dashboards.name, description: dashboards.description, widgets: dashboards.widgets, updatedAt: dashboards.updatedAt })
+    .select({ id: dashboards.id, name: dashboards.name, description: dashboards.description, widgets: dashboards.widgets, filters: dashboards.filters, updatedAt: dashboards.updatedAt })
     .from(dashboards)
     .where(eq(dashboards.workspaceId, ctx.workspaceId))
     .orderBy(desc(dashboards.updatedAt))
   return {
     canEdit: can(ctx.role, 'dashboards:edit'),
     canView: can(ctx.role, 'data:preview'),
-    dashboards: rows.map((r) => ({ id: r.id, name: r.name, description: r.description ?? '', widgets: parseWidgets(r.widgets), updatedAt: r.updatedAt })),
+    dashboards: rows.map((r) => ({ id: r.id, name: r.name, description: r.description ?? '', widgets: parseWidgets(r.widgets), filters: parseFilters(r.filters), updatedAt: r.updatedAt })),
   }
+}
+
+function parseFilters(raw: unknown): DashboardFilter[] {
+  return (Array.isArray(raw) ? raw : []).flatMap((f) => {
+    const parsed = dashboardFilterSchema.safeParse(f)
+    return parsed.success ? [parsed.data] : []
+  })
 }
 
 function parseWidgets(raw: unknown): Widget[] {
@@ -73,15 +80,15 @@ async function saveDashboardImpl(input: z.input<typeof dashboardInputSchema>) {
   if (id) {
     const updated = await db
       .update(dashboards)
-      .set({ name: data.name, description: data.description, widgets: data.widgets, updatedAt: now })
+      .set({ name: data.name, description: data.description, widgets: data.widgets, ...(data.filters ? { filters: data.filters } : {}), updatedAt: now })
       .where(and(eq(dashboards.id, id), eq(dashboards.workspaceId, ctx.workspaceId)))
       .returning({ id: dashboards.id })
     if (!updated.length) throw new Error('Dashboard not found')
   } else {
     id = newId('dash')
-    await db.insert(dashboards).values({ id, workspaceId: ctx.workspaceId, name: data.name, description: data.description, widgets: data.widgets, createdBy: ctx.userId })
+    await db.insert(dashboards).values({ id, workspaceId: ctx.workspaceId, name: data.name, description: data.description, widgets: data.widgets, filters: data.filters ?? [], createdBy: ctx.userId })
   }
-  await recordAudit(ctx, { action: data.id ? 'UPDATE' : 'CREATE', resource: 'dashboard', resourceId: id, changes: { name: data.name, widgets: data.widgets.length } })
+  await recordAudit(ctx, { action: data.id ? 'UPDATE' : 'CREATE', resource: 'dashboard', resourceId: id, changes: { name: data.name, widgets: data.widgets.length, ...(data.filters ? { filters: data.filters.map((f) => f.label) } : {}) } })
   revalidatePath('/dashboard', 'layout')
   return { id }
 }
@@ -105,23 +112,42 @@ async function previewWidgetImpl(rawWidget: unknown) {
   }
 }
 
-/** Results for every widget of a dashboard; one failing widget doesn't hide the others. */
-async function getDashboardDataImpl(rawId: string) {
+/** Results for every widget of a dashboard, with the viewer's filter choices (DB-4); one failing widget doesn't hide the others. */
+async function getDashboardDataImpl(rawId: string, rawValues: unknown = {}) {
   const ctx = await requireWorkspace('data:preview')
   const id = idSchema.parse(rawId)
+  const values = dashboardFilterValuesSchema.parse(rawValues ?? {})
   const [dash] = await db.select().from(dashboards).where(and(eq(dashboards.id, id), eq(dashboards.workspaceId, ctx.workspaceId))).limit(1)
   if (!dash) throw new Error('Dashboard not found')
   const widgets = parseWidgets(dash.widgets)
+  const filters = parseFilters(dash.filters)
   const results: Record<string, { ok: true; result: WidgetResult } | { ok: false; message: string }> = {}
   for (const w of widgets) {
     try {
-      results[w.id] = { ok: true, result: await runWidget(ctx, w) }
+      results[w.id] = { ok: true, result: await runWidget(ctx, w, { filters, values }) }
     } catch (err) {
       results[w.id] = { ok: false, message: err instanceof Error ? err.message : 'Query failed' }
     }
   }
-  await recordAudit(ctx, { action: 'VIEW_DATA', resource: 'dashboard', resourceId: id, changes: { what: 'dashboard', widgets: widgets.length } })
+  await recordAudit(ctx, { action: 'VIEW_DATA', resource: 'dashboard', resourceId: id, changes: { what: 'dashboard', widgets: widgets.length, filtered: Object.keys(values).length || undefined } })
   return { generatedAt: new Date(), results }
+}
+
+/** DB-4: the choices of each "value" filter, from the dashboard's widget datasets that have its column. */
+async function getDashboardFilterOptionsImpl(rawId: string) {
+  const ctx = await requireWorkspace('data:preview')
+  const id = idSchema.parse(rawId)
+  const [dash] = await db.select().from(dashboards).where(and(eq(dashboards.id, id), eq(dashboards.workspaceId, ctx.workspaceId))).limit(1)
+  if (!dash) throw new Error('Dashboard not found')
+  const datasets = [...new Set(parseWidgets(dash.widgets).map((w) => w.dataset))]
+  const out: Record<string, string[]> = {}
+  for (const f of parseFilters(dash.filters)) {
+    if (f.kind !== 'value') continue
+    const all = new Set<string>()
+    for (const d of datasets) for (const v of await distinctValues(ctx, d, f.column)) all.add(v)
+    out[f.id] = [...all].sort((a, b) => a.localeCompare(b)).slice(0, 300)
+  }
+  return out
 }
 
 // ── Server actions: thin wrappers that return errors as values so their messages
@@ -149,4 +175,8 @@ export async function previewWidget(...args: Parameters<typeof previewWidgetImpl
 
 export async function getDashboardData(...args: Parameters<typeof getDashboardDataImpl>) {
   return guard(() => getDashboardDataImpl(...args))
+}
+
+export async function getDashboardFilterOptions(...args: Parameters<typeof getDashboardFilterOptionsImpl>) {
+  return guard(() => getDashboardFilterOptionsImpl(...args))
 }

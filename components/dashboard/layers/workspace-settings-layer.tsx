@@ -1,5 +1,7 @@
 'use client'
 
+import { getLogRetention, setLogRetention } from '@/lib/actions/monitoring'
+import { LOG_DETAIL_DAYS, RUN_SUMMARY_DAYS } from '@/lib/monitoring/log-retention-options'
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { Check, Copy, Link2, Loader2, LogOut, RotateCcw, Save, ShieldAlert, ShieldCheck, Trash2 } from 'lucide-react'
@@ -154,6 +156,8 @@ function GeneralSettings() {
           )}
         </form>
       </SettingsPanel>
+
+      <LogRetentionPanel />
 
       <SettingsPanel title={t('settings.leaveTitle')} description={t('settings.leaveBody', { workspace: workspace.name })}>
         <Button variant="outline" onClick={() => setConfirmLeave(true)}>
@@ -394,5 +398,54 @@ function MembersSettings() {
         }}
       />
     </>
+  )
+}
+
+/** MN-7: how long runs keep their detailed log and their summary. */
+function LogRetentionPanel() {
+  const { t } = usePrefs()
+  const isAdmin = useCan('workspace:manage')
+  const [value, setValue] = useState<{ logDetailDays: number; runSummaryDays: number } | null>(null)
+  const [saved, setSaved] = useState<{ logDetailDays: number; runSummaryDays: number } | null>(null)
+  const { busy, error, act } = useAct()
+  useEffect(() => {
+    void getLogRetention().then((r) => {
+      setValue({ logDetailDays: r.logDetailDays, runSummaryDays: r.runSummaryDays })
+      setSaved({ logDetailDays: r.logDetailDays, runSummaryDays: r.runSummaryDays })
+    }).catch(() => undefined)
+  }, [])
+  const days = (d: number) => (d % 365 === 0 ? t('settings.retention.years', { count: d / 365 }) : t('settings.retention.days', { count: d }))
+  const dirty = value && saved && (value.logDetailDays !== saved.logDetailDays || value.runSummaryDays !== saved.runSummaryDays)
+  return (
+    <SettingsPanel title={t('settings.retention.title')} description={t('settings.retention.description')}>
+      {error && <Notice tone="danger" className="mb-3">{error}</Notice>}
+      {!value ? (
+        <Loader2 className="size-4 animate-spin text-muted-foreground" aria-hidden />
+      ) : (
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="text-sm">
+            <span className="mb-1 block text-xs font-medium text-muted-foreground">{t('settings.retention.detail')}</span>
+            <select className={nativeSelectClass} value={value.logDetailDays} disabled={!isAdmin} onChange={(e) => setValue({ ...value, logDetailDays: Number(e.target.value) })}>
+              {LOG_DETAIL_DAYS.map((d) => (
+                <option key={d} value={d}>{days(d)}</option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm">
+            <span className="mb-1 block text-xs font-medium text-muted-foreground">{t('settings.retention.summary')}</span>
+            <select className={nativeSelectClass} value={value.runSummaryDays} disabled={!isAdmin} onChange={(e) => setValue({ ...value, runSummaryDays: Number(e.target.value) })}>
+              {RUN_SUMMARY_DAYS.map((d) => (
+                <option key={d} value={d}>{days(d)}</option>
+              ))}
+            </select>
+          </label>
+          {isAdmin && (
+            <Button disabled={!dirty || busy === 'retention'} onClick={() => void act('retention', () => setLogRetention(value), t('settings.retention.saved')).then((ok) => ok && setSaved(value))}>
+              {busy === 'retention' ? <Loader2 className="animate-spin" /> : <Save />} {t('common.save')}
+            </Button>
+          )}
+        </div>
+      )}
+    </SettingsPanel>
   )
 }

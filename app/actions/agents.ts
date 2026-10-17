@@ -121,6 +121,8 @@ async function addAgentDataSourceImpl(input: z.input<typeof addInput>) {
     // Nothing secret here: the agent holds the credentials.
     credentials: encryptCredentials(id, {}, ctx.workspaceId),
     status: 'disconnected',
+    // First scheduled health check (DS-7) in 15 minutes.
+    nextHealthCheckAt: new Date(Date.now() + 15 * 60_000),
   })
   await recordAudit(ctx, { action: 'CREATE', resource: 'data_source', resourceId: id, changes: { sourceType: conn.type, role: data.role, agent: agent.name, connection: conn.name } })
   revalidatePath('/dashboard', 'layout')

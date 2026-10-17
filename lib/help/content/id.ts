@@ -129,6 +129,7 @@ export const helpId: HelpContent = {
               ],
             },
             { kind: 'p', text: 'Pencarian mencocokkan nama dan kata kunci dalam bahasa Inggris dan Indonesia, jadi “excel” menemukan unggah file dan penyimpanan cloud. Memasang konektor memerlukan izin *pasang konektor* (admin). Konektor bertanda premium mungkin berbayar nanti; saat ini semua konektor gratis dipasang.' },
+            { kind: 'p', text: 'Setiap konektor memiliki halaman **Detail**: yang dapat dilakukannya (baca, tulis, pembacaan inkremental, kueri langsung, change data capture, melalui Nexus Agent), izin yang perlu diminta dari administrator sistem lain, dan field masuknya.' },
           ],
         },
         {
@@ -144,6 +145,7 @@ export const helpId: HelpContent = {
                 'Beri nama dan pilih **fungsinya**: sumber (Nexus membaca), tujuan (Nexus menulis), atau keduanya.',
               ],
             },
+            { kind: 'p', text: '**Kesehatan dan perubahan skema.** Nexus memeriksa setiap sumber secara terjadwal (setiap 15 menit secara bawaan; atur atau matikan di **Kesehatan & perubahan skema** pada menu sumber). Pemeriksaan yang gagal menandai sumber sebagai gagal dan memberi tahu pengelola sumber; mereka diberi tahu lagi saat pulih. Setiap 6 jam pemeriksaan juga memindai ulang tabel: tabel atau kolom yang dihapus, atau tipe yang berubah, tampil pada sumber beserta pipeline yang membacanya, sampai seseorang menandainya sudah ditinjau.' },
             { kind: 'note', tone: 'info', text: 'Kredensial dienkripsi dengan kunci milik workspace Anda dan tidak pernah dikirim balik ke browser. Saat Anda mengedit sumber, rahasia tampil tersamar dan tidak berubah kecuali Anda mengetik yang baru.' },
           ],
         },
@@ -400,6 +402,7 @@ export const helpId: HelpContent = {
           title: 'Pemetaan dan transformasi',
           blocks: [
             { kind: 'p', text: 'Langkah **Pemetaan & transformasi** menampilkan setiap kolom keluaran beserta kolom sumber dan tipenya. **Petakan otomatis** mencocokkan sinonim SDM (mis. `PERNR`, `NIK`, `employee_no`) ke nama baku Unified Data Model, dan templat pemetaan yang tersimpan (bawaan untuk SAP, Talenta, dan Active Directory) mengisi satu langkah sekaligus.' },
+            { kind: 'p', text: '**Pemeta dua panel** membuka langkah ini berdampingan: kolom masukan di kiri, field tujuan di kanan. Seret kolom ke tujuan untuk mengisinya, atau ke **Field baru** untuk menambahkan satu (dinamai dengan sinonim SDM). **Tambah tujuan dari** memuat field entitas bisnis atau skema dataset yang ditetapkan dan mencocokkan yang bisa. Dengan keyboard, pilih kolom, lalu **Pakai** pada tujuan. Transformasi tetap ikut field-nya.' },
             {
               kind: 'table',
               head: ['Jenis', 'Transformasi'],
@@ -480,6 +483,7 @@ export const helpId: HelpContent = {
                 '**Simpan draf** menyimpan perubahan Anda; versi **terbit** tetap berjalan sampai Anda **Simpan & publikasikan**.',
                 'Setiap penerbitan adalah versi dengan catatan perubahan opsional. Riwayat versi bisa **memulihkan** versi sebelumnya: versi itu menjadi versi yang berjalan (setelah disetujui, jika workspace Anda mewajibkannya).',
                 'Saat eksekusi gagal, **Diagnosis dengan AI** menjelaskan kegagalan dari pesan langkah (tidak pernah nilai baris) dan bisa menyarankan perbaikan sebagai draf baru.',
+                '**Ekspor JSON** (di menu pipeline) mengunduh pipeline beserta nama sumber data, aturan bisnis, dan skema dataset yang dipakainya, tidak pernah kredensial atau baris. **Impor** di layar Pipeline membaca file tersebut ke ruang kerja lain: sumber data dicocokkan menurut nama dan tipe (atau Anda memilih yang setipe), aturan dan skema dataset yang belum ada dibuat, dan pipeline masuk sebagai draf dengan jadwal mati.',
               ],
             },
           ],
@@ -630,6 +634,7 @@ export const helpId: HelpContent = {
           title: 'Membaca eksekusi',
           blocks: [
             { kind: 'p', text: 'Buka eksekusi untuk melihat pemicu, versi, durasi, baris dibaca, ditulis, dan ditahan per langkah dan per tujuan, serta lognya. Admin juga melihat detail teknis error.' },
+            { kind: 'p', text: 'Saat eksekusi gagal, Nexus menyebut **kemungkinan penyebabnya** (masuk ditolak, izin kurang, tabel atau kolom berubah, nilai bertipe salah, sistem lambat atau tidak terjangkau, batas permintaan, agent offline, baris ditahan) beserta yang perlu dilakukan dan tautan ke layar tempat memperbaikinya. Petunjuk yang sama ada di peringatan kegagalan. Untuk hal lain, **Diagnosis dengan AI** menjelaskan error-nya.' },
           ],
         },
         {
@@ -848,6 +853,7 @@ export const helpId: HelpContent = {
           blocks: [
             { kind: 'shot', screen: 'analytics', caption: 'Analitik: dasbor yang dibangun dari dataset.' },
             { kind: 'p', text: 'Dasbor adalah kumpulan widget: angka, grafik batang atau garis, atau tabel, masing-masing atas satu dataset. Setiap grafik punya tampilan tabel, dan setiap widget menunjukkan seberapa segar datanya.' },
+            { kind: 'p', text: '**Filter dasbor** (paling banyak 4) ada di atas widget: rentang tanggal (7, 30, atau 90 hari terakhir, 12 bulan, tahun ini, atau tanggal pilihan sendiri) atau satu nilai seperti unit organisasi. Setiap filter berlaku untuk semua widget yang dataset-nya memiliki kolom tersebut; widget yang tidak dapat disaring akan memberi tahu. Penyunting dasbor menambah filter lewat **Filter**; penonton memilih nilainya, dan pilihan tidak disimpan.' },
           ],
         },
         {
@@ -972,7 +978,7 @@ export const helpId: HelpContent = {
               kind: 'table',
               head: ['Tab', 'Yang Anda kelola'],
               rows: [
-                ['Umum', 'Nama workspace.'],
+                ['Umum', 'Nama workspace, dan berapa lama riwayat eksekusi disimpan: log terperinci 7, 30, atau 90 hari (bawaan 30), ringkasan eksekusi 90 hari, 1 atau 2 tahun (bawaan 1 tahun). Eksekusi yang barisnya masih menunggu di Kualitas data tetap disimpan.'],
                 ['Anggota & peran', 'Undang orang, ubah peran, keluarkan anggota.'],
                 ['Akun Anda', 'Autentikasi dua faktor dan kode cadangan Anda sendiri.'],
                 ['Masuk, SSO & SCIM', 'Single sign-on dengan domain terverifikasi, dan provisioning SCIM.'],
@@ -1052,6 +1058,7 @@ export const helpId: HelpContent = {
     { id: 'write-back', group: 'connecting', q: 'Apakah Nexus akan mengubah sistem sumber kami?', a: 'Sumber hanya dibaca. Nexus hanya menulis ke sumber data yang Anda tambahkan sebagai tujuan, ke tabel yang sudah ada, dan tidak pernah membuat atau mengosongkan tabel di sana.' },
     { id: 'unsupported', group: 'connecting', q: 'Sistem kami tidak ada di daftar konektor.', a: 'Jika punya REST API, gunakan konektor **REST API**: rancang permintaan, paging, dan cara masuk di formulirnya. Database dengan antarmuka PostgreSQL, MySQL, atau SQL Server bisa memakai konektor tersebut. Selain itu, ekspor file CSV/Excel atau minta konektor ke KMPlus.' },
     { id: 'files-update', group: 'connecting', q: 'Bagaimana memperbarui data yang berasal dari file Excel?', a: 'Unggah file baru ke sumber Unggah File yang sama; eksekusi berikutnya membacanya. Untuk ekspor berkala, taruh file di folder S3, Azure Blob, atau Google Cloud Storage dan baca foldernya sebagai satu tabel.' },
+    { id: 'source-failing', group: 'connecting', q: 'Bagaimana saya tahu sumber berhenti bekerja sebelum pipeline gagal?', a: 'Nexus memeriksa setiap sumber secara terjadwal dan memberi tahu pengelola sumber pada pemeriksaan pertama yang gagal, dan lagi saat pulih. **Kesehatan & perubahan skema** pada setiap sumber menampilkan pemeriksaan 30 hari terakhir serta tabel atau kolom yang hilang atau berubah tipe, beserta pipeline yang membacanya.' },
     { id: 'draft-publish', group: 'pipelines', q: 'Saya sudah menyimpan perubahan tetapi pipeline masih berjalan dengan cara lama.', a: 'Menyimpan hanya membuat draf. Eksekusi memakai versi **terbit**, jadi terbitkan drafnya (dan minta persetujuan, jika workspace Anda mewajibkan orang kedua).' },
     { id: 'run-failed', group: 'pipelines', q: 'Sebuah eksekusi gagal. Dari mana saya mulai?', a: 'Buka eksekusinya di **Pemantauan** untuk melihat langkah dan pesannya. Masalah konfigurasi (kata sandi salah, tabel tidak ada) tidak diulang; perbaiki lalu jalankan lagi. Masalah sementara diulang dari checkpoint terakhir. **Diagnosis dengan AI** di editor menjelaskannya.' },
     { id: 'incremental', group: 'pipelines', q: 'Apakah setiap eksekusi membaca seluruh tabel?', a: 'Tidak jika langkah sumber **inkremental**: Nexus mengingat nilai tertinggi kolom seperti `updated_at` dan hanya membaca baris yang lebih baru. Watermark hanya bergeser setelah seluruh eksekusi berhasil.' },

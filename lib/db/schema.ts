@@ -135,6 +135,11 @@ export const workspaces = pgTable('workspaces', {
   aiProvider: text('aiProvider').notNull().default('server'),
   /** The agent whose local model answers when aiProvider = agent. */
   aiAgentId: text('aiAgentId'),
+  /** MN-7: days a run keeps its detailed log and error stack, then days its summary is kept. */
+  logDetailDays: integer('logDetailDays').notNull().default(30),
+  runSummaryDays: integer('runSummaryDays').notNull().default(365),
+  /** Last time old run logs were pruned (hourly). */
+  logsPrunedAt: timestamp('logsPrunedAt', { withTimezone: true }),
   createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
 })
@@ -176,9 +181,34 @@ export const dataSources = pgTable('data_sources', {
   credentials: jsonb('credentials').notNull(),
   status: text('status').default('disconnected'),
   lastConnected: timestamp('lastConnected', { withTimezone: true }),
+  /** DS-7: minutes between scheduled health checks (0 = off). */
+  healthCheckMinutes: integer('healthCheckMinutes').notNull().default(15),
+  nextHealthCheckAt: timestamp('nextHealthCheckAt', { withTimezone: true }),
+  lastHealthCheckAt: timestamp('lastHealthCheckAt', { withTimezone: true }),
+  /** Failed checks in a row (alerts on the first, clears on a pass). */
+  healthFailures: integer('healthFailures').notNull().default(0),
+  /** DS-8: changes found by the last schema scan that pipelines may feel, until someone reviews them (lib/connectors/drift.ts). */
+  schemaDrift: jsonb('schemaDrift'),
   createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
-}, (t) => [index('data_sources_workspace_idx').on(t.workspaceId)])
+}, (t) => [index('data_sources_workspace_idx').on(t.workspaceId), index('data_sources_health_due_idx').on(t.nextHealthCheckAt)])
+
+/** DS-7: one row per health check of a data source (kept 30 days). */
+export const sourceHealthChecks = pgTable('source_health_checks', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspaceId').notNull(),
+  dataSourceId: text('dataSourceId').notNull(),
+  checkedAt: timestamp('checkedAt', { withTimezone: true }).notNull().defaultNow(),
+  ok: boolean('ok').notNull(),
+  latencyMs: integer('latencyMs'),
+  /** Connector message (never credentials). */
+  message: text('message'),
+  /** schedule | manual */
+  trigger: text('trigger').notNull().default('schedule'),
+  /** Whether this check re-scanned the schema, and the drift it found (counts). */
+  scanned: boolean('scanned').notNull().default(false),
+  drift: jsonb('drift'),
+}, (t) => [index('source_health_checks_source_idx').on(t.dataSourceId, t.checkedAt), index('source_health_checks_workspace_idx').on(t.workspaceId, t.checkedAt)])
 
 // Layer 2: Connector Marketplace — per-user purchased/installed plugins
 export const connectorInstalls = pgTable('connector_installs', {
@@ -556,6 +586,8 @@ export const dashboards = pgTable('dashboards', {
   description: text('description'),
   /** Widget specs, validated by lib/analytics/definition.ts. */
   widgets: jsonb('widgets').notNull().default([]),
+  /** DB-4: dashboard-wide filters (date range / value), lib/analytics/definition.ts. */
+  filters: jsonb('filters').notNull().default([]),
   createdBy: text('createdBy').notNull(),
   createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),

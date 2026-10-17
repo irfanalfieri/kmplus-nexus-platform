@@ -5,7 +5,7 @@ import { AiConnectorSuggest } from '@/components/ai/ai-connector-suggest'
 import { suggestConnector } from '@/lib/actions/ai'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { Database, Eye, KeyRound, Loader2, MoreHorizontal, Pencil, Plus, RefreshCw, Save, Trash2, Upload } from 'lucide-react'
+import { Activity, Database, Eye, KeyRound, Loader2, MoreHorizontal, Pencil, Plus, RefreshCw, Save, Trash2, Upload } from 'lucide-react'
 import EditCredentialsDialog from '@/components/connectors/edit-credentials-dialog'
 import { useCan } from '@/components/workspace/workspace-context'
 import { Button, buttonVariants } from '@/components/ui/button'
@@ -17,6 +17,7 @@ import { ConfirmDialog, Modal } from '@/components/ui/dialog'
 import { Table, TBody, Td, Th, THead, Tr } from '@/components/ui/data-table'
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from '@/components/ui/menu'
 import { StateMark } from '@/components/ui/flow-line'
+import { SourceHealthDialog } from '@/components/data-sources/source-health'
 import { useToast } from '@/components/ui/toast'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import ConnectorCredentialForm from '@/components/connectors/connector-credential-form'
@@ -45,6 +46,8 @@ type DataSourceRow = {
   role?: Role
   status: string
   lastConnected: string | Date | null
+  /** DS-8: unreviewed schema changes. */
+  schemaDrift: boolean
   config?: Record<string, unknown> | null
 }
 
@@ -80,6 +83,7 @@ export default function DataSourcesLayer() {
   const [explorerOpen, setExplorerOpen] = useState(false)
   const [uploadFor, setUploadFor] = useState<string | null>(null)
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null)
+  const [healthFor, setHealthFor] = useState<string | null>(null)
 
   const installedConnectors = useMemo(() => CONNECTOR_CATALOG.filter((c) => installedSlugs.includes(c.slug)), [installedSlugs])
 
@@ -107,6 +111,7 @@ export default function DataSourcesLayer() {
           role: (row.config as { role?: Role })?.role,
           status: row.status ?? 'disconnected',
           lastConnected: row.lastConnected,
+          schemaDrift: Boolean(row.schemaDrift),
           config: row.config as Record<string, unknown> | null,
         })),
       )
@@ -155,6 +160,7 @@ export default function DataSourcesLayer() {
           }}
         />
       )}
+      {healthFor && <SourceHealthDialog sourceId={healthFor} onClose={() => setHealthFor(null)} onChanged={() => void loadAll()} />}
       {uploadFor &&
         (() => {
           const src = sources.find((x) => x.id === uploadFor)
@@ -342,6 +348,11 @@ export default function DataSourcesLayer() {
                         ) : (
                           <StateMark state={connected ? 'live' : source.status === 'error' ? 'tripped' : 'idle'}>{connected ? t('sources.connected') : source.status === 'error' ? t('sources.error') : t('sources.disconnected')}</StateMark>
                         )}
+                        {source.schemaDrift && (
+                          <button type="button" onClick={() => setHealthFor(source.id)} className="mt-1 block rounded-sm text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring" aria-label={t('health.openFor', { name: source.name })}>
+                            <StateMark state="held" className="text-xs">{t('health.schemaChanged')}</StateMark>
+                          </button>
+                        )}
                       </Td>
                       <Td className="text-right font-mono text-xs">{scan && !isSecretManager(source.sourceType) ? scan.tables.length : '—'}</Td>
                       <Td className="font-mono text-xs text-muted-foreground">{ago(source.lastConnected)}</Td>
@@ -373,6 +384,9 @@ export default function DataSourcesLayer() {
                               <MenuContent>
                                 <MenuItem disabled={busy !== null} onClick={() => void runListAction(`test:${source.id}`, () => testConnection(source.id), t('sources.retested', { name: source.name }))}>
                                   <RefreshCw aria-hidden /> {t('sources.test')}
+                                </MenuItem>
+                                <MenuItem onClick={() => setHealthFor(source.id)}>
+                                  <Activity aria-hidden /> {t('health.open')}
                                 </MenuItem>
                                 {source.sourceType !== 'file' && (
                                   <MenuItem onClick={() => setCredentialsFor({ id: source.id, name: source.name })}>

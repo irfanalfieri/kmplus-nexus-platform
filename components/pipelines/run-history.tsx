@@ -1,5 +1,6 @@
 'use client'
 
+import { RootCauseHint } from '@/components/monitoring/root-cause-hint'
 import { AiDiagnose } from '@/components/ai/ai-diagnose'
 import { useCallback, useEffect, useState } from 'react'
 import { ChevronDown, ChevronRight, History, Loader2, RotateCcw } from 'lucide-react'
@@ -160,6 +161,8 @@ export default function RunHistory({
     held?: number
     log?: { at: string; level: 'info' | 'warn' | 'error'; message: string }[]
     errorStack?: string
+    /** MN-7: when the log lines and stack were removed (the workspace's detailed-log retention). */
+    detailsPrunedAt?: string
     attempts?: { attempt: number; error?: string; at: string }[]
     watermark?: { column: string; value: string | null }
   }
@@ -297,6 +300,7 @@ export default function RunHistory({
                           {selected.errorMessage}
                         </Notice>
                       )}
+                      {(selected.status === 'failed' || selected.status === 'partial') && <RootCauseHint message={selected.errorMessage} />}
                       {(selected.status === 'failed' || selected.status === 'partial') && <AiDiagnose key={selected.id} runId={selected.id} onApplied={onRestored} />}
                       {details.errorStack && (
                         <details className="rounded-md border border-border p-2 text-xs">
@@ -362,6 +366,7 @@ export default function RunHistory({
                           </Table>
                         </div>
                       )}
+                      {details.detailsPrunedAt && <p className="text-xs text-muted-foreground">{t('editor.history.detailsPruned')}</p>}
                       {details.log && details.log.length > 0 && (
                         <div className="rounded-md border border-border">
                           <button

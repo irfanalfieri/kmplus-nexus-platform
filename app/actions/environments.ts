@@ -12,7 +12,7 @@ import { diffObjects } from '@/lib/audit-diff'
 import { APPROVAL_POLICIES, approvalReasons } from '@/lib/pipelines/approvals'
 import { scheduleSchema } from '@/lib/pipelines/definition'
 import { ENVIRONMENTS, ENVIRONMENT_INFO, applyRuleIds, isEnvironment, nextEnvironment, planPromotion, type Environment, type PromotionSide } from '@/lib/pipelines/promote'
-import { getOwnedPipeline, publishOrRequest, savePipelineAs, workspaceSettings } from '@/lib/pipelines/publish'
+import { getOwnedPipeline, promotionSide, publishOrRequest, savePipelineAs, workspaceSettings } from '@/lib/pipelines/publish'
 import { parseDefinition } from '@/lib/pipelines/runner'
 import { ruleBodySchema } from '@/lib/rules/definition'
 import { guard } from '@/lib/server-action'
@@ -170,15 +170,6 @@ async function setEnvironmentLockImpl(rawLocked: boolean) {
 
 // ── Promotion ────────────────────────────────────────────────────────────────
 
-async function sideOf(workspaceId: string): Promise<PromotionSide> {
-  const [ds, rules, pipes] = await Promise.all([
-    db.select({ id: dataSources.id, name: dataSources.name, sourceType: dataSources.sourceType }).from(dataSources).where(eq(dataSources.workspaceId, workspaceId)),
-    db.select({ id: businessRules.id, name: businessRules.name, body: businessRules.body }).from(businessRules).where(eq(businessRules.workspaceId, workspaceId)),
-    db.select({ id: pipelines.id, name: pipelines.name, promotionKey: pipelines.promotionKey }).from(pipelines).where(eq(pipelines.workspaceId, workspaceId)),
-  ])
-  return { dataSources: ds, rules: rules.map((r) => ({ ...r, body: ruleBodySchema.parse(r.body) })), pipelines: pipes }
-}
-
 async function buildPromotion(ctx: WorkspaceContext, pipelineId: string) {
   const ws = await workspaceSettings(ctx.workspaceId)
   if (!ws.environmentGroupId || !isEnvironment(ws.environment)) throw new Error('This workspace is not part of an environment group. Set one up in Settings → Environments.')
@@ -192,7 +183,7 @@ async function buildPromotion(ctx: WorkspaceContext, pipelineId: string) {
   const schedule = scheduleSchema.parse(pipeline.schedule ?? {})
   const fromLabel = ENVIRONMENT_INFO[ws.environment].label
   const targetLabel = ENVIRONMENT_INFO[nextEnv].label
-  const plan = planPromotion(definition, schedule, await sideOf(ctx.workspaceId), await sideOf(target.id), targetLabel)
+  const plan = planPromotion(definition, schedule, await promotionSide(ctx.workspaceId), await promotionSide(target.id), targetLabel)
   // Defined schemas of the datasets the pipeline writes travel with it.
   const written = [...new Set(plan.definition.nodes.flatMap((n) => (n.type === 'destination' && n.kind === 'dataset' ? [n.datasetName] : [])))]
   const schemas: { datasetName: string; status: 'create' | 'update' | 'same' | 'blocked'; lines: string[]; ops: ReturnType<typeof schemaPromotion>['ops']; schema: import('@/lib/datasets/schema').DatasetSchema }[] = []

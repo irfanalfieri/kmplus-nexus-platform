@@ -16,6 +16,9 @@ import { assist } from './en/assist'
 import { tour } from './en/tour'
 import { legal } from './en/legal'
 import { schemas } from './en/schemas'
+import { health } from './en/health'
+import { hints } from './en/hints'
+import { connectorDocs } from './en/connectorDocs'
 
 export const en = {
   common: {
@@ -120,6 +123,25 @@ export const en = {
     cancelled: 'Cancelled',
   },
   pipelines: {
+    transfer: {
+      export: 'Export JSON',
+      import: 'Import',
+      exported: 'Exported {when} · version {version} · {steps} steps',
+      importTitle: 'Import a pipeline',
+      importDescription: 'Choose a file exported from Nexus. Its data sources and business rules are matched by name; the pipeline arrives as a draft with its schedule off.',
+      chooseFile: 'Choose an exported pipeline (.json)',
+      name: 'Name here',
+      nameTaken: 'A pipeline with this name exists. Choose another name.',
+      sources: 'Data sources',
+      sourceFor: 'Data source for {name}',
+      chooseSource: 'Choose a data source…',
+      noSourceOfType: 'No {type} data source here: add one first',
+      importAsDraft: 'Import as draft',
+      draftNote: 'Credentials are never part of an export. Test and publish the imported pipeline when it is ready.',
+      imported: 'Imported as a draft. Open it to test and publish.',
+      exportFailed: 'The pipeline could not be exported.',
+      failed: 'The file could not be imported.',
+    },
     new: 'New pipeline',
     templates: 'Templates',
     summary: '{count, plural, one {# pipeline} other {# pipelines}}',
@@ -383,6 +405,15 @@ export const en = {
     },
   },
   settings: {
+    retention: {
+      title: 'Run history',
+      description: 'How long runs keep their detailed log (log lines, error details) and their summary (status, rows, timing). Older runs are removed hourly; runs with rows still waiting in Data quality are kept.',
+      detail: 'Detailed logs',
+      summary: 'Run summaries',
+      days: '{count, plural, one {# day} other {# days}}',
+      years: '{count, plural, one {# year} other {# years}}',
+      saved: 'Run history retention saved.',
+    },
     sections: 'Settings sections',
     general: 'General',
     members: 'Members & roles',
@@ -482,6 +513,9 @@ export const en = {
   tour,
   legal,
   schemas,
+  health,
+  hints,
+  connectorDocs,
 } as const
 
 type Widen<T> = T extends string ? string : { [K in keyof T]: Widen<T[K]> }

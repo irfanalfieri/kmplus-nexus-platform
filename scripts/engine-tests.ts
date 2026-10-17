@@ -35,6 +35,10 @@ import { laneTests } from './test/lane-tests'
 import { blockingTests } from './test/blocking-tests'
 import { apiCallTests } from './test/api-call-tests'
 import { schemaTests } from './test/schema-tests'
+import { healthTests } from './test/health-tests'
+import { transferTests } from './test/transfer-tests'
+import { dashboardTests } from './test/dashboard-tests'
+import { mapperTests } from './test/mapper-tests'
 import { localizeStepTitle } from '@/components/pipelines/step-title'
 import { alertEmail, inviteEmail, passwordChangedEmail, resetPasswordEmail } from '@/lib/email-templates'
 import { BUILTIN_MAPPING_TEMPLATES, PIPELINE_TEMPLATES, applyMappingTemplate, buildPipelineTemplate, mapToEntity } from '@/lib/pipelines/templates'
@@ -1521,6 +1525,10 @@ async function main() {
   await blockingTests(test)
   await apiCallTests(test)
   await schemaTests(test)
+  await healthTests(test)
+  await transferTests(test)
+  await dashboardTests(test)
+  await mapperTests(test)
 
   console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`)
 }

@@ -129,6 +129,7 @@ export const helpEn: HelpContent = {
               ],
             },
             { kind: 'p', text: 'Search matches names and keywords in English and Indonesian, so “excel” finds file upload and cloud storage. Installing needs the *install connectors* permission (admins). Connectors marked premium may be billed later; today every connector installs free.' },
+            { kind: 'p', text: 'Each connector has a **Details** page: what it can do (read, write, incremental reads, live queries, change data capture, through a Nexus Agent), the permissions to ask the other system’s administrator for, and its sign-in fields.' },
           ],
         },
         {
@@ -144,6 +145,7 @@ export const helpEn: HelpContent = {
                 'Name it and choose what it is **used as**: a source (Nexus reads), a destination (Nexus writes), or both.',
               ],
             },
+            { kind: 'p', text: '**Health and schema changes.** Nexus checks each source on a schedule (every 15 minutes by default; set it, or turn it off, under **Health & schema changes** in the source’s menu). A failed check marks the source as failing and alerts the people who manage sources; they hear again when it recovers. Every 6 hours the check also scans the tables again: a removed table or column, or a changed type, is shown on the source with the pipelines that read it, until someone marks it reviewed.' },
             { kind: 'note', tone: 'info', text: 'Credentials are encrypted with a key that belongs to your workspace and are never sent back to the browser. When you edit a source, secrets show as masked and stay unchanged unless you type a new one.' },
           ],
         },
@@ -400,6 +402,7 @@ export const helpEn: HelpContent = {
           title: 'Mapping and transforms',
           blocks: [
             { kind: 'p', text: 'The **Map & transform** step lists every output column with its source column and type. **Auto-map** matches HR synonyms (e.g. `PERNR`, `NIK`, `employee_no`) to the canonical names of the Unified Data Model, and saved mapping templates (built-in for SAP, Talenta and Active Directory) fill a whole step at once.' },
+            { kind: 'p', text: '**Two-pane mapper** opens the step side by side: input columns on the left, target fields on the right. Drag a column onto a target to fill it, or onto **New field** to add one (named with the HR synonyms). **Add targets from** loads the fields of a business entity or a defined dataset schema and matches what it can. With the keyboard, select a column, then **Use** on a target. Transforms stay with their field.' },
             {
               kind: 'table',
               head: ['Kind', 'Transforms'],
@@ -480,6 +483,7 @@ export const helpEn: HelpContent = {
                 '**Save draft** keeps your changes; the **published** version keeps running until you **Save & publish**.',
                 'Every publish is a version with an optional change note. The version history can **restore** an earlier version: it becomes the running version (after approval, if your workspace requires it).',
                 'When a run fails, **Diagnose with AI** explains the failure from the step messages (never the row values) and can suggest a fix as a new draft.',
+                '**Export JSON** (in a pipeline’s menu) downloads the pipeline with the names of the data sources, business rules and dataset schemas it uses, never credentials or rows. **Import** on the Pipelines screen reads such a file into another workspace: data sources are matched by name and type (or you pick one of the same type), missing rules and dataset schemas are created, and the pipeline arrives as a draft with its schedule off.',
               ],
             },
           ],
@@ -630,6 +634,7 @@ export const helpEn: HelpContent = {
           title: 'Reading a run',
           blocks: [
             { kind: 'p', text: 'Open a run to see its trigger, version, duration, rows read, written and held per step and per destination, and its log. Admins also see the technical detail of an error.' },
+            { kind: 'p', text: 'When a run fails, Nexus names the **likely cause** (sign-in refused, missing permission, a table or column that changed, a value of the wrong type, a slow or unreachable system, request limits, an offline agent, held rows) with what to do and a link to the screen where it is fixed. The same hint is in the failure alert. For anything else, **Diagnose with AI** explains the error.' },
           ],
         },
         {
@@ -848,6 +853,7 @@ export const helpEn: HelpContent = {
           blocks: [
             { kind: 'shot', screen: 'analytics', caption: 'Analytics: dashboards built from datasets.' },
             { kind: 'p', text: 'A dashboard is a set of widgets: a number, a bar or line chart, or a table, each over one dataset. Every chart has a table view, and each widget shows how fresh its data is.' },
+            { kind: 'p', text: '**Dashboard filters** (up to 4) sit above the widgets: a date range (last 7, 30 or 90 days, 12 months, this year, or your own dates) or one value such as an org unit. Each applies to every widget whose dataset has its column; a widget that can’t take a filter says so. People who edit dashboards add filters with **Filters**; viewers pick the values, and the choice isn’t saved.' },
           ],
         },
         {
@@ -972,7 +978,7 @@ export const helpEn: HelpContent = {
               kind: 'table',
               head: ['Tab', 'What you manage'],
               rows: [
-                ['General', 'The workspace name.'],
+                ['General', 'The workspace name, and how long run history is kept: detailed logs 7, 30 or 90 days (default 30), run summaries 90 days, 1 or 2 years (default 1 year). Runs with rows still waiting in Data quality are kept.'],
                 ['Members & roles', 'Invite people, change roles, remove members.'],
                 ['Your account', 'Your own two-factor authentication and backup codes.'],
                 ['Sign-in, SSO & SCIM', 'Single sign-on with verified domains, and SCIM provisioning.'],
@@ -1052,6 +1058,7 @@ export const helpEn: HelpContent = {
     { id: 'write-back', group: 'connecting', q: 'Will Nexus change our source systems?', a: 'Sources are only read. Nexus writes only to data sources you add as destinations, into tables that already exist, and never creates or empties tables there.' },
     { id: 'unsupported', group: 'connecting', q: 'Our system isn’t in the connector list.', a: 'If it has a REST API, use the **REST API** connector: design the requests, paging and sign-in in the form. Databases with a PostgreSQL, MySQL or SQL Server interface work with those connectors. Otherwise export a CSV/Excel file or ask KMPlus for a connector.' },
     { id: 'files-update', group: 'connecting', q: 'How do I update data that comes from an Excel file?', a: 'Upload the new file to the same File Upload source; the next run reads it. For recurring exports, drop them in an S3, Azure Blob or Google Cloud Storage folder and read the folder as one table.' },
+    { id: 'source-failing', group: 'connecting', q: 'How do I know a source stopped working before a pipeline fails?', a: 'Nexus checks every source on a schedule and alerts the people who manage sources on the first failed check, and again when it recovers. Each source’s **Health & schema changes** shows the checks of the last 30 days and any tables or columns that disappeared or changed type, with the pipelines that read them.' },
     { id: 'draft-publish', group: 'pipelines', q: 'I saved my changes but the pipeline still runs the old way.', a: 'Saving keeps a draft. Runs use the **published** version, so publish the draft (and get it approved, if your workspace requires a second person).' },
     { id: 'run-failed', group: 'pipelines', q: 'A run failed. Where do I start?', a: 'Open the run in **Monitoring** to see the step and message. Configuration problems (wrong password, missing table) don’t retry; fix them and run again. Temporary problems retry from the last checkpoint. **Diagnose with AI** in the editor explains it.' },
     { id: 'incremental', group: 'pipelines', q: 'Does every run read the whole table?', a: 'Not if the source step is **incremental**: Nexus remembers the highest value of a column such as `updated_at` and reads only newer rows. The watermark moves only after the whole run succeeds.' },

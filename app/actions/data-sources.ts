@@ -18,6 +18,10 @@ import { restRequestDesign } from '@/lib/connectors/rest/agent-request'
 import { forgetCachedSecrets, resolveSecretRefs } from '@/lib/secrets/resolve'
 import { SECRET_MANAGER_SLUGS, hasSecretRefs, isSecretManager } from '@/lib/secrets/types'
 import { secretManagerDriver } from '@/lib/secrets/managers'
+import { sourceHealthChecks } from '@/lib/db/schema'
+import { checkSourceHealth, recordScan } from '@/lib/connectors/health'
+import { HEALTH_CHECK_MINUTES, describeChange, uptime, type SchemaDrift } from '@/lib/connectors/drift'
+import type { SchemaScanResult } from '@/lib/connectors/types'
 
 const idSchema = z.string().trim().min(1).max(100)
 const roleSchema = z.enum(['source', 'destination'])
@@ -60,6 +64,7 @@ async function getDataSourcesImpl() {
       config: dataSources.config,
       status: dataSources.status,
       lastConnected: dataSources.lastConnected,
+      schemaDrift: dataSources.schemaDrift,
       createdAt: dataSources.createdAt,
       updatedAt: dataSources.updatedAt,
     })
@@ -102,6 +107,9 @@ async function createDataSourceImpl(input: z.input<typeof createInput>) {
     credentials: encryptCredentials(id, isFile ? { storageKey: id } : data.credentials, ctx.workspaceId),
     status: hasSchemaScan ? 'connected' : 'disconnected',
     lastConnected: hasSchemaScan ? new Date() : undefined,
+    // Health checks (DS-7): every 15 minutes, none for uploaded files.
+    healthCheckMinutes: isFile ? 0 : 15,
+    nextHealthCheckAt: isFile ? null : new Date(Date.now() + 15 * 60_000),
   })
   await audit(ctx, 'CREATE', id, { sourceType: data.sourceType, role: data.config.role })
   revalidatePath('/dashboard', 'layout')
@@ -112,28 +120,75 @@ function asStrings(values: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(values).map(([k, v]) => [k, v == null ? '' : String(v)]))
 }
 
-/** Tests the stored credentials and refreshes the schema scan. */
+/**
+ * Tests the stored credentials and refreshes the schema scan: a manual health
+ * check (DS-7), recorded in the source's history, with the new scan compared
+ * against the previous one (DS-8).
+ */
 async function testConnectionImpl(rawId: string) {
   const ctx = await requireWorkspace('sources:manage')
   const source = await getOwned(ctx, idSchema.parse(rawId))
   if (!isConnectorSlug(source.sourceType)) throw new Error(`Unknown connector "${source.sourceType}".`)
-
-  const { testSource, scanSource } = await import('@/lib/agent/sources')
   await assertConnectorInstalled(source.sourceType)
-  const credentials = await resolveSecretRefs(ctx.workspaceId, asStrings(decryptCredentials(source.id, source.credentials)))
-  // A REST API used as a destination (not through an agent): reaching it and signing in is the test.
-  const restDestination = source.sourceType === 'rest' && (source.config as { role?: string } | null)?.role === 'destination' && !agentLink(source.config)
   // Agent-backed sources are tested by the agent, with its local credentials.
-  const test = restDestination ? await (await import('@/lib/connectors/rest/write')).testRestDestination(credentials) : await testSource(source, credentials)
-  if (!test.ok) throw new Error(test.message)
+  const result = await checkSourceHealth(source, { trigger: 'manual', rescan: true })
+  await audit(ctx, 'TEST_CONNECTION', source.id, { ok: result.ok, scanned: result.scanned, drift: result.drift ? result.drift.changes.length : 0 })
+  revalidatePath('/dashboard', 'layout')
+  if (!result.ok) throw new Error(result.message)
+  const after = await getOwned(ctx, source.id)
+  return { tables: ((after.config as { schemaScan?: SchemaScanResult } | null)?.schemaScan?.tables ?? []).length, drift: result.drift ? result.drift.changes.length : 0 }
+}
 
-  const scan = restDestination ? { tables: [], scannedAt: new Date().toISOString(), method: 'rest-destination' } : await scanSource(source, credentials)
+const HEALTH_LIMIT = 100
+
+/** Health history (DS-7) and unreviewed schema changes (DS-8) of a data source. */
+async function getSourceHealthImpl(rawId: string) {
+  const ctx = await requireWorkspace()
+  const source = await getOwned(ctx, idSchema.parse(rawId))
+  const checks = await db
+    .select({ id: sourceHealthChecks.id, checkedAt: sourceHealthChecks.checkedAt, ok: sourceHealthChecks.ok, latencyMs: sourceHealthChecks.latencyMs, message: sourceHealthChecks.message, trigger: sourceHealthChecks.trigger, scanned: sourceHealthChecks.scanned })
+    .from(sourceHealthChecks)
+    .where(and(eq(sourceHealthChecks.dataSourceId, source.id), eq(sourceHealthChecks.workspaceId, ctx.workspaceId)))
+    .orderBy(desc(sourceHealthChecks.checkedAt))
+    .limit(HEALTH_LIMIT)
+  return {
+    id: source.id,
+    name: source.name,
+    status: source.status ?? 'disconnected',
+    intervalMinutes: source.healthCheckMinutes,
+    nextCheckAt: source.nextHealthCheckAt,
+    lastCheckAt: source.lastHealthCheckAt,
+    failures: source.healthFailures,
+    day: uptime(checks, 86_400_000),
+    week: uptime(checks, 7 * 86_400_000),
+    checks,
+    drift: (source.schemaDrift as SchemaDrift | null) ?? null,
+    scannedAt: (source.config as { schemaScan?: SchemaScanResult } | null)?.schemaScan?.scannedAt ?? null,
+  }
+}
+
+/** How often the source is checked (0 = never). */
+async function setHealthCheckIntervalImpl(rawId: string, rawMinutes: number) {
+  const ctx = await requireWorkspace('sources:manage')
+  const source = await getOwned(ctx, idSchema.parse(rawId))
+  const minutes = z.number().int().refine((m) => (HEALTH_CHECK_MINUTES as readonly number[]).includes(m), 'Choose one of the listed intervals.').parse(rawMinutes)
   await db
     .update(dataSources)
-    .set({ status: 'connected', lastConnected: new Date(), updatedAt: new Date(), config: { ...(source.config as Record<string, unknown>), schemaScan: scan } })
+    .set({ healthCheckMinutes: minutes, nextHealthCheckAt: minutes > 0 ? new Date(Date.now() + minutes * 60_000) : null, updatedAt: new Date() })
     .where(and(eq(dataSources.id, source.id), eq(dataSources.workspaceId, ctx.workspaceId)))
+  await recordAudit(ctx, { action: 'UPDATE', resource: 'data_source', resourceId: source.id, changes: { healthCheckMinutes: minutes }, diff: diffObjects({ healthCheckMinutes: source.healthCheckMinutes }, { healthCheckMinutes: minutes }) })
   revalidatePath('/dashboard', 'layout')
-  return { tables: scan.tables.length }
+}
+
+/** Marks the schema changes as reviewed (they stay in the health history). */
+async function reviewSchemaDriftImpl(rawId: string) {
+  const ctx = await requireWorkspace('sources:manage')
+  const source = await getOwned(ctx, idSchema.parse(rawId))
+  const drift = source.schemaDrift as SchemaDrift | null
+  if (!drift) return
+  await db.update(dataSources).set({ schemaDrift: null, updatedAt: new Date() }).where(and(eq(dataSources.id, source.id), eq(dataSources.workspaceId, ctx.workspaceId)))
+  await audit(ctx, 'UPDATE', source.id, { schemaDriftReviewed: drift.changes.map(describeChange) })
+  revalidatePath('/dashboard', 'layout')
 }
 
 /**
@@ -237,16 +292,8 @@ async function testAndSave(ctx: WorkspaceContext, source: typeof dataSources.$in
   const scan = await scanSource(source, live)
   if (isSecretManager(source.sourceType)) forgetCachedSecrets()
 
-  await db
-    .update(dataSources)
-    .set({
-      credentials: encryptCredentials(source.id, merged, ctx.workspaceId),
-      config: { ...(source.config as Record<string, unknown>), schemaScan: scan },
-      status: 'connected',
-      lastConnected: new Date(),
-      updatedAt: new Date(),
-    })
-    .where(and(eq(dataSources.id, source.id), eq(dataSources.workspaceId, ctx.workspaceId)))
+  // The new scan is compared with the previous one (DS-8).
+  await recordScan(source, scan, { credentials: encryptCredentials(source.id, merged, ctx.workspaceId), status: 'connected', lastConnected: new Date(), healthFailures: 0 })
   // Record which fields changed, never their values.
   await audit(ctx, 'UPDATE_CREDENTIALS', source.id, { fields: changedFields })
   revalidatePath('/dashboard', 'layout')
@@ -385,4 +432,14 @@ export async function setMaxCallsPerRun(...args: Parameters<typeof setMaxCallsPe
 
 export async function deleteDataSource(...args: Parameters<typeof deleteDataSourceImpl>) {
   return guard(() => deleteDataSourceImpl(...args))
+}
+
+export async function getSourceHealth(...args: Parameters<typeof getSourceHealthImpl>) {
+  return guard(() => getSourceHealthImpl(...args))
+}
+export async function setHealthCheckInterval(...args: Parameters<typeof setHealthCheckIntervalImpl>) {
+  return guard(() => setHealthCheckIntervalImpl(...args))
+}
+export async function reviewSchemaDrift(...args: Parameters<typeof reviewSchemaDriftImpl>) {
+  return guard(() => reviewSchemaDriftImpl(...args))
 }

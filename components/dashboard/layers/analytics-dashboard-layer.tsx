@@ -11,7 +11,9 @@ import { useConfirm } from '@/components/ui/dialog'
 import { PageHeader } from '@/components/dashboard/page-header'
 import { usePrefs } from '@/components/i18n/i18n-provider'
 import { cn } from '@/lib/utils'
-import { deleteDashboard, getAnalyticsDatasets, getDashboardData, listDashboards, saveDashboard } from '@/lib/actions/analytics'
+import { deleteDashboard, getAnalyticsDatasets, getDashboardData, getDashboardFilterOptions, listDashboards, saveDashboard } from '@/lib/actions/analytics'
+import { DashboardFilterBar, DashboardFiltersEditor } from '@/components/analytics/dashboard-filters'
+import type { DashboardFilter, DashboardFilterValues } from '@/lib/analytics/definition'
 import type { Widget } from '@/lib/analytics/definition'
 import { WidgetView, freshnessT } from '@/components/analytics/charts'
 import WidgetEditor, { newWidget } from '@/components/analytics/widget-editor'
@@ -37,6 +39,10 @@ export default function AnalyticsDashboardLayer() {
   const [rename, setRename] = useState<{ name: string; description: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // DB-4: this view's filter choices and each value filter's options.
+  const [filterValues, setFilterValues] = useState<DashboardFilterValues>({})
+  const [filterOptions, setFilterOptions] = useState<Record<string, string[]>>({})
+  const [editingFilters, setEditingFilters] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -57,10 +63,10 @@ export default function AnalyticsDashboardLayer() {
 
   const dash = list?.dashboards.find((d) => d.id === selectedId) ?? null
 
-  const loadData = useCallback(async (id: string) => {
+  const loadData = useCallback(async (id: string, values: DashboardFilterValues = {}) => {
     setLoadingData(true)
     try {
-      setResults((await getDashboardData(id)).results)
+      setResults((await getDashboardData(id, values)).results)
     } catch (err) {
       setError(err instanceof Error ? err.message : t('insights.analytics.dataFailed'))
     } finally {
@@ -72,14 +78,30 @@ export default function AnalyticsDashboardLayer() {
   useEffect(() => {
     setResults(null)
     setRename(null)
+    setFilterValues({})
+    setFilterOptions({})
     if (dash && list?.canView && dash.widgets.length) void loadData(dash.id)
+    if (dash && list?.canView && dash.filters.some((f) => f.kind === 'value')) void getDashboardFilterOptions(dash.id).then(setFilterOptions).catch(() => undefined)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dash?.id, list?.canView])
 
-  const persist = async (d: Dash, widgets: Widget[], meta?: { name: string; description: string }) => {
-    await saveDashboard({ id: d.id, name: meta?.name ?? d.name, description: meta?.description ?? d.description, widgets })
+  const changeFilters = (values: DashboardFilterValues) => {
+    setFilterValues(values)
+    if (dash) void loadData(dash.id, values)
+  }
+
+  const persist = async (d: Dash, widgets: Widget[], meta?: { name: string; description: string }, filters?: DashboardFilter[]) => {
+    await saveDashboard({ id: d.id, name: meta?.name ?? d.name, description: meta?.description ?? d.description, widgets, ...(filters ? { filters } : {}) })
     await load()
-    if (widgets.length && list?.canView) await loadData(d.id)
+    if (widgets.length && list?.canView) await loadData(d.id, filterValues)
+    if (filters && list?.canView) setFilterOptions(await getDashboardFilterOptions(d.id).catch(() => ({})))
+  }
+
+  /** Columns of the dashboard's widget datasets (dashboard filters choose one). */
+  const filterColumns = (d: Dash) => {
+    const seen = new Map<string, { name: string; type: string; masked?: boolean }>()
+    for (const name of new Set(d.widgets.map((w) => w.dataset))) for (const c of datasets.find((x) => x.name === name)?.columns ?? []) if (!seen.has(c.name)) seen.set(c.name, c)
+    return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name))
   }
 
   const create = async (e: React.FormEvent) => {
@@ -157,6 +179,19 @@ export default function AnalyticsDashboardLayer() {
             const exists = dash.widgets.some((x) => x.id === w.id)
             await persist(dash, exists ? dash.widgets.map((x) => (x.id === w.id ? w : x)) : [...dash.widgets, w])
             setEditing(null)
+          }}
+        />
+      )}
+
+      {editingFilters && dash && (
+        <DashboardFiltersEditor
+          initial={dash.filters}
+          columns={filterColumns(dash)}
+          onCancel={() => setEditingFilters(false)}
+          onSave={async (filters) => {
+            await persist(dash, dash.widgets, undefined, filters)
+            setFilterValues({})
+            setEditingFilters(false)
           }}
         />
       )}
@@ -261,7 +296,7 @@ export default function AnalyticsDashboardLayer() {
                 )}
                 {!rename && (
                   <div className="flex flex-wrap gap-2">
-                    <Button size="sm" variant="outline" onClick={() => void loadData(dash.id)} disabled={loadingData || !dash.widgets.length}>
+                    <Button size="sm" variant="outline" onClick={() => void loadData(dash.id, filterValues)} disabled={loadingData || !dash.widgets.length}>
                       <RefreshCw className={cn('mr-1 h-4 w-4', loadingData && 'animate-spin')} aria-hidden /> {t('common.refresh')}
                     </Button>
                     {list.canEdit && (
@@ -280,6 +315,10 @@ export default function AnalyticsDashboardLayer() {
                   </div>
                 )}
               </div>
+
+              {dash.widgets.length > 0 && (
+                <DashboardFilterBar filters={dash.filters} values={filterValues} options={filterOptions} onChange={changeFilters} onEdit={list.canEdit ? () => setEditingFilters(true) : undefined} />
+              )}
 
               {dash.widgets.length === 0 ? (
                 <div className="rounded-lg border border-border bg-card">
@@ -311,6 +350,11 @@ export default function AnalyticsDashboardLayer() {
                               {w.filters.length ? ` · ${t('insights.analytics.filters', { count: w.filters.length })}` : ''}
                               {r?.ok && r.result.lastLoadedAt ? ` · ${t('insights.analytics.loaded', { when: freshnessT(r.result.lastLoadedAt, t) })}` : ''}
                             </p>
+                            {r?.ok && r.result.filtersSkipped?.length ? (
+                              <p className="truncate text-xs text-warning-text">
+                                {t('insights.analytics.dashFilters.notFiltered', { labels: r.result.filtersSkipped.map((s) => dash.filters.find((f) => f.id === s.id)?.label ?? s.id).join(', ') })}
+                              </p>
+                            ) : null}
                           </div>
                           {list.canEdit && (
                             <div className="flex shrink-0">

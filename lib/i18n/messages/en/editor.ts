@@ -292,6 +292,7 @@ export const editor = {
     flaggedNotice: '{count, plural, one {# row} other {# rows}} written with warnings.',
     reviewInQuality: 'Review them in Data Quality.',
     stackTrace: 'Stack trace (admins only)',
+    detailsPruned: 'The detailed log of this run was removed after the workspace’s retention period (Settings → General → Run history).',
     attempts: '{count} attempts',
     attemptFailed: 'failed: {error}',
     attemptSucceeded: 'succeeded',

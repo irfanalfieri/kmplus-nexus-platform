@@ -13,10 +13,12 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { and, eq, inArray, like } from 'drizzle-orm'
 import { db, pool } from '@/lib/db'
-import { agentTasks as agentTaskTable, agents as agentTable, apiCallCache, apiCallLedger, apiKeys, apiRateLimits, auditLogs, businessRuleVersions, businessRules, catalogEntries, connectorInstalls, dashboards, dataSources, datasetPolicies, datasetQualitySnapshots, domainMappings, mappingTemplates, notifications, pipelineApprovals, scimGroups, scimTokens, scimUsers, ssoProvider, webhookDeliveries, webhooks, workspaceSso, executionLogs, nexusDatasets, pipelineJobs, pipelineRunRejects, pipelines, pipelineStageTables, pipelineVersions, session, user, verification, workspaceInvites, workspaceMembers, workspaces, datasetColumnAliases, datasetSchemaVersions, datasetSchemas, upgradeNoticeDismissals } from '@/lib/db/schema'
+import { agentTasks as agentTaskTable, agents as agentTable, apiCallCache, apiCallLedger, apiKeys, apiRateLimits, auditLogs, businessRuleVersions, businessRules, catalogEntries, connectorInstalls, dashboards, dataSources, datasetPolicies, datasetQualitySnapshots, domainMappings, mappingTemplates, notifications, pipelineApprovals, scimGroups, scimTokens, scimUsers, ssoProvider, webhookDeliveries, webhooks, workspaceSso, executionLogs, nexusDatasets, pipelineJobs, pipelineRunRejects, pipelines, pipelineStageTables, pipelineVersions, session, user, verification, workspaceInvites, workspaceMembers, workspaces, datasetColumnAliases, datasetSchemaVersions, datasetSchemas, upgradeNoticeDismissals, sourceHealthChecks } from '@/lib/db/schema'
 import { acceptInvite, changeMemberRole, createAccountFromInvite, createInvite, describeInvite, getWorkspaceContext, listMembers, resetMemberTwoFactor, switchWorkspace } from '@/lib/actions/workspaces'
 import { installConnector } from '@/lib/actions/connectors'
-import { createDataSource, deleteDataSource, getDataSources, getEditableCredentials, listSecretManagers, listSecretNames, renameDataSource, setDataSourceRole, testConnection, updateDataSourceCredentials } from '@/lib/actions/data-sources'
+import { createDataSource, deleteDataSource, getDataSources, getEditableCredentials, listSecretManagers, listSecretNames, renameDataSource, setDataSourceRole, testConnection, updateDataSourceCredentials, getSourceHealth, setHealthCheckInterval, reviewSchemaDrift } from '@/lib/actions/data-sources'
+import { checkSourceHealth, runDueHealthChecks } from '@/lib/connectors/health'
+import { pruneWorkspaceLogs } from '@/lib/monitoring/log-retention'
 import { startInfraMock } from './test/infra-mock'
 import { writeDataset } from '@/lib/pipelines/io'
 import { startKmplusMock } from './test/kmplus-mock'
@@ -39,7 +41,7 @@ import { TERMS_VERSION } from '@/lib/legal/terms'
 import { hasAcceptedCurrentTerms, recordTermsAcceptance } from '@/lib/legal/acceptance'
 import { startLlmMock } from './test/llm-mock'
 import { startIntranetApi } from './test/intranet-api-mock'
-import { decryptCredentials } from '@/lib/security/credentials'
+import { decryptCredentials, encryptCredentials } from '@/lib/security/credentials'
 import { POST as agentHello } from '@/app/api/agent/v1/hello/route'
 import { GET as agentTasks } from '@/app/api/agent/v1/tasks/route'
 import { POST as agentResult } from '@/app/api/agent/v1/tasks/[id]/result/route'
@@ -56,13 +58,15 @@ import { deleteRule, listRuleVersions, listRules, saveRule, testRule } from '@/l
 import { approveRows, dismissRows, fixRow, getQualityOverview, listQuarantine, replayRows, restoreRows } from '@/lib/actions/quality'
 import { getCatalogSample, getLineage, getQualityHistory, listCatalog, saveCatalogEntry, saveDomainMapping, askCatalog } from '@/lib/actions/catalog'
 import { createApiKey, revokeApiKey } from '@/lib/actions/api-keys'
+import { getLogRetention, setLogRetention } from '@/lib/actions/monitoring'
+import { exportPipeline, importPipeline, previewImport } from '@/lib/actions/pipeline-transfer'
 import { changeDatasetSchema, defineDatasetSchema, defineFromCurrentColumns, dismissUpgradeNotice, getDatasetSchema, getUpgradeNotices, listInferredDatasets, previewSchemaChange } from '@/lib/actions/schemas'
 import { changeSchema, loadSchema } from '@/lib/datasets/store'
 import { uploadFilePart } from '@/lib/actions/files'
 import { GET as getDataset } from '@/app/api/v1/datasets/[name]/route'
 import { GET as getDomain } from '@/app/api/v1/domains/[entity]/route'
 import { eraseRecords, findErasureMatches, getGovernanceOverview, saveDatasetPolicy } from '@/lib/actions/governance'
-import { getDashboardData, listDashboards, previewWidget, saveDashboard } from '@/lib/actions/analytics'
+import { getDashboardData, getDashboardFilterOptions, listDashboards, previewWidget, saveDashboard } from '@/lib/actions/analytics'
 import { listAuditLogs } from '@/lib/actions/audit'
 import { processJobs, CHUNK_ROWS } from '@/lib/pipelines/jobs'
 import { createStageTable, sweepStageTables } from '@/lib/pipelines/stage'
@@ -81,7 +85,10 @@ async function test(name: string, fn: () => Promise<void>) {
     console.log(`PASS  ${name}`)
   } catch (err) {
     failed++
-    console.log(`FAIL  ${name}\n      ${err instanceof Error ? err.stack?.split('\n').slice(0, 3).join('\n      ') : err}`)
+    // Assertion diffs span many lines: show them, then where it failed.
+    const lines = err instanceof Error ? (err.stack ?? err.message).split('\n') : [String(err)]
+    const at = lines.findIndex((l) => l.trim().startsWith('at '))
+    console.log(`FAIL  ${name}\n      ${[...lines.slice(0, at > 0 ? Math.min(at, 40) : 3), ...(at > 0 ? lines.slice(at, at + 2) : [])].join('\n      ')}`)
   }
 }
 
@@ -1485,7 +1492,7 @@ async function main() {
       assert.ok(changed.moved.pipelines.includes(`${RUN} lms hours`), 'the LMS mapping moves to the new name (as a draft)')
       const old = await get(`/api/v1/datasets/${name}?fields=employee_code,training_hours&limit=10`)
       assert.equal(old.res.status, 200, old.body.error?.message)
-      assert.deepEqual(old.body.data.map((r) => Number(r.training_hours)), [12.5, 3, 40])
+      assert.deepEqual(old.body.data.map((r) => [r.employee_code, Number(r.training_hours)]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))), [['E1', 12.5], ['E2', 3], ['E3', 40]])
       assert.equal(old.res.headers.get('Deprecation'), 'true')
       assert.equal(old.res.headers.get('X-Nexus-Renamed-Fields'), 'training_hours=learning_hours')
       const sunset = new Date(old.res.headers.get('Sunset')!).getTime()
@@ -1525,6 +1532,179 @@ async function main() {
       await rejectsWith(() => changeDatasetSchema({ datasetName: name, ops: [{ kind: 'autoAdd', on: true }] }), /permission|not allowed|role/i)
       setTestUser(admin)
       await switchWorkspace(adminWs)
+    })
+
+    await test('DS-7 / DS-8: health checks keep a history and alert on failure and recovery; a re-scan flags a removed column a pipeline reads', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const S = `"${FIXTURE_SCHEMA}"`
+      await pool.query(`CREATE TABLE ${S}.drift_probe (id int PRIMARY KEY, code text, legacy_grade text)`)
+      await pool.query(`INSERT INTO ${S}.drift_probe VALUES (1, 'E1', 'A'), (2, 'E2', 'B')`)
+      // A fresh scan that includes the new table, then a pipeline that names its column.
+      const first = await testConnection(sourceId)
+      assert.ok(first.tables > 0)
+      // Earlier tests changed the fixture schema; start from a reviewed state.
+      await reviewSchemaDrift(sourceId)
+      const probe = await savePipeline({
+        publish: true,
+        name: `${RUN} drift probe`,
+        definition: {
+          steps: [
+            { id: 's', type: 'source', dataSourceId: sourceId, table: 'drift_probe' },
+            { id: 'm', type: 'map', fields: [{ from: 'code', to: 'code', transforms: [] }, { from: 'legacy_grade', to: 'grade', transforms: [] }] },
+            { id: 'd', type: 'destination', kind: 'dataset', datasetName: `${RUN}_drift`, mode: 'replace' },
+          ],
+        },
+        schedule: { type: 'manual' } as never,
+      })
+      let health = await getSourceHealth(sourceId)
+      assert.equal(health.status, 'connected')
+      assert.ok(health.checks.length >= 1 && health.checks[0].ok && health.checks[0].trigger === 'manual' && health.checks[0].scanned)
+      assert.equal(health.drift, null)
+      assert.equal(health.intervalMinutes, 15)
+
+      // The column goes away in the source: the next scan finds it and names the pipeline.
+      await pool.query(`ALTER TABLE ${S}.drift_probe DROP COLUMN legacy_grade`)
+      const second = await testConnection(sourceId)
+      assert.equal(second.drift, 1)
+      health = await getSourceHealth(sourceId)
+      assert.deepEqual(health.drift!.changes, [{ kind: 'column_removed', table: 'drift_probe', column: 'legacy_grade' }])
+      assert.deepEqual(health.drift!.affected, [{ pipelineId: probe.id, name: `${RUN} drift probe`, changes: ['drift_probe.legacy_grade removed'] }])
+      assert.ok((await db.select().from(notifications).where(and(eq(notifications.userId, admin.id), eq(notifications.workspaceId, adminWs)))).some((n) => n.title === `Schema changed in ${RUN} fixture`))
+      assert.ok((await getDataSources()).find((s) => s.id === sourceId)!.schemaDrift, 'the list marks the source')
+      await reviewSchemaDrift(sourceId)
+      assert.equal((await getSourceHealth(sourceId)).drift, null)
+
+      // Interval: one of the listed values; off clears the next check.
+      await rejectsWith(() => setHealthCheckInterval(sourceId, 7), /listed intervals/)
+      await setHealthCheckInterval(sourceId, 0)
+      assert.equal((await getSourceHealth(sourceId)).nextCheckAt, null)
+      await setHealthCheckInterval(sourceId, 5)
+
+      // The scheduler checks due sources; a failure marks the source and alerts once, a pass clears it.
+      const [row] = await db.select().from(dataSources).where(eq(dataSources.id, sourceId))
+      await db.update(dataSources).set({ nextHealthCheckAt: new Date(Date.now() - 1000), credentials: encryptCredentials(sourceId, { connectionString: 'postgres://nobody:wrong@127.0.0.1:1/none', schema: FIXTURE_SCHEMA }, adminWs) }).where(eq(dataSources.id, sourceId))
+      assert.equal(await runDueHealthChecks({ workspaceId: adminWs }), 1)
+      let [after] = await db.select().from(dataSources).where(eq(dataSources.id, sourceId))
+      assert.equal(after.status, 'error')
+      assert.equal(after.healthFailures, 1)
+      assert.ok(after.nextHealthCheckAt! > new Date(), 'the next check is scheduled')
+      const failing = await checkSourceHealth(after, { trigger: 'schedule' })
+      assert.equal(failing.ok, false)
+      const alerts = (await db.select().from(notifications).where(and(eq(notifications.userId, admin.id), eq(notifications.workspaceId, adminWs)))).filter((n) => n.title === `${RUN} fixture is not reachable`)
+      assert.equal(alerts.length, 1, 'one alert for a run of failures')
+      await db.update(dataSources).set({ credentials: row.credentials }).where(eq(dataSources.id, sourceId))
+      ;[after] = await db.select().from(dataSources).where(eq(dataSources.id, sourceId))
+      assert.equal((await checkSourceHealth(after, { trigger: 'schedule' })).ok, true)
+      ;[after] = await db.select().from(dataSources).where(eq(dataSources.id, sourceId))
+      assert.equal(after.status, 'connected')
+      assert.equal(after.healthFailures, 0)
+      assert.ok((await db.select().from(notifications).where(and(eq(notifications.userId, admin.id), eq(notifications.workspaceId, adminWs)))).some((n) => n.title === `${RUN} fixture is reachable again`))
+      health = await getSourceHealth(sourceId)
+      assert.ok(health.checks.filter((c) => c.trigger === 'schedule').length >= 3)
+      assert.ok(health.day.checks >= 5 && health.day.percent! < 100)
+      // A viewer reads health but can't change it.
+      setTestUser(viewer)
+      await switchWorkspace(adminWs)
+      assert.ok((await getSourceHealth(sourceId)).checks.length)
+      await rejectsWith(() => reviewSchemaDrift(sourceId), /permission|role/i)
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+    })
+
+    await test('MN-7: run logs lose their detail after the detail period and are removed after the summary period, unless rows still wait in Data quality', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      await rejectsWith(() => setLogRetention({ logDetailDays: 90, runSummaryDays: 90 + 1 }), /listed periods/)
+      const [{ id: anyPipeline }] = await db.select({ id: pipelines.id }).from(pipelines).where(eq(pipelines.workspaceId, adminWs)).limit(1)
+      const daysAgo = (d: number) => new Date(Date.now() - d * 86_400_000)
+      const run = async (id: string, age: number) =>
+        db.insert(executionLogs).values({ id: `${RUN}_${id}`, userId: admin.id, workspaceId: adminWs, pipelineId: anyPipeline, status: 'failed', trigger: 'manual', errorMessage: 'boom', startTime: daysAgo(age), endTime: daysAgo(age), createdAt: daysAgo(age), executionDetails: { steps: [{ id: 's', rowsIn: 5 }], log: [{ at: 'x', level: 'error', message: 'boom' }], errorStack: 'Error: boom' } })
+      await run('fresh', 2)
+      await run('month', 40)
+      await run('ancient', 400)
+      await run('held', 400)
+      await db.insert(pipelineRunRejects).values({ id: `${RUN}_rej`, workspaceId: adminWs, pipelineId: anyPipeline, runId: `${RUN}_held`, userId: admin.id, row: { id: 1 }, errors: ['x'], status: 'open' })
+      await setLogRetention({ logDetailDays: 30, runSummaryDays: 365 })
+      const result = await pruneWorkspaceLogs(adminWs, 30, 365)
+      assert.ok(result.trimmed >= 1 && result.deleted >= 1)
+      const rows = await db.select().from(executionLogs).where(inArray(executionLogs.id, [`${RUN}_fresh`, `${RUN}_month`, `${RUN}_ancient`, `${RUN}_held`]))
+      const byId = new Map(rows.map((r) => [r.id.replace(`${RUN}_`, ''), r.executionDetails as Record<string, unknown>]))
+      assert.ok(Array.isArray(byId.get('fresh')!.log) && byId.get('fresh')!.errorStack, 'a recent run keeps its detail')
+      assert.ok(!byId.get('month')!.log && !byId.get('month')!.errorStack && byId.get('month')!.detailsPrunedAt, 'an older run keeps only its summary')
+      assert.deepEqual(byId.get('month')!.steps, [{ id: 's', rowsIn: 5 }], 'step totals stay')
+      assert.ok(!byId.has('ancient'), 'past the summary period the run is gone')
+      assert.ok(byId.has('held'), 'a run with rows still open in Data quality is kept')
+      await db.delete(pipelineRunRejects).where(eq(pipelineRunRejects.id, `${RUN}_rej`))
+      assert.deepEqual(await getLogRetention().then((r) => [r.logDetailDays, r.runSummaryDays]), [30, 365])
+    })
+
+    await test('VC-5: a pipeline exports as JSON (no credentials) and imports as an unpublished draft with its references mapped', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const original = (await listPipelines()).find((p) => p.name === `${RUN} lms hours`)!
+      const { fileName, json } = await exportPipeline(original.id)
+      assert.equal(fileName, `${RUN}-lms-hours.nexus-pipeline.json`)
+      const file = JSON.parse(json)
+      assert.equal(file.format, 'kmplus-nexus/pipeline')
+      assert.deepEqual(file.references.dataSources.map((d: { name: string }) => d.name), [`${RUN} fixture`])
+      assert.ok(!json.includes(process.env.DATABASE_URL!.split('@')[0]), 'no credentials in the file')
+      assert.deepEqual(file.schemas.map((s: { datasetName: string }) => s.datasetName), [`${RUN}_profile`])
+
+      const preview = await previewImport({ json })
+      assert.equal(preview.name, `${RUN} lms hours (imported)`)
+      assert.deepEqual(preview.blocking, [])
+      assert.deepEqual(preview.sources.map((s) => [s.name, s.targetId]), [[`${RUN} fixture`, sourceId]])
+      assert.deepEqual(preview.schemas, [{ datasetName: `${RUN}_profile`, status: 'same' }])
+      await rejectsWith(() => importPipeline({ json, name: `${RUN} lms hours` }), /already exists here/)
+      await rejectsWith(() => previewImport({ json: '{"format":"x"}' }), /not a Nexus pipeline export/)
+
+      const imported = await importPipeline({ json })
+      const [row] = await db.select().from(pipelines).where(eq(pipelines.id, imported.id))
+      assert.equal(row.version, 0, 'not published')
+      assert.equal(row.enabled, false)
+      assert.equal(row.workspaceId, adminWs)
+      const src = (row.draftConfig as { nodes: { type: string; dataSourceId?: string }[] }).nodes.find((n) => n.type === 'source')!
+      assert.equal(src.dataSourceId, sourceId)
+      const audits = await db.select().from(auditLogs).where(and(eq(auditLogs.workspaceId, adminWs), inArray(auditLogs.action, ['EXPORT', 'IMPORT'])))
+      assert.deepEqual(audits.map((a) => a.action).sort(), ['EXPORT', 'IMPORT'])
+      // Viewers can export (read) but not import.
+      setTestUser(viewer)
+      await switchWorkspace(adminWs)
+      assert.ok((await exportPipeline(original.id)).json.length > 100)
+      await rejectsWith(() => importPipeline({ json }), /permission|role/i)
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+    })
+
+    await test('DB-4: dashboard filters apply to every widget that has the column; value choices come from the data; saving widgets keeps the filters', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const ds = `${RUN}_profile`
+      const kpi = { id: 'w1', title: 'People', type: 'kpi' as const, dataset: ds, measure: { agg: 'count' as const, column: '' } }
+      const filters = [
+        { id: 'p', label: 'Hired', kind: 'date' as const, column: 'hire_date' },
+        { id: 'c', label: 'Code', kind: 'value' as const, column: 'employee_code' },
+        { id: 'x', label: 'Other', kind: 'value' as const, column: 'not_here' },
+      ]
+      const { id } = await saveDashboard({ name: `${RUN} filtered`, widgets: [kpi], filters })
+      assert.deepEqual((await getDashboardFilterOptions(id)).c, ['E1', 'E2', 'E3'])
+      const count = async (values: Record<string, unknown>) => {
+        const r = (await getDashboardData(id, values)).results.w1
+        assert.ok(r.ok, r.ok ? '' : r.message)
+        return r.ok ? r.result : null
+      }
+      assert.equal((await count({}))!.rows[0].value, 3)
+      const since2023 = await count({ p: { preset: 'custom', from: '2023-01-01' } })
+      assert.equal(since2023!.rows[0].value, 2)
+      assert.deepEqual(since2023!.filtersApplied, ['p'])
+      assert.equal((await count({ c: { value: 'E1' }, p: { preset: 'custom', from: '2023-01-01' } }))!.rows[0].value, 1)
+      const missing = await count({ x: { value: 'y' } })
+      assert.equal(missing!.rows[0].value, 3)
+      assert.deepEqual(missing!.filtersSkipped, [{ id: 'x', reason: 'missing' }])
+      // Saving widgets alone keeps the filters.
+      await saveDashboard({ id, name: `${RUN} filtered`, widgets: [kpi, { ...kpi, id: 'w2' }] })
+      assert.equal((await listDashboards()).dashboards.find((d) => d.id === id)!.filters.length, 3)
     })
 
     await test('TD-24: a full run supersedes older quarantine (fixes carry over); replays into a replace dataset replace by key', async () => {
@@ -2315,7 +2495,7 @@ async function cleanup(userIds: string[]) {
   if (pipeIds.length) await db.delete(apiRateLimits).where(inArray(apiRateLimits.bucket, pipeIds))
   const sso = await db.select({ providerId: workspaceSso.providerId }).from(workspaceSso).where(inArray(workspaceSso.workspaceId, ws))
   if (sso.length) await db.delete(ssoProvider).where(inArray(ssoProvider.providerId, sso.map((x) => x.providerId)))
-  for (const t of [agentTaskTable, agentTable, pipelineApprovals, scimTokens, scimUsers, scimGroups, notifications, workspaceSso, webhookDeliveries, webhooks, mappingTemplates, datasetQualitySnapshots, apiKeys, catalogEntries, domainMappings, businessRuleVersions, businessRules, datasetPolicies, dashboards, datasetColumnAliases, datasetSchemaVersions, datasetSchemas, upgradeNoticeDismissals, nexusDatasets, pipelineRunRejects, executionLogs, pipelineStageTables, apiCallCache, apiCallLedger, pipelineJobs, pipelineVersions, pipelines, dataSources, connectorInstalls, workspaceInvites, auditLogs, workspaceMembers]) {
+  for (const t of [agentTaskTable, agentTable, pipelineApprovals, scimTokens, scimUsers, scimGroups, notifications, workspaceSso, webhookDeliveries, webhooks, mappingTemplates, datasetQualitySnapshots, apiKeys, catalogEntries, domainMappings, businessRuleVersions, businessRules, datasetPolicies, dashboards, sourceHealthChecks, datasetColumnAliases, datasetSchemaVersions, datasetSchemas, upgradeNoticeDismissals, nexusDatasets, pipelineRunRejects, executionLogs, pipelineStageTables, apiCallCache, apiCallLedger, pipelineJobs, pipelineVersions, pipelines, dataSources, connectorInstalls, workspaceInvites, auditLogs, workspaceMembers]) {
     await db.delete(t).where(inArray(t.workspaceId, ws))
   }
   await db.delete(auditLogs).where(inArray(auditLogs.userId, userIds))

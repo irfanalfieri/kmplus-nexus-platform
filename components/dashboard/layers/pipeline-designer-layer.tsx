@@ -1,8 +1,9 @@
 'use client'
 
+import { ImportPipelineDialog, downloadPipelineExport } from '@/components/pipelines/pipeline-import'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { ArrowUpRight, ClipboardCheck, Edit, Eye, History, Loader2, Lock, MoreHorizontal, Pause, Play, Plus, Rocket, RotateCcw, Search, Trash2, Undo2, Workflow } from 'lucide-react'
+import { ArrowUpRight, ClipboardCheck, Edit, Eye, FileDown, FileUp, History, Loader2, Lock, MoreHorizontal, Pause, Play, Plus, Rocket, RotateCcw, Search, Trash2, Undo2, Workflow } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Notice, type NoticeTone } from '@/components/ui/notice'
@@ -64,6 +65,7 @@ export default function PipelineDesignerLayer() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState<{ id: string; tone: NoticeTone; text: string } | null>(null)
   const [editing, setEditing] = useState<EditablePipeline | null>(null)
+  const [importing, setImporting] = useState(false)
   const [picking, setPicking] = useState(false)
   const [historyFor, setHistoryFor] = useState<PipelineRow | null>(null)
   const [running, setRunning] = useState<string | null>(null)
@@ -294,6 +296,16 @@ export default function PipelineDesignerLayer() {
         onConfirm={remove}
       />
 
+      {importing && (
+        <ImportPipelineDialog
+          onClose={() => setImporting(false)}
+          onImported={() => {
+            setImporting(false)
+            toast({ message: t('pipelines.transfer.imported') })
+            void load()
+          }}
+        />
+      )}
       <PageHeader
         title={
           <span className="inline-flex items-center gap-2.5">
@@ -307,6 +319,11 @@ export default function PipelineDesignerLayer() {
             <Button variant="outline" aria-pressed={approvalHistory} onClick={() => setApprovalHistory((v) => !v)}>
               <ClipboardCheck /> {t('approvals.history')}
             </Button>
+            {canEdit && !workspace.locked && (
+              <Button variant="outline" onClick={() => setImporting(true)}>
+                <FileUp /> {t('pipelines.transfer.import')}
+              </Button>
+            )}
             {newButton}
           </>
         }
@@ -471,6 +488,9 @@ export default function PipelineDesignerLayer() {
                               )}
                               <MenuItem onClick={() => setHistoryFor(p)}>
                                 <History aria-hidden /> {t('pipelines.history')}
+                              </MenuItem>
+                              <MenuItem onClick={() => void downloadPipelineExport(p.id).catch((err) => setError(err instanceof Error ? err.message : t('pipelines.transfer.exportFailed')))}>
+                                <FileDown aria-hidden /> {t('pipelines.transfer.export')}
                               </MenuItem>
                               {canRun && published && schedule.type !== 'manual' && (
                                 <MenuItem onClick={() => void toggle(p)}>

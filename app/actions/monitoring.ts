@@ -4,12 +4,15 @@ import { z } from 'zod'
 import { and, desc, eq, gte, inArray, isNull, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/lib/db'
-import { connectorInstalls, dataSources, executionLogs, nexusDatasets, notifications, pipelineApprovals, pipelineRunRejects, pipelines } from '@/lib/db/schema'
+import { connectorInstalls, dataSources, executionLogs, nexusDatasets, notifications, pipelineApprovals, pipelineRunRejects, pipelines, workspaces } from '@/lib/db/schema'
 import { requireWorkspace } from '@/lib/auth/session'
 import { scheduleSchema } from '@/lib/pipelines/definition'
 import { activeJobs } from '@/lib/pipelines/jobs'
 import { nudgeWorker } from '@/lib/pipelines/worker'
 import { guard } from '@/lib/server-action'
+import { recordAudit } from '@/lib/audit'
+import { diffObjects } from '@/lib/audit-diff'
+import { LOG_DETAIL_DAYS, RUN_SUMMARY_DAYS } from '@/lib/monitoring/log-retention-options'
 
 const TZ = 'Asia/Jakarta'
 const DELAY_GRACE_MS = 5 * 60 * 1000
@@ -264,6 +267,36 @@ async function getOverviewImpl() {
 
 // ── Server actions: thin wrappers that return errors as values so their messages
 // reach the user in production. Call them through lib/actions/monitoring.ts. ──
+
+const retentionInput = z.object({
+  logDetailDays: z.number().int().refine((d) => (LOG_DETAIL_DAYS as readonly number[]).includes(d), 'Choose one of the listed periods.'),
+  runSummaryDays: z.number().int().refine((d) => (RUN_SUMMARY_DAYS as readonly number[]).includes(d), 'Choose one of the listed periods.'),
+})
+
+/** MN-7: how long runs keep their detailed log and their summary. */
+async function getLogRetentionImpl() {
+  const ctx = await requireWorkspace()
+  const [w] = await db.select({ logDetailDays: workspaces.logDetailDays, runSummaryDays: workspaces.runSummaryDays, logsPrunedAt: workspaces.logsPrunedAt }).from(workspaces).where(eq(workspaces.id, ctx.workspaceId)).limit(1)
+  return w
+}
+
+async function setLogRetentionImpl(input: z.input<typeof retentionInput>) {
+  const ctx = await requireWorkspace('workspace:manage')
+  const data = retentionInput.parse(input)
+  if (data.logDetailDays > data.runSummaryDays) throw new Error('Detailed logs can’t be kept longer than run summaries.')
+  const before = await getLogRetentionImpl()
+  await db.update(workspaces).set({ ...data, logsPrunedAt: null, updatedAt: new Date() }).where(eq(workspaces.id, ctx.workspaceId))
+  await recordAudit(ctx, { action: 'UPDATE_POLICY', resource: 'workspace', resourceId: ctx.workspaceId, changes: data, diff: diffObjects({ logDetailDays: before.logDetailDays, runSummaryDays: before.runSummaryDays }, data) })
+  revalidatePath('/dashboard', 'layout')
+}
+
+export async function getLogRetention(...args: Parameters<typeof getLogRetentionImpl>) {
+  return guard(() => getLogRetentionImpl(...args))
+}
+
+export async function setLogRetention(...args: Parameters<typeof setLogRetentionImpl>) {
+  return guard(() => setLogRetentionImpl(...args))
+}
 
 export async function getMonitoringOverview(...args: Parameters<typeof getMonitoringOverviewImpl>) {
   return guard(() => getMonitoringOverviewImpl(...args))

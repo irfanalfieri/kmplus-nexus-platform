@@ -1,5 +1,6 @@
 'use client'
 
+import { RootCauseHint } from '@/components/monitoring/root-cause-hint'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Activity, AlertTriangle, Clock, Database, History, Loader2, RefreshCw, RotateCcw, Square, XCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -345,6 +346,7 @@ export default function SchedulerMonitoringLayer() {
                             {localizeCheck(r.errorMessage, locale)}
                           </p>
                         )}
+                        {(r.status === 'failed' || r.status === 'partial') && <RootCauseHint message={r.errorMessage} compact />}
                       </Td>
                       <Td className="font-mono text-xs text-muted-foreground">{r.trigger ? triggerLabel(r.trigger, t) : null}</Td>
                       <Td>

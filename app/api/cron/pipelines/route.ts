@@ -12,6 +12,8 @@ import { upgradeCredentialEnvelopes, upgradeSsoSecrets } from '@/lib/security/up
 import { pruneAgentTasks } from '@/lib/agent/server'
 import { sweepStageTables } from '@/lib/pipelines/stage'
 import { purgeApiCache } from '@/lib/pipelines/api-runtime'
+import { pruneHealthChecks, runDueHealthChecks } from '@/lib/connectors/health'
+import { pruneDueRunLogs } from '@/lib/monitoring/log-retention'
 
 /**
  * Scheduler tick. Called every minute by Supabase pg_cron (see
@@ -21,7 +23,9 @@ import { purgeApiCache } from '@/lib/pipelines/api-runtime'
  * enforces dataset retention policies (hourly per dataset), retries webhook
  * deliveries, prunes rate-limit counters, drops run staging older than 48 h
  * (runs that never finished), removes expired API answers from the Enrich cache
- * and re-seals old credential envelopes.
+ * re-seals old credential envelopes, and runs data source health checks that
+ * are due (DS-7, at most 60 s per tick; history kept 30 days), and prunes run
+ * logs hourly per workspace (MN-7).
  */
 export const maxDuration = 300
 export const dynamic = 'force-dynamic'
@@ -40,6 +44,7 @@ async function tick(request: Request) {
   if (!authorized(request)) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
   const now = new Date()
+  const started = Date.now()
   const due = await db
     .select({ id: pipelines.id, userId: pipelines.userId, workspaceId: pipelines.workspaceId, schedule: pipelines.schedule, nextRunAt: pipelines.nextRunAt })
     .from(pipelines)
@@ -76,8 +81,12 @@ async function tick(request: Request) {
   await purgeApiCache()
   const credentials = await upgradeCredentialEnvelopes().catch((err) => (console.error('[cron] credentials:', err instanceof Error ? err.message : err), { upgraded: 0, failed: 0 }))
   const ssoSecrets = await upgradeSsoSecrets().catch((err) => (console.error('[cron] SSO secrets:', err instanceof Error ? err.message : err), { upgraded: 0, failed: 0 }))
-  const processed = await processJobs({ budgetMs: WORKER_BUDGET_MS })
-  return Response.json({ due: due.length, queued, processed, webhooks, credentials, ssoSecrets })
+  const health = await runDueHealthChecks({ budgetMs: 60_000 }).catch((err) => (console.error('[cron] health checks:', err instanceof Error ? err.message : err), 0))
+  await pruneHealthChecks().catch(() => undefined)
+  const runLogs = await pruneDueRunLogs().catch((err) => (console.error('[cron] run logs:', err instanceof Error ? err.message : err), null))
+  // Health checks share the slice: the worker gets what is left of its budget.
+  const processed = await processJobs({ budgetMs: Math.max(30_000, WORKER_BUDGET_MS - (Date.now() - started)) })
+  return Response.json({ due: due.length, queued, processed, webhooks, credentials, ssoSecrets, health, runLogs })
 }
 
 export const GET = tick

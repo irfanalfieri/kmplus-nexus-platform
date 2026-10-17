@@ -125,6 +125,10 @@ export function planPromotion(def: PipelineDefinition, schedule: PipelineSchedul
       case 'destination':
         // Tables and REST API destinations point at a data source; datasets are matched by name already.
         return n.kind === 'dataset' ? n : { ...n, dataSourceId: mapDataSource(n.dataSourceId) }
+      case 'enrich':
+      case 'apicall':
+        // API steps call a REST data source of their own.
+        return { ...n, dataSourceId: mapDataSource(n.dataSourceId) }
       case 'filter':
         return { ...n, ruleId: mapRule(n.ruleId) }
       case 'rules':

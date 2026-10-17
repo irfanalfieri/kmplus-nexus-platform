@@ -1,4 +1,6 @@
 import { and, eq, inArray } from 'drizzle-orm'
+import { rootCause } from '@/lib/monitoring/root-cause'
+import { hints as hintsEn } from '@/lib/i18n/messages/en/hints'
 import { withResolvedSecrets } from '@/lib/secrets/resolve'
 import { db } from '@/lib/db'
 import { dataSources, nexusDatasets, workspaceMembers } from '@/lib/db/schema'
@@ -172,6 +174,9 @@ export async function alertIfNeeded(opts: {
     `Trigger: ${opts.trigger}${opts.attempts > 1 ? ` · ${opts.attempts} attempts` : ''}`,
     `Time: ${new Date().toISOString()}`,
   ]
+  // MN-6: the likely cause and what to do (alerts are English, like other background mail).
+  const cause = rootCause(opts.message)
+  if (cause) lines.push(`Likely cause: ${hintsEn.causes[cause].title}`, `What to do: ${hintsEn.causes[cause].fix}`)
   try {
     // Everyone who can act on a failure gets it in their bell; email is sent once (configured list or owner).
     const recipients = await db

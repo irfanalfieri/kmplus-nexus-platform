@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { and, eq, inArray, ne, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { pipelineApprovals, pipelineVersions, pipelines, user, workspaceMembers, workspaces } from '@/lib/db/schema'
+import { businessRules, dataSources, pipelineApprovals, pipelineVersions, pipelines, user, workspaceMembers, workspaces } from '@/lib/db/schema'
 import { newId, type WorkspaceContext } from '@/lib/auth/session'
 import { can, isRole } from '@/lib/auth/permissions'
 import { recordAudit } from '@/lib/audit'
@@ -12,6 +12,8 @@ import { lanePlan } from './lanes'
 import { approvalReasons, isApprovalPolicy, type ApprovalPolicy } from './approvals'
 import { parseDefinition } from './runner'
 import { assertValidSchedule, nextRunAt } from './schedule'
+import type { PromotionSide } from './promote'
+import { ruleBodySchema } from '@/lib/rules/definition'
 
 /**
  * Publishing a pipeline version (VC-2) and the approvals in front of it (GV-6).
@@ -293,4 +295,14 @@ export async function savePipelineAs(ctx: WorkspaceContext, input: z.input<typeo
   await recordAudit(ctx, { action: version === 1 ? 'CREATE' : 'UPDATE', resource: 'pipeline', resourceId: id, changes: { version, draft: true, ...opts.auditExtra }, diff: pipelineDiff(before, { name: data.name, description: data.description, schedule: data.schedule, definition }) })
   const outcome = data.publish ? await publishOrRequest(ctx, id, version, { enabled: data.enabled, note: data.changeNote }) : null
   return { id, version, published: outcome?.published ?? false, approvalId: outcome?.approvalId ?? null }
+}
+
+/** A workspace's data sources, rules and pipelines, for mapping a definition onto it (promotion, import). */
+export async function promotionSide(workspaceId: string): Promise<PromotionSide> {
+  const [ds, rules, pipes] = await Promise.all([
+    db.select({ id: dataSources.id, name: dataSources.name, sourceType: dataSources.sourceType }).from(dataSources).where(eq(dataSources.workspaceId, workspaceId)),
+    db.select({ id: businessRules.id, name: businessRules.name, body: businessRules.body }).from(businessRules).where(eq(businessRules.workspaceId, workspaceId)),
+    db.select({ id: pipelines.id, name: pipelines.name, promotionKey: pipelines.promotionKey }).from(pipelines).where(eq(pipelines.workspaceId, workspaceId)),
+  ])
+  return { dataSources: ds, rules: rules.map((r) => ({ ...r, body: ruleBodySchema.parse(r.body) })), pipelines: pipes }
 }

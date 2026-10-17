@@ -3,4 +3,4 @@
 import * as actions from '@/app/actions/data-sources'
 import { unwrapActions } from '@/lib/action-result'
 
-export const { getDataSources, createDataSource, testConnection, getEditableCredentials, updateDataSourceCredentials, renameDataSource, setDataSourceRole, setMaxCallsPerRun, deleteDataSource, listSecretManagers, listSecretNames } = unwrapActions(actions)
+export const { getDataSources, createDataSource, testConnection, getEditableCredentials, updateDataSourceCredentials, renameDataSource, setDataSourceRole, setMaxCallsPerRun, deleteDataSource, listSecretManagers, listSecretNames, getSourceHealth, setHealthCheckInterval, reviewSchemaDrift } = unwrapActions(actions)

@@ -292,6 +292,7 @@ export const editor: Messages['editor'] = {
     flaggedNotice: '{count, plural, one {# baris} other {# baris}} ditulis dengan peringatan.',
     reviewInQuality: 'Tinjau di Kualitas Data.',
     stackTrace: 'Stack trace (khusus admin)',
+    detailsPruned: 'Log terperinci eksekusi ini dihapus setelah masa retensi ruang kerja (Pengaturan → Umum → Riwayat eksekusi).',
     attempts: '{count} percobaan',
     attemptFailed: 'gagal: {error}',
     attemptSucceeded: 'berhasil',

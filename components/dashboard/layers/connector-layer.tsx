@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'next/navigation'
+import Link from 'next/link'
 import { AppWindow, Boxes, Braces, Database, Download, FileSpreadsheet, KeyRound, Loader2, Lock, Plug, Search, Server, Trash2, Users, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -250,13 +251,20 @@ export default function ConnectorLayer() {
                       const busy = installingSlug === connector.slug
                       return (
                         <li key={connector.slug} className="flex flex-col rounded-lg border border-border bg-card p-4">
-                          <h3 className="font-semibold">{connector.name}</h3>
+                          <h3 className="font-semibold">
+                            <Link href={`/dashboard/connectors/${connector.slug}`} className="rounded-sm underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
+                              {connector.name}
+                            </Link>
+                          </h3>
                           <div className="mt-1 font-mono text-xs text-muted-foreground">
                             {tOr(`ops.connectors.categories.${connector.category}`, connector.category)} · v{connector.version}
                             {' · '}
                             {connector.premium ? t('ops.connectors.premium') : t('ops.connectors.included')}
                           </div>
                           <p className="mt-2 flex-1 text-sm text-muted-foreground">{tOr(`ops.connectors.descriptions.${connector.slug}`, connector.description)}</p>
+                          <Link href={`/dashboard/connectors/${connector.slug}`} className="mt-2 text-xs font-medium text-info-text underline-offset-2 hover:underline" aria-label={t('connectorDocs.detailsFor', { name: connector.name })}>
+                            {t('connectorDocs.details')}
+                          </Link>
                           <div className="mt-4 flex min-h-8 items-center gap-2">
                             {connector.installed ? (
                               <>

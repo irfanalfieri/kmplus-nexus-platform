@@ -12,6 +12,9 @@ import { assist } from './id/assist'
 import { tour } from './id/tour'
 import { legal } from './id/legal'
 import { schemas } from './id/schemas'
+import { health } from './id/health'
+import { hints } from './id/hints'
+import { connectorDocs } from './id/connectorDocs'
 
 /** Bahasa Indonesia. Same shape as en.ts; data and identifiers stay untranslated. */
 export const id: Messages = {
@@ -117,6 +120,25 @@ export const id: Messages = {
     cancelled: 'Dibatalkan',
   },
   pipelines: {
+    transfer: {
+      export: 'Ekspor JSON',
+      import: 'Impor',
+      exported: 'Diekspor {when} · versi {version} · {steps} langkah',
+      importTitle: 'Impor pipeline',
+      importDescription: 'Pilih file yang diekspor dari Nexus. Sumber data dan aturan bisnisnya dicocokkan menurut nama; pipeline masuk sebagai draf dengan jadwal mati.',
+      chooseFile: 'Pilih pipeline hasil ekspor (.json)',
+      name: 'Nama di sini',
+      nameTaken: 'Pipeline dengan nama ini sudah ada. Pilih nama lain.',
+      sources: 'Sumber data',
+      sourceFor: 'Sumber data untuk {name}',
+      chooseSource: 'Pilih sumber data…',
+      noSourceOfType: 'Tidak ada sumber data {type} di sini: tambahkan dulu',
+      importAsDraft: 'Impor sebagai draf',
+      draftNote: 'Kredensial tidak pernah ikut diekspor. Uji dan terbitkan pipeline hasil impor saat sudah siap.',
+      imported: 'Diimpor sebagai draf. Buka untuk menguji dan menerbitkan.',
+      exportFailed: 'Pipeline tidak dapat diekspor.',
+      failed: 'File tidak dapat diimpor.',
+    },
     new: 'Pipeline baru',
     templates: 'Templat',
     summary: '{count} pipeline',
@@ -380,6 +402,15 @@ export const id: Messages = {
     },
   },
   settings: {
+    retention: {
+      title: 'Riwayat eksekusi',
+      description: 'Berapa lama eksekusi menyimpan log terperinci (baris log, detail error) dan ringkasannya (status, baris, waktu). Eksekusi lama dihapus setiap jam; eksekusi yang barisnya masih menunggu di Kualitas data tetap disimpan.',
+      detail: 'Log terperinci',
+      summary: 'Ringkasan eksekusi',
+      days: '{count, plural, one {# hari} other {# hari}}',
+      years: '{count, plural, one {# tahun} other {# tahun}}',
+      saved: 'Retensi riwayat eksekusi disimpan.',
+    },
     sections: 'Bagian pengaturan',
     general: 'Umum',
     members: 'Anggota & peran',
@@ -479,4 +510,7 @@ export const id: Messages = {
   tour,
   legal,
   schemas,
+  health,
+  hints,
+  connectorDocs,
 }

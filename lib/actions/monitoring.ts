@@ -5,4 +5,4 @@ import { unwrapActions } from '@/lib/action-result'
 
 export type { PipelineHealth } from '@/app/actions/monitoring'
 
-export const { getMonitoringOverview, listNotifications, markNotificationsRead, getOverview } = unwrapActions(actions)
+export const { getMonitoringOverview, listNotifications, markNotificationsRead, getOverview, getLogRetention, setLogRetention } = unwrapActions(actions)
