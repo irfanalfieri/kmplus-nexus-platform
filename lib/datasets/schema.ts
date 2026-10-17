@@ -358,7 +358,9 @@ export function columnOwners(datasetName: string, pipelines: { id: string; name:
       for (const m of n.columnMap) if (m.binding.kind !== 'none') byColumn[m.target] = [...new Set([...(byColumn[m.target] ?? []), p.name])]
     }
   }
-  return { byColumn, byName }
+  // Names in a stable order (pipelines arrive in whatever order the database returns them).
+  for (const k of Object.keys(byColumn)) byColumn[k].sort((a, b) => a.localeCompare(b))
+  return { byColumn, byName: byName.sort((a, b) => a.localeCompare(b)) }
 }
 
 /**
