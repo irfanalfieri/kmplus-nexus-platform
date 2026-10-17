@@ -6,7 +6,7 @@
  * Inline text supports **bold**, *emphasis* and `code`; nothing else is interpreted.
  */
 import type { Section } from '@/lib/navigation'
-import type { Permission } from '@/lib/auth/permissions'
+import type { Permission, Role } from '@/lib/auth/permissions'
 import type { HelpScreen } from './screens'
 
 export type HelpDiagram = 'workflow' | 'architecture' | 'pipeline' | 'roles' | 'secrets' | 'environments'
@@ -48,6 +48,8 @@ export interface HelpContent {
   chapters: HelpChapter[]
   faqGroups: { id: string; title: string }[]
   faqs: HelpFaq[]
+  /** "Read as" (lib/help/access.ts): per role, who it is for and its main tasks, each linked to a section (`chapter.section`). */
+  roleGuides: Record<Role, { who: string; tasks: { text: string; section: string }[] }>
   /** Labels for the diagrams (drawn in components/help/diagrams.tsx). */
   diagrams: {
     workflow: { stages: { title: string; body: string }[] }

@@ -55,9 +55,30 @@ export const helpEn: HelpContent = {
                 '**The bell** lists failed runs and held rows; the **account menu** switches theme and language and signs you out.',
                 '**The workspace switcher** under the logo moves between your workspaces and environments.',
                 'Every screen has its own address, so you can bookmark it or send it to a colleague.',
+                '**New features announce themselves** with a banner on the screens they change (e.g. defined dataset schemas on the Catalog and Overview): **Review** opens the feature, the “How … work” link opens its section here, and × hides the banner for you.',
               ],
             },
             { kind: 'note', tone: 'info', text: 'What you see depends on your role. A control you can’t use is hidden; the server checks every action again, so hiding is a convenience, not the protection.' },
+          ],
+        },
+        {
+          id: 'your-role',
+          title: 'Your role and this guide',
+          blocks: [
+            { kind: 'p', text: 'Every member of a workspace has one role, and the role decides what they can do. **Read as** at the top of this page shows the guide for one role: what that role is for, its main tasks, what it can and can’t do, and only the sections it can use. It starts on your own role; pick **Every role** to see the whole guide, with each section marked with the roles it is for.' },
+            {
+              kind: 'table',
+              head: ['Role', 'Usually', 'Starts on'],
+              rows: [
+                ['Admin', 'IT or the integration owner: connects systems, manages members, sign-in, keys and environments, and can do everything else.', 'Overview'],
+                ['Data steward', 'HR data owners: build and publish pipelines, fix held rows, govern datasets, approve changes.', 'Data quality'],
+                ['Operator', 'Runs and watches pipelines, retries failed runs; can’t change them.', 'Overview'],
+                ['Analyst', 'Builds dashboards and asks questions over datasets, with masked columns hidden.', 'Overview'],
+                ['Auditor', 'Reads everything, including the audit log; changes nothing.', 'Overview'],
+                ['Viewer', 'Follows pipelines, runs and dashboards; sees no row values.', 'Overview'],
+              ],
+            },
+            { kind: 'note', tone: 'info', text: 'Controls your role can’t use are hidden, and the server checks every action again. Ask a workspace admin to change your role (**Settings → Members & roles**).' },
           ],
         },
         {
@@ -604,6 +625,7 @@ export const helpEn: HelpContent = {
           blocks: [
             { kind: 'shot', screen: 'rules', caption: 'Business rules with where each is used.' },
             { kind: 'p', text: 'A rule reads **IF** a condition **THEN** do something, **OTHERWISE** do something else. Rules are shared: change a rule once and every pipeline that uses it applies the new version on its next run. Filter, Validate, Router and Business rules steps can all use them.' },
+            { kind: 'p', text: 'Each rule on the Business rules screen shows its version, the pipelines that use it (or **unused**), its condition written out in words, and when it last changed. Everyone can read rules; admins and data stewards create, edit and delete them. A rule a pipeline uses can’t be deleted until the pipeline stops using it, and promotion copies rules to the next environment by name.' },
           ],
         },
         {
@@ -636,6 +658,21 @@ export const helpEn: HelpContent = {
           title: 'Test and version a rule',
           blocks: [
             { kind: 'p', text: 'The rule editor’s **tester** runs the rule on rows from a dataset or on JSON you paste, and shows which branch each row takes. Every save is a version; edits are recorded in the audit log.' },
+          ],
+        },
+        {
+          id: 'rules-ai',
+          title: 'Write a rule in words',
+          blocks: [
+            {
+              kind: 'steps',
+              items: [
+                'In the rule editor, pick the dataset the rule is for, so it uses the right column names.',
+                'Under **Describe the rule**, write it the way you would say it, e.g. “Contract employees hired after 1 January 2025 need HR approval; mark everyone else as regular”, and choose **Draft rule**.',
+                'The AI assistant fills in the conditions and actions with real columns only. Review them, try them in the tester, then save. Nothing is saved until you do.',
+              ],
+            },
+            { kind: 'note', tone: 'info', text: 'Drafting needs the AI assistant to be on (Settings → AI assistant). The prompt carries column names, never row values.' },
           ],
         },
       ],
@@ -743,6 +780,21 @@ export const helpEn: HelpContent = {
           ],
         },
         {
+          id: 'earlier',
+          title: 'Earlier rows, bulk work and who can act',
+          blocks: [
+            {
+              kind: 'list',
+              items: [
+                '**Earlier rows** shows what happened to rows that left the inbox: **Approved**, **Replayed**, **Dismissed** (restore one if it was a mistake) and **Superseded** (a later full run checked them again; work on the newer copies).',
+                '**Select** several rows (or all) to approve, dismiss or replay them together, or **Bulk fix**: set one field to a new value on every selected row, then replay.',
+                'The pipeline filter narrows the inbox to one pipeline; a pipeline’s held count on the Pipelines screen and the Overview link straight there.',
+                'Admins and data stewards fix, approve, dismiss and replay. Operators, analysts and auditors see held rows with masked values; viewers see only the counts.',
+              ],
+            },
+          ],
+        },
+        {
           id: 'scores',
           title: 'Quality scores and trends',
           blocks: [
@@ -764,6 +816,7 @@ export const helpEn: HelpContent = {
           blocks: [
             { kind: 'shot', screen: 'catalog', caption: 'The catalog: datasets and source tables with owners, tags and documentation.' },
             { kind: 'p', text: 'Every dataset and every source table appears automatically. **Search in plain words**: “employees who joined last month” finds tables by name, documentation and column names, in English or Indonesian (never by row values).' },
+            { kind: 'p', text: 'Narrow the list to datasets, source tables or live tables, or search by #tag or owner. **Ask where data lives** answers a question such as “where is training hours by department?” with the datasets and tables that hold it, ranked by the AI assistant from names, documentation and columns; it works without AI too, from synonyms in both languages. Select an item to see its columns, lineage, quality and a sample.' },
           ],
         },
         {
@@ -997,7 +1050,17 @@ export const helpEn: HelpContent = {
           id: 'members',
           title: 'Members and invites',
           blocks: [
-            { kind: 'p', text: '**Settings → Members & roles**: invite people by email (they get a link), change roles, and remove members. Everyone starts with a personal workspace; the last admin can’t leave a workspace.' },
+            {
+              kind: 'list',
+              items: [
+                '**Invite** (admins): enter an email and a role. The person gets an email with a link valid for 7 days. Someone without a Nexus account creates one from the link (the email is already verified), accepts the Terms, sets up two-factor authentication and joins; an existing account signs in to join. People at a domain that requires SSO continue with SSO instead.',
+                '**Pending invites** can be revoked until they are used.',
+                '**Change a role** or **remove** a member (admins). A workspace always keeps at least one admin.',
+                '**Reset two-factor** (admins) for a member who lost their authenticator and their backup codes: they set it up again at their next sign-in.',
+                'Everyone can see who the members are. **Leave workspace** (Settings → General) removes you; the last admin can’t leave.',
+                'Everyone starts with a personal workspace; the workspace switcher under the logo moves between workspaces you belong to.',
+              ],
+            },
           ],
         },
         {
@@ -1057,6 +1120,8 @@ export const helpEn: HelpContent = {
           title: 'Accounts and two-factor authentication',
           blocks: [
             { kind: 'p', text: '**Every account uses two-factor authentication** (an authenticator app, with ten backup codes), unless it signs in through your company’s SSO. Lost your phone? Sign in with a backup code and set up the new phone under **Settings → Your account**; an admin can reset it for you.' },
+            { kind: 'p', text: '**Forgot your password?** Choose **Forgot password?** on the sign-in page and enter your email. If an account exists you get a link valid for one hour (the page never says whether it does); setting a new password signs you out everywhere and sends a “password changed” email. Accounts at a domain that requires SSO sign in with SSO instead.' },
+            { kind: 'p', text: '**Terms and Conditions**: everyone accepts the current terms once, at sign-up or on the next sign-in after they change. The full text is at /terms in both languages; the Indonesian version prevails.' },
           ],
         },
         {
@@ -1097,6 +1162,7 @@ export const helpEn: HelpContent = {
     { id: 'language', group: 'basics', q: 'How do I switch to Bahasa Indonesia or dark mode?', a: 'Open the account menu (your name, top right) and choose **Language** or **Appearance**. The choice is remembered on this browser.' },
     { id: 'times', group: 'basics', q: 'Which time zone are times shown in?', a: 'Western Indonesian Time (WIB). Schedules are set in WIB too. Timestamps stored without a zone are treated as UTC.' },
     { id: 'tour-again', group: 'basics', q: 'Can I take the tour again?', a: 'Yes: **Guide me** in the top bar starts it from the beginning. Close it any time with **End tour** or Esc; it resumes where you left off if you reload the page.' },
+    { id: 'my-role', group: 'basics', q: 'How do I see what my role can do?', a: 'At the top of this page, **Read as** starts on your role: it lists what you can and can’t do, your main tasks, and only the guide sections you can use. Pick another role to see what a colleague can do, or **Every role** for the whole guide.' },
     { id: 'missing-screen', group: 'basics', q: 'Why can’t I see a button my colleague has?', a: 'Roles decide what you can do. Viewers and auditors are read-only, operators run but don’t edit pipelines, only admins manage sources and members. Ask a workspace admin to change your role.' },
     { id: 'intranet', group: 'connecting', q: 'Our HR database is only on the company network. Can Nexus reach it?', a: 'Yes, through a **Nexus Agent** installed inside the network. It connects outward to Nexus over HTTPS, so no inbound firewall rule is needed. See *Systems inside your network*.' },
     { id: 'private-refused', group: 'connecting', q: 'Why does Nexus refuse an address like 10.0.0.5 or hr.local?', a: 'Private and intranet addresses can’t be reached from the cloud, and refusing them protects your network. Use a Nexus Agent, or have IT publish the API with a client certificate and Nexus’s fixed outbound IPs.' },
@@ -1136,6 +1202,72 @@ export const helpEn: HelpContent = {
     { id: 'ai-model', group: 'ai', q: 'Which AI model does Nexus use?', a: 'Open-source models only, through any OpenAI-compatible server (e.g. Ollama or vLLM): the one configured for Nexus, or one running next to your Nexus Agent so prompts never leave your network. Admins can turn the assistant off.' },
     { id: 'ai-off', group: 'ai', q: 'Does anything stop working without AI?', a: 'No. Connector suggestions and catalog search answer from built-in rules first; the model only adds to them. Pipelines, rules and analytics work fully without it.' },
   ],
+  roleGuides: {
+    admin: {
+      who: 'Admins set the workspace up and keep it safe: they connect systems, manage members, sign-in, keys and environments, and can also do everything the other roles do.',
+      tasks: [
+        { text: 'Install connectors and add data sources and destinations', section: 'connect.sources' },
+        { text: 'Reach systems inside your network with a Nexus Agent', section: 'connect.agent' },
+        { text: 'Invite members and give them the right role', section: 'admin.members' },
+        { text: 'Turn on single sign-on and SCIM', section: 'admin.sso' },
+        { text: 'Link Development, Staging and Production', section: 'pipelines.environments' },
+        { text: 'Handle a deletion request (right to erasure)', section: 'governance.retention' },
+        { text: 'Create Data API keys and webhooks', section: 'api.keys' },
+      ],
+    },
+    steward: {
+      who: 'Data stewards own the HR data: they build and publish pipelines, fix held rows, document and govern datasets, and approve changes. They see real values; sources, members and keys are left to admins.',
+      tasks: [
+        { text: 'Work the quarantine: fix, approve and replay held rows', section: 'quality.fix' },
+        { text: 'Create a pipeline from a template or in words', section: 'pipelines.create' },
+        { text: 'Map and transform fields', section: 'pipelines.mapping' },
+        { text: 'Approve a colleague’s publish', section: 'pipelines.approvals' },
+        { text: 'Define a dataset’s schema', section: 'catalog.schemas' },
+        { text: 'Classify and mask personal columns', section: 'governance.masking' },
+        { text: 'Write business rules', section: 'rules.rules-what' },
+      ],
+    },
+    operator: {
+      who: 'Operators keep pipelines running: they start runs, follow them, retry or continue failed ones and subscribe to alerts. They see rows with masked values and can’t change pipelines.',
+      tasks: [
+        { text: 'Read a run and its likely cause', section: 'monitoring.read-run' },
+        { text: 'Cancel, retry or continue a run', section: 'monitoring.retry' },
+        { text: 'Run a pipeline now and check its schedule', section: 'pipelines.schedule' },
+        { text: 'Get alerts for the pipelines you look after', section: 'monitoring.alerts' },
+        { text: 'See which rows were held and why', section: 'quality.inbox' },
+      ],
+    },
+    analyst: {
+      who: 'Analysts turn datasets into answers: they build dashboards and ask questions in words. Masked columns stay hidden and row filters apply to every number they see.',
+      tasks: [
+        { text: 'Build a dashboard', section: 'analytics.dashboards' },
+        { text: 'Add a widget, and combine two datasets', section: 'analytics.widget' },
+        { text: 'Ask a question in words', section: 'analytics.ask' },
+        { text: 'Find the dataset you need', section: 'catalog.find' },
+        { text: 'Share, embed and export dashboards', section: 'analytics.readers' },
+      ],
+    },
+    auditor: {
+      who: 'Auditors check that the workspace is run properly: they read everything, including the audit log, with masked values, and change nothing.',
+      tasks: [
+        { text: 'Read the audit trail', section: 'governance.audit' },
+        { text: 'Check the security controls', section: 'governance.controls' },
+        { text: 'See where data comes from (lineage)', section: 'catalog.lineage' },
+        { text: 'Read runs and their logs', section: 'monitoring.read-run' },
+        { text: 'Review held rows', section: 'quality.inbox' },
+      ],
+    },
+    viewer: {
+      who: 'Viewers follow along: they see pipelines, runs, dashboards and the catalog, but no row values, and change nothing.',
+      tasks: [
+        { text: 'Read the Overview', section: 'start.overview' },
+        { text: 'Follow runs in Monitoring', section: 'monitoring.runs' },
+        { text: 'Open dashboards', section: 'analytics.dashboards' },
+        { text: 'Find datasets in the Catalog', section: 'catalog.find' },
+        { text: 'Subscribe to a pipeline’s alerts', section: 'monitoring.alerts' },
+      ],
+    },
+  },
   diagrams: {
     workflow: {
       stages: [

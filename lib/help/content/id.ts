@@ -55,9 +55,30 @@ export const helpId: HelpContent = {
                 '**Lonceng** menampilkan eksekusi gagal dan baris tertahan; **menu akun** mengganti tema dan bahasa serta untuk keluar.',
                 '**Pengalih workspace** di bawah logo berpindah antar-workspace dan lingkungan Anda.',
                 'Setiap layar punya alamat sendiri, jadi bisa Anda tandai atau kirim ke rekan kerja.',
+                '**Fitur baru memperkenalkan dirinya** dengan spanduk di layar yang diubahnya (mis. skema dataset yang ditetapkan di Katalog dan Ringkasan): **Tinjau** membuka fiturnya, tautan “Cara kerja …” membuka bagiannya di sini, dan × menyembunyikan spanduk itu untuk Anda.',
               ],
             },
             { kind: 'note', tone: 'info', text: 'Yang Anda lihat bergantung pada peran Anda. Kontrol yang tidak bisa Anda gunakan disembunyikan; server memeriksa ulang setiap tindakan, jadi penyembunyian hanya kemudahan, bukan perlindungannya.' },
+          ],
+        },
+        {
+          id: 'your-role',
+          title: 'Peran Anda dan panduan ini',
+          blocks: [
+            { kind: 'p', text: 'Setiap anggota workspace memiliki satu peran, dan peran itu menentukan apa yang bisa dilakukannya. **Baca sebagai** di bagian atas halaman ini menampilkan panduan untuk satu peran: untuk apa peran itu, tugas utamanya, apa yang bisa dan tidak bisa dilakukannya, dan hanya bagian yang bisa dipakainya. Pilihan awalnya adalah peran Anda sendiri; pilih **Semua peran** untuk melihat seluruh panduan, dengan setiap bagian ditandai peran yang dituju.' },
+            {
+              kind: 'table',
+              head: ['Peran', 'Biasanya', 'Mulai di'],
+              rows: [
+                ['Admin', 'TI atau pemilik integrasi: menyambungkan sistem, mengelola anggota, cara masuk, kunci, dan lingkungan, serta bisa melakukan semua hal lain.', 'Ringkasan'],
+                ['Data steward', 'Pemilik data SDM: membangun dan menerbitkan pipeline, memperbaiki baris yang ditahan, mengatur dataset, menyetujui perubahan.', 'Kualitas data'],
+                ['Operator', 'Menjalankan dan memantau pipeline, mengulang eksekusi yang gagal; tidak bisa mengubahnya.', 'Ringkasan'],
+                ['Analis', 'Membuat dasbor dan bertanya tentang dataset, dengan kolom tersamar tetap tersembunyi.', 'Ringkasan'],
+                ['Auditor', 'Membaca semuanya, termasuk log audit; tidak mengubah apa pun.', 'Ringkasan'],
+                ['Viewer', 'Mengikuti pipeline, eksekusi, dan dasbor; tidak melihat nilai baris.', 'Ringkasan'],
+              ],
+            },
+            { kind: 'note', tone: 'info', text: 'Kontrol yang tidak bisa dipakai peran Anda disembunyikan, dan server memeriksa ulang setiap tindakan. Minta admin workspace untuk mengubah peran Anda (**Pengaturan → Anggota & peran**).' },
           ],
         },
         {
@@ -604,6 +625,7 @@ export const helpId: HelpContent = {
           blocks: [
             { kind: 'shot', screen: 'rules', caption: 'Aturan bisnis beserta tempat masing-masing dipakai.' },
             { kind: 'p', text: 'Aturan berbunyi **JIKA** suatu kondisi **MAKA** lakukan sesuatu, **SELAIN ITU** lakukan hal lain. Aturan dipakai bersama: ubah aturan sekali dan setiap pipeline yang memakainya menerapkan versi baru pada eksekusi berikutnya. Langkah Filter, Validasi, Router, dan Aturan bisnis semuanya bisa memakainya.' },
+            { kind: 'p', text: 'Setiap aturan di layar Aturan bisnis menampilkan versinya, pipeline yang memakainya (atau **tidak dipakai**), kondisinya dalam kata-kata, dan kapan terakhir diubah. Semua orang bisa membaca aturan; admin dan data steward membuat, mengubah, dan menghapusnya. Aturan yang dipakai pipeline tidak bisa dihapus sampai pipeline berhenti memakainya, dan promosi menyalin aturan ke lingkungan berikutnya berdasarkan nama.' },
           ],
         },
         {
@@ -636,6 +658,21 @@ export const helpId: HelpContent = {
           title: 'Uji dan versikan aturan',
           blocks: [
             { kind: 'p', text: '**Penguji** di editor aturan menjalankan aturan pada baris dari dataset atau pada JSON yang Anda tempel, dan menunjukkan cabang yang diambil setiap baris. Setiap simpanan adalah versi; perubahan dicatat di log audit.' },
+          ],
+        },
+        {
+          id: 'rules-ai',
+          title: 'Menulis aturan dengan kata-kata',
+          blocks: [
+            {
+              kind: 'steps',
+              items: [
+                'Di editor aturan, pilih dataset tujuan aturan, agar nama kolomnya tepat.',
+                'Di **Jelaskan aturannya**, tulis seperti Anda mengucapkannya, mis. “Karyawan kontrak yang direkrut setelah 1 Januari 2025 perlu persetujuan HR; tandai yang lain sebagai reguler”, lalu pilih **Susun aturan**.',
+                'Asisten AI mengisi kondisi dan tindakan hanya dengan kolom yang nyata. Tinjau, coba di penguji, lalu simpan. Tidak ada yang tersimpan sebelum Anda menyimpannya.',
+              ],
+            },
+            { kind: 'note', tone: 'info', text: 'Penyusunan memerlukan asisten AI yang aktif (Pengaturan → Asisten AI). Prompt membawa nama kolom, tidak pernah nilai baris.' },
           ],
         },
       ],
@@ -743,6 +780,21 @@ export const helpId: HelpContent = {
           ],
         },
         {
+          id: 'earlier',
+          title: 'Baris sebelumnya, kerja massal, dan siapa yang bisa bertindak',
+          blocks: [
+            {
+              kind: 'list',
+              items: [
+                '**Baris sebelumnya** menampilkan nasib baris yang sudah keluar dari kotak masuk: **Disetujui**, **Dikirim ulang**, **Diabaikan** (pulihkan bila keliru), dan **Digantikan** (eksekusi penuh berikutnya memeriksanya lagi; kerjakan salinan yang lebih baru).',
+                '**Pilih** beberapa baris (atau semuanya) untuk disetujui, diabaikan, atau dikirim ulang sekaligus, atau **Perbaikan massal**: tetapkan satu field ke nilai baru pada setiap baris terpilih, lalu kirim ulang.',
+                'Saringan pipeline mempersempit kotak masuk ke satu pipeline; jumlah baris ditahan sebuah pipeline di layar Pipeline dan tautan di Ringkasan langsung menuju ke sana.',
+                'Admin dan data steward memperbaiki, menyetujui, mengabaikan, dan mengirim ulang. Operator, analis, dan auditor melihat baris yang ditahan dengan nilai tersamar; viewer hanya melihat jumlahnya.',
+              ],
+            },
+          ],
+        },
+        {
           id: 'scores',
           title: 'Skor dan tren kualitas',
           blocks: [
@@ -764,6 +816,7 @@ export const helpId: HelpContent = {
           blocks: [
             { kind: 'shot', screen: 'catalog', caption: 'Katalog: dataset dan tabel sumber beserta pemilik, tag, dan dokumentasinya.' },
             { kind: 'p', text: 'Setiap dataset dan tabel sumber muncul otomatis. **Cari dengan kata-kata biasa**: “karyawan yang bergabung bulan lalu” menemukan tabel berdasarkan nama, dokumentasi, dan nama kolom, dalam bahasa Inggris atau Indonesia (tidak pernah berdasarkan nilai baris).' },
+            { kind: 'p', text: 'Persempit daftar ke dataset, tabel sumber, atau tabel langsung, atau cari dengan #tag atau pemilik. **Tanya di mana data berada** menjawab pertanyaan seperti “di mana jam pelatihan per departemen?” dengan dataset dan tabel yang menyimpannya, diurutkan oleh asisten AI dari nama, dokumentasi, dan kolom; tanpa AI pun tetap bekerja, dari sinonim dalam dua bahasa. Pilih sebuah item untuk melihat kolom, silsilah, kualitas, dan sampelnya.' },
           ],
         },
         {
@@ -997,7 +1050,17 @@ export const helpId: HelpContent = {
           id: 'members',
           title: 'Anggota dan undangan',
           blocks: [
-            { kind: 'p', text: '**Pengaturan → Anggota & peran**: undang orang lewat email (mereka menerima tautan), ubah peran, dan keluarkan anggota. Setiap orang mulai dengan workspace pribadi; admin terakhir tidak bisa meninggalkan workspace.' },
+            {
+              kind: 'list',
+              items: [
+                '**Undang** (admin): masukkan email dan peran. Orang itu menerima email berisi tautan yang berlaku 7 hari. Yang belum punya akun Nexus membuatnya dari tautan itu (emailnya sudah terverifikasi), menyetujui Syarat dan Ketentuan, mengatur autentikasi dua faktor, lalu bergabung; akun yang sudah ada cukup masuk untuk bergabung. Orang di domain yang mewajibkan SSO melanjutkan dengan SSO.',
+                '**Undangan tertunda** bisa dicabut selama belum dipakai.',
+                '**Ubah peran** atau **keluarkan** anggota (admin). Workspace selalu menyisakan paling sedikit satu admin.',
+                '**Atur ulang dua faktor** (admin) untuk anggota yang kehilangan autentikator dan kode cadangannya: mereka mengaturnya lagi saat masuk berikutnya.',
+                'Semua orang bisa melihat siapa saja anggotanya. **Tinggalkan workspace** (Pengaturan → Umum) mengeluarkan Anda; admin terakhir tidak bisa keluar.',
+                'Setiap orang mulai dengan workspace pribadi; pengalih workspace di bawah logo berpindah antar-workspace tempat Anda menjadi anggota.',
+              ],
+            },
           ],
         },
         {
@@ -1057,6 +1120,8 @@ export const helpId: HelpContent = {
           title: 'Akun dan autentikasi dua faktor',
           blocks: [
             { kind: 'p', text: '**Setiap akun memakai autentikasi dua faktor** (aplikasi autentikator, dengan sepuluh kode cadangan), kecuali masuk lewat SSO perusahaan Anda. Ponsel hilang? Masuk dengan kode cadangan lalu atur ponsel baru di **Pengaturan → Akun Anda**; admin juga bisa mengatur ulangnya untuk Anda.' },
+            { kind: 'p', text: '**Lupa kata sandi?** Pilih **Lupa kata sandi?** di halaman masuk dan masukkan email Anda. Bila akunnya ada, Anda menerima tautan yang berlaku satu jam (halaman tidak pernah memberi tahu apakah akun itu ada); mengatur kata sandi baru mengeluarkan Anda dari semua perangkat dan mengirim email “kata sandi diubah”. Akun di domain yang mewajibkan SSO masuk dengan SSO.' },
+            { kind: 'p', text: '**Syarat dan Ketentuan**: setiap orang menyetujui syarat yang berlaku sekali, saat mendaftar atau saat masuk berikutnya setelah syaratnya berubah. Teks lengkapnya ada di /terms dalam dua bahasa; versi Bahasa Indonesia yang berlaku.' },
           ],
         },
         {
@@ -1097,6 +1162,7 @@ export const helpId: HelpContent = {
     { id: 'language', group: 'basics', q: 'Bagaimana beralih ke English atau mode gelap?', a: 'Buka menu akun (nama Anda, kanan atas) dan pilih **Bahasa** atau **Tampilan**. Pilihan diingat di browser ini.' },
     { id: 'times', group: 'basics', q: 'Waktu ditampilkan dalam zona waktu apa?', a: 'Waktu Indonesia Barat (WIB). Jadwal juga diatur dalam WIB. Stempel waktu yang disimpan tanpa zona dianggap UTC.' },
     { id: 'tour-again', group: 'basics', q: 'Bisakah saya mengikuti tur lagi?', a: 'Bisa: **Pandu saya** di bilah atas memulainya dari awal. Tutup kapan saja dengan **Akhiri tur** atau Esc; tur dilanjutkan dari posisi terakhir jika Anda memuat ulang halaman.' },
+    { id: 'my-role', group: 'basics', q: 'Bagaimana saya melihat apa yang bisa dilakukan peran saya?', a: 'Di bagian atas halaman ini, **Baca sebagai** dimulai dari peran Anda: daftar apa yang bisa dan tidak bisa Anda lakukan, tugas utama Anda, dan hanya bagian panduan yang bisa Anda pakai. Pilih peran lain untuk melihat apa yang bisa dilakukan rekan, atau **Semua peran** untuk seluruh panduan.' },
     { id: 'missing-screen', group: 'basics', q: 'Mengapa saya tidak melihat tombol yang dimiliki rekan saya?', a: 'Peran menentukan apa yang bisa Anda lakukan. Viewer dan auditor hanya-baca, operator menjalankan tetapi tidak mengedit pipeline, hanya admin yang mengelola sumber dan anggota. Minta admin workspace mengubah peran Anda.' },
     { id: 'intranet', group: 'connecting', q: 'Database SDM kami hanya ada di jaringan perusahaan. Bisakah Nexus menjangkaunya?', a: 'Bisa, lewat **Nexus Agent** yang dipasang di dalam jaringan. Agent terhubung keluar ke Nexus lewat HTTPS, jadi tidak perlu aturan firewall masuk. Lihat *Sistem di dalam jaringan Anda*.' },
     { id: 'private-refused', group: 'connecting', q: 'Mengapa Nexus menolak alamat seperti 10.0.0.5 atau hr.local?', a: 'Alamat privat dan intranet tidak bisa dijangkau dari cloud, dan menolaknya melindungi jaringan Anda. Gunakan Nexus Agent, atau minta TI memublikasikan API dengan sertifikat klien dan IP keluar tetap milik Nexus.' },
@@ -1136,6 +1202,72 @@ export const helpId: HelpContent = {
     { id: 'ai-model', group: 'ai', q: 'Model AI apa yang dipakai Nexus?', a: 'Hanya model open-source, lewat server apa pun yang kompatibel dengan OpenAI (mis. Ollama atau vLLM): yang dikonfigurasi untuk Nexus, atau yang berjalan di dekat Nexus Agent Anda sehingga prompt tidak pernah keluar dari jaringan Anda. Admin bisa menonaktifkan asisten.' },
     { id: 'ai-off', group: 'ai', q: 'Apakah ada yang berhenti bekerja tanpa AI?', a: 'Tidak. Saran konektor dan pencarian katalog menjawab dari aturan bawaan terlebih dahulu; model hanya menambahkan. Pipeline, aturan, dan analitik berfungsi penuh tanpanya.' },
   ],
+  roleGuides: {
+    admin: {
+      who: 'Admin menyiapkan workspace dan menjaga keamanannya: menyambungkan sistem, mengelola anggota, cara masuk, kunci, dan lingkungan, serta bisa melakukan semua yang dilakukan peran lain.',
+      tasks: [
+        { text: 'Pasang konektor dan tambahkan sumber data serta tujuan', section: 'connect.sources' },
+        { text: 'Jangkau sistem di dalam jaringan Anda dengan Nexus Agent', section: 'connect.agent' },
+        { text: 'Undang anggota dan beri peran yang tepat', section: 'admin.members' },
+        { text: 'Aktifkan single sign-on dan SCIM', section: 'admin.sso' },
+        { text: 'Tautkan Development, Staging, dan Production', section: 'pipelines.environments' },
+        { text: 'Tangani permintaan penghapusan (hak penghapusan)', section: 'governance.retention' },
+        { text: 'Buat kunci Data API dan webhook', section: 'api.keys' },
+      ],
+    },
+    steward: {
+      who: 'Data steward memiliki data SDM: membangun dan menerbitkan pipeline, memperbaiki baris yang ditahan, mendokumentasikan dan mengatur dataset, serta menyetujui perubahan. Mereka melihat nilai asli; sumber, anggota, dan kunci diurus admin.',
+      tasks: [
+        { text: 'Kerjakan karantina: perbaiki, setujui, dan kirim ulang baris', section: 'quality.fix' },
+        { text: 'Buat pipeline dari templat atau dengan kata-kata', section: 'pipelines.create' },
+        { text: 'Petakan dan ubah field', section: 'pipelines.mapping' },
+        { text: 'Setujui penerbitan rekan', section: 'pipelines.approvals' },
+        { text: 'Tetapkan skema dataset', section: 'catalog.schemas' },
+        { text: 'Klasifikasikan dan samarkan kolom pribadi', section: 'governance.masking' },
+        { text: 'Tulis aturan bisnis', section: 'rules.rules-what' },
+      ],
+    },
+    operator: {
+      who: 'Operator menjaga pipeline tetap berjalan: memulai eksekusi, mengikutinya, mengulang atau melanjutkan yang gagal, dan berlangganan peringatan. Mereka melihat baris dengan nilai tersamar dan tidak bisa mengubah pipeline.',
+      tasks: [
+        { text: 'Baca eksekusi dan kemungkinan penyebabnya', section: 'monitoring.read-run' },
+        { text: 'Batalkan, ulangi, atau lanjutkan eksekusi', section: 'monitoring.retry' },
+        { text: 'Jalankan pipeline sekarang dan periksa jadwalnya', section: 'pipelines.schedule' },
+        { text: 'Terima peringatan untuk pipeline yang Anda jaga', section: 'monitoring.alerts' },
+        { text: 'Lihat baris mana yang ditahan dan mengapa', section: 'quality.inbox' },
+      ],
+    },
+    analyst: {
+      who: 'Analis mengubah dataset menjadi jawaban: membuat dasbor dan bertanya dengan kata-kata. Kolom tersamar tetap tersembunyi dan saringan baris berlaku pada setiap angka yang dilihatnya.',
+      tasks: [
+        { text: 'Buat dasbor', section: 'analytics.dashboards' },
+        { text: 'Tambahkan widget, dan gabungkan dua dataset', section: 'analytics.widget' },
+        { text: 'Bertanya dengan kata-kata', section: 'analytics.ask' },
+        { text: 'Temukan dataset yang Anda perlukan', section: 'catalog.find' },
+        { text: 'Bagikan, sematkan, dan ekspor dasbor', section: 'analytics.readers' },
+      ],
+    },
+    auditor: {
+      who: 'Auditor memeriksa bahwa workspace dijalankan dengan benar: membaca semuanya, termasuk log audit, dengan nilai tersamar, dan tidak mengubah apa pun.',
+      tasks: [
+        { text: 'Baca jejak audit', section: 'governance.audit' },
+        { text: 'Periksa kontrol keamanan', section: 'governance.controls' },
+        { text: 'Lihat asal data (silsilah)', section: 'catalog.lineage' },
+        { text: 'Baca eksekusi dan lognya', section: 'monitoring.read-run' },
+        { text: 'Tinjau baris yang ditahan', section: 'quality.inbox' },
+      ],
+    },
+    viewer: {
+      who: 'Viewer mengikuti perkembangan: melihat pipeline, eksekusi, dasbor, dan katalog, tetapi tidak melihat nilai baris dan tidak mengubah apa pun.',
+      tasks: [
+        { text: 'Baca Ringkasan', section: 'start.overview' },
+        { text: 'Ikuti eksekusi di Pemantauan', section: 'monitoring.runs' },
+        { text: 'Buka dasbor', section: 'analytics.dashboards' },
+        { text: 'Temukan dataset di Katalog', section: 'catalog.find' },
+        { text: 'Berlangganan peringatan sebuah pipeline', section: 'monitoring.alerts' },
+      ],
+    },
+  },
   diagrams: {
     workflow: {
       stages: [

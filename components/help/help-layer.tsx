@@ -2,7 +2,13 @@
 
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { ArrowRight, ChevronRight, MessageCircleQuestion, Route, Search, SearchX } from 'lucide-react'
+import { Breaker } from '@/components/ui/flow-line'
+import { useWorkspace } from '@/components/workspace/workspace-context'
+import { PERMISSIONS, ROLES, can, isRole, type Role } from '@/lib/auth/permissions'
+import { landingSection } from '@/lib/navigation'
+import { guideFor, rolesFor } from '@/lib/help/access'
 import { PageHeader } from '@/components/dashboard/page-header'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -24,22 +30,52 @@ import { Diagram } from './diagrams'
  *   2. the FAQ, set apart after the guide.
  * The sticky contents list shows both parts and follows the reading position;
  * search narrows chapters, sections and questions. Numbers stay stable while
- * searching.
+ * searching and when reading as a role.
+ *
+ * "Read as" (lib/help/access.ts) narrows the guide to one role: what it is for,
+ * its main tasks, what it can and can't do, and only its sections; the rest is
+ * listed as "for other roles", never silently dropped. It starts on the
+ * reader's own role; `?role=<role>|all` links to a role's view.
  */
 export default function HelpLayer({ content }: { content: HelpContent }) {
   const t = useT()
   const tour = useTour()
+  const { role: ownRole } = useWorkspace()
+  const params = useSearchParams()
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(content.chapters[0]?.id ?? 'faq')
+  const [role, setRoleState] = useState<Role | 'all'>(() => {
+    const asked = params.get('role')
+    return asked === 'all' ? 'all' : isRole(asked) ? asked : ownRole
+  })
+  const setRole = (next: Role | 'all') => {
+    setRoleState(next)
+    // A shareable address for this view, without a navigation.
+    const url = new URL(window.location.href)
+    if (next === ownRole) url.searchParams.delete('role')
+    else url.searchParams.set('role', next)
+    window.history.replaceState(window.history.state, '', url)
+  }
 
   const numbers = useMemo(() => new Map(content.chapters.map((c, i) => [c.id, i + 1])), [content])
+  const forRole = useMemo(() => guideFor(content, role), [content, role])
+
+  // Arriving at a section this role doesn't read (a tour's "Read more", a shared link): show every role.
+  useEffect(() => {
+    const id = decodeURIComponent(window.location.hash.slice(1))
+    if (!id || role === 'all') return
+    const hidden = forRole.hidden.some(({ chapter, sections }) => sections.some((s) => sectionId(chapter.id, s.id) === id) || (chapter.id === id && !forRole.chapters.some((c) => c.id === id)))
+    if (hidden) setRoleState('all')
+    // Only on arrival.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Search: a chapter stays when its title matches (all sections) or when any section matches.
   const view = useMemo(() => {
     const q = query.trim()
-    if (!q) return { chapters: content.chapters, faqs: content.faqs, sections: content.chapters.reduce((n, c) => n + c.sections.length, 0) }
+    if (!q) return { chapters: forRole.chapters, faqs: content.faqs, sections: forRole.chapters.reduce((n, c) => n + c.sections.length, 0) }
     let sections = 0
-    const chapters = content.chapters
+    const chapters = forRole.chapters
       .map((c) => {
         if (matchesQuery(`${c.title} ${c.summary}`, q)) {
           sections += c.sections.length
@@ -52,7 +88,7 @@ export default function HelpLayer({ content }: { content: HelpContent }) {
       .filter((c): c is HelpChapter => c !== null)
     const faqs = content.faqs.filter((f) => matchesQuery(`${f.q} ${f.a}`, q))
     return { chapters, faqs, sections }
-  }, [content, query])
+  }, [content, forRole, query])
 
   const faqGroups = useMemo(() => content.faqGroups.filter((g) => view.faqs.some((f) => f.group === g.id)), [content.faqGroups, view.faqs])
 
@@ -176,6 +212,8 @@ export default function HelpLayer({ content }: { content: HelpContent }) {
         </aside>
 
         <div className="min-w-0 max-w-[56rem]">
+          <ReadAs role={role} ownRole={ownRole} onChange={setRole} />
+          {!searching && role !== 'all' && <RoleGuide role={role} ownRole={ownRole} content={content} sections={view.sections} />}
           {!searching && (
             <div className="mb-10 rounded-md border border-border bg-card p-5">
               <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
@@ -189,9 +227,9 @@ export default function HelpLayer({ content }: { content: HelpContent }) {
               </div>
               {/* Phones and tablets have no side contents list: the chapters as links. */}
               <ol className="mt-4 grid gap-x-6 gap-y-1.5 border-t border-border pt-4 text-sm sm:grid-cols-2 lg:hidden">
-                {content.chapters.map((c, i) => (
+                {view.chapters.map((c) => (
                   <li key={c.id} className="flex gap-2">
-                    <span className="w-5 shrink-0 text-right font-mono text-xs leading-5 text-muted-foreground tabular-nums">{i + 1}</span>
+                    <span className="w-5 shrink-0 text-right font-mono text-xs leading-5 text-muted-foreground tabular-nums">{numbers.get(c.id)}</span>
                     <a href={`#${c.id}`} className="text-info-text underline-offset-4 hover:underline">
                       {c.title}
                     </a>
@@ -217,9 +255,23 @@ export default function HelpLayer({ content }: { content: HelpContent }) {
             <>
               <div className="space-y-16">
                 {view.chapters.map((c) => (
-                  <Chapter key={c.id} chapter={c} number={numbers.get(c.id)!} content={content} />
+                  <Chapter key={c.id} chapter={c} number={numbers.get(c.id)!} content={content} showRoles={role === 'all'} />
                 ))}
               </div>
+              {!searching && forRole.hidden.length > 0 && (
+                <OtherRoles
+                  hidden={forRole.hidden}
+                  content={content}
+                  onOpen={(id) => {
+                    setRole('all')
+                    // After the full guide renders, go to the section.
+                    window.setTimeout(() => {
+                      window.location.hash = id
+                      document.getElementById(id)?.scrollIntoView({ block: 'start' })
+                    }, 60)
+                  }}
+                />
+              )}
               {faqGroups.length > 0 && <Faq groups={faqGroups} faqs={view.faqs} open={searching} afterGuide={view.chapters.length > 0} />}
             </>
           )}
@@ -255,8 +307,173 @@ function TocLink({ href, number, label, current, within, nested }: { href: strin
   )
 }
 
-function Chapter({ chapter, number, content }: { chapter: HelpChapter; number: number; content: HelpContent }) {
+/** The role names a section is for, e.g. "Admin · Data steward" (null when it is for everyone). */
+function useRoleNames() {
   const t = useT()
+  return (chapter: string, section: string) => {
+    const roles = rolesFor(chapter, section)
+    return roles.length === ROLES.length ? null : roles.map((r) => t(`ws.roles.${r}`)).join(' · ')
+  }
+}
+
+/** "Read as": the six roles and every role, as one row of toggle buttons. */
+function ReadAs({ role, ownRole, onChange }: { role: Role | 'all'; ownRole: Role; onChange: (r: Role | 'all') => void }) {
+  const t = useT()
+  const options: (Role | 'all')[] = [...ROLES, 'all']
+  return (
+    <div role="group" aria-label={t('tour.page.readAsLabel')} className="mb-6 flex flex-wrap items-center gap-2">
+      <span className="mr-1 font-mono text-[11px] font-medium tracking-[0.025em] text-muted-foreground uppercase">{t('tour.page.readAs')}</span>
+      {options.map((r) => {
+        const pressed = role === r
+        return (
+          <button
+            key={r}
+            type="button"
+            aria-pressed={pressed}
+            onClick={() => onChange(r)}
+            className={cn(
+              'inline-flex h-8 items-center gap-1.5 rounded-sm border px-2.5 text-sm outline-none pointer-coarse:h-10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
+              pressed ? 'border-live bg-accent font-medium text-accent-foreground shadow-[inset_0_-2px_0_var(--live)]' : 'border-border bg-card hover:bg-muted',
+            )}
+          >
+            {r === 'all' ? t('tour.page.everyRole') : t(`ws.roles.${r}`)}
+            {r === ownRole && <span className="font-mono text-[11px] text-muted-foreground">· {t('tour.page.you')}</span>}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/** What one role is for: who, where it starts, its main tasks (linked) and what it can and can't do. */
+function RoleGuide({ role, ownRole, content, sections }: { role: Role; ownRole: Role; content: HelpContent; sections: number }) {
+  const t = useT()
+  const guide = content.roleGuides[role]
+  const yes = PERMISSIONS.filter((p) => can(role, p))
+  const no = PERMISSIONS.filter((p) => !can(role, p))
+  const taskHref = (key: string) => {
+    const [c, s] = key.split('.')
+    return `#${sectionId(c, s)}`
+  }
+  return (
+    <section aria-labelledby="role-guide-title" className="mb-10 rounded-md border border-border bg-card">
+      <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-2 border-b border-border p-5">
+        <div className="min-w-0 flex-[1_1_20rem]">
+          <h2 id="role-guide-title" className="text-xl leading-7 font-normal tracking-[-0.005em]">
+            {t(`ws.roles.${role}`)}
+          </h2>
+          <p className="mt-1 max-w-3xl text-sm text-pretty text-muted-foreground">{guide.who}</p>
+        </div>
+        <p className="font-mono text-xs leading-5 text-muted-foreground tabular-nums">
+          {t('tour.page.startsOn', { screen: t(`nav.${landingSection(role)}`) })}
+          <br />
+          {t('tour.page.sectionsFor', { count: sections, role: t(`ws.roles.${role}`) })}
+        </p>
+      </div>
+      {role !== ownRole && (
+        <div className="border-b border-border px-5 py-3">
+          <Notice tone="info" live={false}>
+            {t('tour.page.viewingOther', { role: t(`ws.roles.${role}`), own: t(`ws.roles.${ownRole}`) })}
+          </Notice>
+        </div>
+      )}
+      <div className="grid gap-x-8 gap-y-6 p-5 md:grid-cols-2">
+        <div>
+          <h3 className="font-mono text-[11px] font-medium tracking-[0.025em] text-muted-foreground uppercase">{t('tour.page.mainTasks')}</h3>
+          <ol className="mt-2 space-y-1.5 text-sm">
+            {guide.tasks.map((task) => {
+              const [c, s] = task.section.split('.')
+              return (
+                <li key={task.section + task.text} className="flex gap-2.5">
+                  <span className="w-8 shrink-0 font-mono text-xs leading-5 text-muted-foreground tabular-nums">{sectionNumber(content, c, s)}</span>
+                  <a href={taskHref(task.section)} className="min-w-0 text-info-text underline-offset-4 hover:underline">
+                    {task.text}
+                  </a>
+                </li>
+              )
+            })}
+          </ol>
+        </div>
+        <div className="space-y-4">
+          <div>
+            <h3 className="font-mono text-[11px] font-medium tracking-[0.025em] text-muted-foreground uppercase">{t('tour.page.canDo')}</h3>
+            <ul className="mt-2 space-y-1.5 text-sm">
+              <li className="flex gap-2.5">
+                <Breaker state="live" className="mt-1" />
+                <span className="min-w-0 text-pretty">{t('tour.page.everyone')}</span>
+              </li>
+              {yes.map((p) => (
+                <li key={p} className="flex gap-2.5">
+                  <Breaker state="live" className="mt-1" />
+                  <span className="min-w-0 text-pretty">{content.diagrams.roles.permissions[p]}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+          {no.length > 0 && (
+            <div>
+              <h3 className="font-mono text-[11px] font-medium tracking-[0.025em] text-muted-foreground uppercase">{t('tour.page.needsOther')}</h3>
+              <ul className="mt-2 space-y-1.5 text-sm text-muted-foreground">
+                {no.map((p) => (
+                  <li key={p} className="flex gap-2.5">
+                    <Breaker state="idle" className="mt-1" />
+                    <span className="min-w-0 text-pretty">{content.diagrams.roles.permissions[p]}</span>
+                  </li>
+                ))}
+              </ul>
+              {role === ownRole && <p className="mt-2 text-xs text-muted-foreground">{t('tour.page.askAdmin')}</p>}
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+/** The guide sections a role doesn't use, listed with the roles they are for (opening one shows every role). */
+function OtherRoles({ hidden, content, onOpen }: { hidden: { chapter: HelpChapter; sections: HelpChapter['sections'] }[]; content: HelpContent; onOpen: (id: string) => void }) {
+  const t = useT()
+  const roleNames = useRoleNames()
+  return (
+    <section aria-labelledby="other-roles-title" className="mt-16 rounded-md border border-dashed border-border bg-card p-5">
+      <h2 id="other-roles-title" className="text-base font-semibold">
+        {t('tour.page.otherRolesTitle')}
+      </h2>
+      <p className="mt-0.5 max-w-3xl text-sm text-muted-foreground">{t('tour.page.otherRolesBody')}</p>
+      <div className="mt-4 grid gap-x-8 gap-y-4 sm:grid-cols-2">
+        {hidden.map(({ chapter, sections }) => (
+          <div key={chapter.id}>
+            <h3 className="text-sm font-medium">{chapter.title}</h3>
+            <ul className="mt-1.5 space-y-1 text-sm">
+              {sections.map((s) => {
+                const id = sectionId(chapter.id, s.id)
+                return (
+                  <li key={s.id} className="flex gap-2.5">
+                    <span className="w-8 shrink-0 font-mono text-xs leading-5 text-muted-foreground tabular-nums">{sectionNumber(content, chapter.id, s.id)}</span>
+                    <a
+                      href={`#${id}`}
+                      onClick={(e) => {
+                        e.preventDefault()
+                        onOpen(id)
+                      }}
+                      className="min-w-0 text-info-text underline-offset-4 hover:underline"
+                    >
+                      {t('tour.page.otherRolesSection', { title: s.title, roles: roleNames(chapter.id, s.id) ?? '' })}
+                    </a>
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function Chapter({ chapter, number, content, showRoles }: { chapter: HelpChapter; number: number; content: HelpContent; showRoles: boolean }) {
+  const t = useT()
+  const roleNames = useRoleNames()
   return (
     <section id={chapter.id} aria-labelledby={`${chapter.id}-title`} className="scroll-mt-6">
       {/* The chapter's plate: number, title, what it covers, and its sections. */}
@@ -294,9 +511,12 @@ function Chapter({ chapter, number, content }: { chapter: HelpChapter; number: n
 
       {chapter.sections.map((s) => (
         <div key={s.id} id={sectionId(chapter.id, s.id)} className="mt-10 scroll-mt-6">
-          <h3 className="flex items-baseline gap-3 text-base font-semibold">
+          <h3 className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-base font-semibold">
             <span className="font-mono text-sm font-medium text-muted-foreground tabular-nums">{sectionNumber(content, chapter.id, s.id)}</span>
             <span>{s.title}</span>
+            {showRoles && roleNames(chapter.id, s.id) && (
+              <span className="rounded-sm border border-border px-1.5 py-px font-mono text-[11px] font-normal text-muted-foreground">{t('tour.page.forRoles', { roles: roleNames(chapter.id, s.id)! })}</span>
+            )}
           </h3>
           <div className="mt-3 space-y-4">
             {s.blocks.map((b, i) => (
