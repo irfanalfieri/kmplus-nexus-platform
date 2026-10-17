@@ -40,6 +40,7 @@ import { transferTests } from './test/transfer-tests'
 import { dashboardTests } from './test/dashboard-tests'
 import { mapperTests } from './test/mapper-tests'
 import { backlogTests } from './test/backlog-tests'
+import { ownershipTests, relationsTests } from './test/relations-tests'
 import { localizeStepTitle } from '@/components/pipelines/step-title'
 import { alertEmail, inviteEmail, passwordChangedEmail, resetPasswordEmail } from '@/lib/email-templates'
 import { BUILTIN_MAPPING_TEMPLATES, PIPELINE_TEMPLATES, applyMappingTemplate, buildPipelineTemplate, mapToEntity } from '@/lib/pipelines/templates'
@@ -1534,6 +1535,8 @@ async function main() {
   await dashboardTests(test)
   await mapperTests(test)
   await backlogTests(test)
+  await relationsTests(test)
+  await ownershipTests(test)
 
   console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`)
 }

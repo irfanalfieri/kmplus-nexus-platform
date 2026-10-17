@@ -3,6 +3,7 @@ import { checkText } from './check-messages'
 import type { BusinessRule } from '@/lib/rules/definition'
 import { asString, evalCondition, evalGroup, isEmpty, type Row } from './conditions'
 import { sha256Hex } from './sha256'
+import { readPath, setPath } from './nested'
 
 export type { Row }
 
@@ -81,12 +82,70 @@ function formatDateIn(date: Date, pattern: string, timeZone: string) {
   }
 }
 
-/** Loaded lookup tables: "dataset|key|value" → (key → value). */
+/** Loaded lookup tables: "dataset|key|value" (relate: "…|match") → (key → value). */
 export type LookupTables = Map<string, Map<string, unknown>>
 
-export function applyTransform(value: unknown, t: Transform, row: Row = {}, tables?: LookupTables): unknown {
+export const RELATE_MISSING = ['quarantine', 'flag', 'empty', 'keep'] as const
+export type RelateMissing = (typeof RELATE_MISSING)[number]
+export const RELATE_MATCH = ['loose', 'loose_zeros', 'exact'] as const
+export type RelateMatch = (typeof RELATE_MATCH)[number]
+
+/** A relate transform's arguments with their defaults: [dataset, key column, id column, if not found, match]. */
+export function relateArgs(args: string[]) {
+  const [dataset = '', keyColumn = '', valueColumn = '', missing = '', match = ''] = args.map((x) => x.trim())
+  return {
+    dataset,
+    keyColumn,
+    valueColumn,
+    missing: ((RELATE_MISSING as readonly string[]).includes(missing) ? missing : 'quarantine') as RelateMissing,
+    match: ((RELATE_MATCH as readonly string[]).includes(match) ? match : 'loose') as RelateMatch,
+  }
+}
+
+/**
+ * A reference as compared by relate (MP-8): trimmed; loose also ignores case,
+ * loose_zeros also leading zeros ("00123" = "123"). Empty → null.
+ */
+export function relateKey(v: unknown, match: RelateMatch): string | null {
+  if (isEmpty(v)) return null
+  let s = asString(v).trim()
+  if (match !== 'exact') s = s.toLowerCase()
+  if (match === 'loose_zeros') s = s.replace(/^0+(?=.)/, '')
+  return s || null
+}
+
+/** A loaded key → id table re-keyed by the normalized reference (the first record wins when two normalize alike). */
+export function relateTable(pairs: Map<string, unknown>, match: RelateMatch): Map<string, unknown> {
+  const out = new Map<string, unknown>()
+  for (const [k, v] of pairs) {
+    const key = relateKey(k, match)
+    if (key !== null && !out.has(key)) out.set(key, v)
+  }
+  return out
+}
+
+/**
+ * `notes`: warnings that let the row through (relate set to flag); a thrown
+ * error quarantines the row.
+ */
+export function applyTransform(value: unknown, t: Transform, row: Row = {}, tables?: LookupTables, notes?: string[]): unknown {
   const [a = '', b = '', c = '', d = ''] = t.args
   switch (t.fn) {
+    case 'relate': {
+      // MP-8: a reference (MANAGER_NIK) → the related record's key (employee.id) through a dataset.
+      const r = relateArgs(t.args)
+      const table = tables?.get(`${r.dataset}|${r.keyColumn}|${r.valueColumn}|${r.match}`)
+      if (!table) throw new Error(`lookup table ${r.dataset}.${r.keyColumn} → ${r.valueColumn} is not loaded`)
+      const key = relateKey(value, r.match)
+      // No reference (e.g. the CEO has no manager) is not a missing one.
+      if (key === null) return null
+      const found = table.get(key)
+      if (found !== undefined && found !== null) return found
+      const message = checkText('relationMissing', { value: asString(value).trim(), dataset: r.dataset, key: r.keyColumn })
+      if (r.missing === 'quarantine') throw new Error(message)
+      if (r.missing === 'flag') notes?.push(message)
+      return r.missing === 'keep' ? value : null
+    }
     case 'lookup': {
       const table = tables?.get(`${a.trim()}|${b.trim()}|${c.trim()}`)
       if (!table) throw new Error(`lookup table ${a}.${b} → ${c} is not loaded`)
@@ -254,10 +313,15 @@ export function matchesFilter(row: Row, step: FilterStep, rules?: Map<string, Bu
   return evalGroup(row, { match: step.match, conditions: step.conditions, groups: [] })
 }
 
-/** Applies a Map step. Returns the new row plus per-field conversion errors. */
-export function applyMap(row: Row, step: MapStep, tables?: LookupTables): { row: Row; errors: string[] } {
+/**
+ * Applies a Map step. Returns the new row plus per-field conversion errors
+ * (the row is quarantined) and notes (the row is written and flagged).
+ * Sources may be paths into nested values; dotted outputs build nested objects (MP-7).
+ */
+export function applyMap(row: Row, step: MapStep, tables?: LookupTables): { row: Row; errors: string[]; notes: string[] } {
   const out: Row = {}
   const errors: string[] = []
+  const notes: string[] = []
   if (step.keepUnmapped) {
     const mapped = new Set(step.fields.map((f) => f.from))
     for (const [k, v] of Object.entries(row)) if (!mapped.has(k)) out[k] = v
@@ -265,17 +329,21 @@ export function applyMap(row: Row, step: MapStep, tables?: LookupTables): { row:
   // Internal routing hints survive mapping.
   for (const [k, v] of Object.entries(row)) if (k.startsWith('_nexus_')) out[k] = v
   for (const field of step.fields) {
+    const fieldNotes: string[] = []
     try {
-      let value = row[field.from]
-      for (const t of field.transforms) value = applyTransform(value, t, row, tables)
-      out[field.to] = coerce(value, field.type)
+      let value = readPath(row, field.from)
+      for (const t of field.transforms) value = applyTransform(value, t, row, tables, fieldNotes)
+      writeOutput(out, field.to, coerce(value, field.type))
+      notes.push(...fieldNotes.map((n) => `${field.to}: ${n}`))
     } catch (err) {
-      out[field.to] = null
+      writeOutput(out, field.to, null)
       errors.push(`${field.to}: ${err instanceof Error ? err.message : 'conversion failed'}`)
     }
   }
-  return { row: out, errors }
+  return { row: out, errors, notes }
 }
+
+const writeOutput = (out: Row, to: string, value: unknown) => (to.includes('.') ? setPath(out, to, value) : (out[to] = value))
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const digitsOnly = (s: string) => s.replace(/[\s.\-()/]/g, '')

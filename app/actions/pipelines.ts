@@ -30,6 +30,7 @@ import { nudgeWorker, startWorker } from '@/lib/pipelines/worker'
 import { readDatasetSample } from '@/lib/pipelines/io'
 import { applyMasks, accessFor } from '@/lib/governance/masking'
 import type { SchemaScanResult } from '@/lib/connectors/types'
+import type { NestedPath } from '@/lib/pipelines/nested'
 import { guard } from '@/lib/server-action'
 import { diffVersions } from '@/lib/pipelines/version-diff'
 import { loadSchemas } from '@/lib/datasets/store'
@@ -148,7 +149,7 @@ async function getBuilderOptionsImpl() {
         maxCallsPerRun: Number((s.config as { maxCallsPerRun?: number } | null)?.maxCallsPerRun) || DEFAULT_MAX_CALLS,
         tables: (config.schemaScan?.tables ?? []).map((t) => ({
           name: t.name,
-          columns: t.columns.map((c) => ({ name: c.name, type: c.type })),
+          columns: t.columns.map((c) => ({ name: c.name, type: c.type, ...(c.paths?.length ? { paths: c.paths as NestedPath[] } : {}) })),
         })),
       }
     }),

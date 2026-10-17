@@ -1,14 +1,17 @@
 'use server'
 
 import { z } from 'zod'
-import { and, desc, eq, inArray } from 'drizzle-orm'
+import { and, desc, eq, inArray, ne } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/lib/db'
-import { agents, dataSources, pipelines } from '@/lib/db/schema'
+import { agents, dataSources, pipelines, user, workspaceMembers, workspaces } from '@/lib/db/schema'
 import { assertConnectorInstalled } from '@/lib/connectors/install-check'
 import { getConnectorDefinition, isConnectorSlug } from '@/lib/connectors/catalog'
 import { decryptCredentials, encryptCredentials } from '@/lib/security/credentials'
-import { newId, requireWorkspace, type WorkspaceContext } from '@/lib/auth/session'
+import { contextInWorkspace, newId, requireWorkspace, type WorkspaceContext } from '@/lib/auth/session'
+import { can, isRole } from '@/lib/auth/permissions'
+import { ENVIRONMENTS, isEnvironment, type Environment } from '@/lib/pipelines/promote'
+import { copyableConfig, counterpart, counterpartHealth, normalizeTags, tagsOf, type CounterpartState } from '@/lib/connectors/ownership'
 import { recordAudit, type AuditAction } from '@/lib/audit'
 import { diffObjects } from '@/lib/audit-diff'
 import { hasCustomCredentialForm, maskCredentials, restoreSecrets } from '@/lib/connectors/secret-mask'
@@ -65,6 +68,8 @@ async function getDataSourcesImpl() {
       status: dataSources.status,
       lastConnected: dataSources.lastConnected,
       schemaDrift: dataSources.schemaDrift,
+      ownerId: dataSources.ownerId,
+      tags: dataSources.tags,
       createdAt: dataSources.createdAt,
       updatedAt: dataSources.updatedAt,
     })
@@ -99,6 +104,8 @@ async function createDataSourceImpl(input: z.input<typeof createInput>) {
   await db.insert(dataSources).values({
     id,
     userId: ctx.userId,
+    // DS-11: whoever adds a source owns it until someone else is named.
+    ownerId: ctx.userId,
     workspaceId: ctx.workspaceId,
     name: data.name,
     type: data.type,
@@ -387,6 +394,154 @@ async function deleteDataSourceImpl(rawId: string) {
   revalidatePath('/dashboard', 'layout')
 }
 
+// ── Ownership, tags and environments (DS-11) ────────────────────────────────
+
+const ownershipInput = z.object({
+  /** A workspace member, or null for no owner. */
+  ownerId: z.string().trim().min(1).max(100).nullable(),
+  tags: z.array(z.string().max(100)).max(50).default([]),
+})
+
+async function setDataSourceOwnershipImpl(rawId: string, input: z.input<typeof ownershipInput>) {
+  const ctx = await requireWorkspace('sources:manage')
+  const source = await getOwned(ctx, idSchema.parse(rawId))
+  const data = ownershipInput.parse(input)
+  const tags = normalizeTags(data.tags)
+  if (data.ownerId) {
+    const [member] = await db.select({ userId: workspaceMembers.userId }).from(workspaceMembers).where(and(eq(workspaceMembers.workspaceId, ctx.workspaceId), eq(workspaceMembers.userId, data.ownerId))).limit(1)
+    if (!member) throw new Error('The owner must be a member of this workspace.')
+  }
+  const before = { ownerId: source.ownerId ?? null, tags: tagsOf(source.tags) }
+  await db
+    .update(dataSources)
+    .set({ ownerId: data.ownerId, tags, updatedAt: new Date() })
+    .where(and(eq(dataSources.id, source.id), eq(dataSources.workspaceId, ctx.workspaceId)))
+  await recordAudit(ctx, { action: 'UPDATE', resource: 'data_source', resourceId: source.id, changes: { ownerId: data.ownerId, tags }, diff: diffObjects(before, { ownerId: data.ownerId, tags }) })
+  revalidatePath('/dashboard', 'layout')
+  return { tags }
+}
+
+/** The other workspaces of this workspace's environment group (dev → staging → prod), with the caller's role there. */
+async function environmentPeers(ctx: WorkspaceContext) {
+  const [ws] = await db.select({ groupId: workspaces.environmentGroupId, environment: workspaces.environment }).from(workspaces).where(eq(workspaces.id, ctx.workspaceId)).limit(1)
+  if (!ws?.groupId) return { environment: null, peers: [] }
+  const rows = await db
+    .select({ id: workspaces.id, name: workspaces.name, environment: workspaces.environment })
+    .from(workspaces)
+    .where(and(eq(workspaces.environmentGroupId, ws.groupId), ne(workspaces.id, ctx.workspaceId)))
+  const roles = rows.length
+    ? await db.select({ workspaceId: workspaceMembers.workspaceId, role: workspaceMembers.role }).from(workspaceMembers).where(and(eq(workspaceMembers.userId, ctx.userId), inArray(workspaceMembers.workspaceId, rows.map((r) => r.id))))
+    : []
+  const order = (e: string | null) => (isEnvironment(e) ? ENVIRONMENTS.indexOf(e) : 99)
+  return {
+    environment: isEnvironment(ws.environment) ? ws.environment : null,
+    peers: rows
+      .filter((r) => isEnvironment(r.environment))
+      .sort((a, b) => order(a.environment) - order(b.environment))
+      .map((r) => {
+        const role = roles.find((x) => x.workspaceId === r.id)?.role
+        return { id: r.id, name: r.name, environment: r.environment as Environment, canManage: isRole(role) && can(role, 'sources:manage') }
+      }),
+  }
+}
+
+/**
+ * Each data source's counterpart in the other environments of the group (DS-11):
+ * present (what promotion maps to), a name clash with another connector, or missing,
+ * with that environment's connection state. Never credentials.
+ */
+async function getSourceEnvironmentsImpl() {
+  const ctx = await requireWorkspace()
+  const { environment, peers } = await environmentPeers(ctx)
+  if (!peers.length) return { environment, environments: [], sources: {} as Record<string, { workspaceId: string; state: CounterpartState; id: string | null; health: 'live' | 'failing' | 'idle' | null; lastConnected: Date | string | null; owner: string | null }[]> }
+  const [mine, theirs] = await Promise.all([
+    db.select({ id: dataSources.id, name: dataSources.name, sourceType: dataSources.sourceType }).from(dataSources).where(eq(dataSources.workspaceId, ctx.workspaceId)),
+    db
+      .select({
+        workspaceId: dataSources.workspaceId,
+        id: dataSources.id,
+        name: dataSources.name,
+        sourceType: dataSources.sourceType,
+        status: dataSources.status,
+        lastConnected: dataSources.lastConnected,
+        healthFailures: dataSources.healthFailures,
+        ownerId: dataSources.ownerId,
+        ownerName: user.name,
+        ownerEmail: user.email,
+      })
+      .from(dataSources)
+      .leftJoin(user, eq(user.id, dataSources.ownerId))
+      .where(inArray(dataSources.workspaceId, peers.map((p) => p.id))),
+  ])
+  const sources: Record<string, { workspaceId: string; state: CounterpartState; id: string | null; health: 'live' | 'failing' | 'idle' | null; lastConnected: Date | string | null; owner: string | null }[]> = {}
+  for (const s of mine) {
+    sources[s.id] = peers.map((p) => {
+      const there = theirs.filter((x) => x.workspaceId === p.id)
+      const { state, source } = counterpart(s, there)
+      const row = source ? there.find((x) => x.id === source.id)! : null
+      return {
+        workspaceId: p.id,
+        state,
+        id: state === 'present' ? (row?.id ?? null) : null,
+        health: state === 'present' && row ? counterpartHealth(row) : null,
+        lastConnected: state === 'present' ? (row?.lastConnected ?? null) : null,
+        owner: state === 'present' && row?.ownerId ? (row.ownerName || row.ownerEmail || null) : null,
+      }
+    })
+  }
+  return { environment, environments: peers, sources }
+}
+
+const copyInput = z.object({ sourceId: idSchema, workspaceId: idSchema })
+
+/**
+ * Adds a data source to another environment of the group with the same name,
+ * connector, role, owner and tags, and no credentials: that environment's
+ * credentials are entered there (each environment connects to its own system).
+ */
+async function copyDataSourceToEnvironmentImpl(input: z.input<typeof copyInput>) {
+  const ctx = await requireWorkspace('sources:manage')
+  const data = copyInput.parse(input)
+  const source = await getOwned(ctx, data.sourceId)
+  const { peers } = await environmentPeers(ctx)
+  const peer = peers.find((p) => p.id === data.workspaceId)
+  if (!peer) throw new Error('That workspace is not another environment of this group.')
+  const tctx = await contextInWorkspace(ctx, peer.id, 'sources:manage')
+  const there = await db
+    .select({ id: dataSources.id, name: dataSources.name, sourceType: dataSources.sourceType, status: dataSources.status, lastConnected: dataSources.lastConnected, healthFailures: dataSources.healthFailures, ownerId: dataSources.ownerId })
+    .from(dataSources)
+    .where(eq(dataSources.workspaceId, tctx.workspaceId))
+  const existing = counterpart(source, there)
+  if (existing.state !== 'missing') throw new Error(`${tctx.workspaceName} already has a data source named "${source.name}".`)
+  await assertConnectorInstalled(source.sourceType)
+  const [ownerThere] = source.ownerId
+    ? await db.select({ userId: workspaceMembers.userId }).from(workspaceMembers).where(and(eq(workspaceMembers.workspaceId, tctx.workspaceId), eq(workspaceMembers.userId, source.ownerId))).limit(1)
+    : []
+  const id = newId('src')
+  const isFile = source.sourceType === 'file'
+  const tags = tagsOf(source.tags)
+  await db.insert(dataSources).values({
+    id,
+    userId: ctx.userId,
+    ownerId: ownerThere?.userId ?? ctx.userId,
+    workspaceId: tctx.workspaceId,
+    name: source.name,
+    type: source.type,
+    sourceType: source.sourceType,
+    config: copyableConfig(source.config),
+    // No credentials: health checks start once that environment's are saved (which runs a check).
+    credentials: encryptCredentials(id, isFile ? { storageKey: id } : {}, tctx.workspaceId),
+    status: 'disconnected',
+    healthCheckMinutes: isFile ? 0 : source.healthCheckMinutes,
+    nextHealthCheckAt: null,
+    tags,
+  })
+  await recordAudit(tctx, { action: 'CREATE', resource: 'data_source', resourceId: id, changes: { sourceType: source.sourceType, copiedFrom: ctx.workspaceId, copiedSource: source.id, tags } })
+  await recordAudit(ctx, { action: 'EXPORT', resource: 'data_source', resourceId: source.id, changes: { to: tctx.workspaceId, toEnvironment: peer.environment, targetSourceId: id } })
+  revalidatePath('/dashboard', 'layout')
+  return { id, workspaceId: tctx.workspaceId, workspaceName: tctx.workspaceName }
+}
+
 // ── Server actions: thin wrappers that return errors as values so their messages
 // reach the user in production. Call them through lib/actions/data-sources.ts. ──
 
@@ -442,4 +597,14 @@ export async function setHealthCheckInterval(...args: Parameters<typeof setHealt
 }
 export async function reviewSchemaDrift(...args: Parameters<typeof reviewSchemaDriftImpl>) {
   return guard(() => reviewSchemaDriftImpl(...args))
+}
+
+export async function setDataSourceOwnership(...args: Parameters<typeof setDataSourceOwnershipImpl>) {
+  return guard(() => setDataSourceOwnershipImpl(...args))
+}
+export async function getSourceEnvironments(...args: Parameters<typeof getSourceEnvironmentsImpl>) {
+  return guard(() => getSourceEnvironmentsImpl(...args))
+}
+export async function copyDataSourceToEnvironment(...args: Parameters<typeof copyDataSourceToEnvironmentImpl>) {
+  return guard(() => copyDataSourceToEnvironmentImpl(...args))
 }

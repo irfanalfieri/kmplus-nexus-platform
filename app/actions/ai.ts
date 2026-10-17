@@ -204,6 +204,8 @@ function describeNode(n: PipelineNode): string {
       return `stacks its inputs${n.sourceColumn ? ` (input in ${n.sourceColumn})` : ''}`
     case 'aggregate':
       return `groups by ${[...n.groupBy, ...(n.timeGrain ? [`${n.timeGrain.column}/${n.timeGrain.grain}`] : [])].join(', ') || 'all rows'}: ${n.measures.map((m) => `${m.name}=${m.fn}(${m.column})${m.condition ? ' where …' : ''}`).join('; ')}`.slice(0, 1500)
+    case 'split':
+      return `one row per item of the list ${n.path}${n.flattenItems ? ' (item fields as columns)' : ''}`
     case 'dedupe':
       return `one row per ${n.keys.join(', ')}, keeps the ${n.keep.replace('_', ' ')}${n.recentBy ? ` by ${n.recentBy}` : ''}`
     case 'enrich':

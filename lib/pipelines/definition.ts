@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { planLanes, type LanePlan } from './lanes'
+import { isOutputPath, outputPathIssues } from './nested'
 
 /**
  * Pipeline definition (stored in pipelines.config and pipeline_versions.config).
@@ -69,7 +70,7 @@ export const exprSchema: z.ZodType<Expr, z.ZodTypeDef, unknown> = z.lazy(() =>
 export const TRANSFORMS = [
   'trim', 'uppercase', 'lowercase', 'titlecase', 'replace', 'regex_replace', 'regex_extract',
   'default_if_empty', 'coalesce', 'prefix', 'suffix', 'substring', 'concat', 'split',
-  'format_date', 'round', 'number_format', 'to_number', 'to_boolean', 'hash', 'conditional', 'lookup',
+  'format_date', 'round', 'number_format', 'to_number', 'to_boolean', 'hash', 'conditional', 'lookup', 'relate',
 ] as const
 export type TransformName = (typeof TRANSFORMS)[number]
 
@@ -79,7 +80,9 @@ const transformSchema = z.object({
    * Argument(s): replace → [search, replacement]; regex_extract → [pattern, group]; substring → [start, length];
    * concat → [template with {column} placeholders]; split → [separator, index]; format_date → [pattern, inputFormat, timezone];
    * number_format → [decimals, locale]; coalesce → [other columns…]; conditional → [operator, value, then, else];
-   * lookup → [dataset, key column, value column, if not found] (MP-6: e.g. ORG_CODE → org_name from a dataset).
+   * lookup → [dataset, key column, value column, if not found] (MP-6: e.g. ORG_CODE → org_name from a dataset);
+   * relate → [dataset, key column, id column, if not found (quarantine | flag | empty | keep), match (loose | loose_zeros | exact)]
+   *   (MP-8: a reference such as MANAGER_NIK → the related record's employee.id; relateArgs in transforms.ts).
    */
   args: z.array(z.string()).default([]),
 })
@@ -154,8 +157,10 @@ const mapNode = z.object({
   fields: z
     .array(
       z.object({
+        /** A column, or a path into a nested value (MP-7: address.city, phones.0.number, assignments[].org). */
         from: z.string().min(1),
-        to: z.string().min(1).regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'Use letters, numbers and underscores'),
+        /** Dots build a nested object (MP-7: address.city → { address: { city } }). */
+        to: z.string().min(1).max(200).refine(isOutputPath, 'Use letters, numbers and underscores (dots build a nested object)'),
         type: z.enum(COLUMN_TYPES).default('text'),
         transforms: z.array(transformSchema).default([]),
       })
@@ -241,6 +246,29 @@ const unionNode = z.object({
   sourceColumn: z.string().trim().max(60).regex(/^([A-Za-z_][A-Za-z0-9_]*)?$/, 'Use letters, numbers and underscores').default('_source'),
   /** Value written for each input (keyed by the step it comes from); default: that lane's table. */
   labels: z.array(z.object({ from: z.string().min(1), label: z.string().trim().max(60) })).max(MAX_SOURCES).default([]),
+})
+
+// ── Nested lists (MP-7) ──
+
+/** One row per item of a list (e.g. an employee's assignments[]); the other columns repeat on every row. */
+const splitNode = z.object({
+  id: z.string(),
+  type: z.literal('split'),
+  position,
+  /** The list: a column or a path into a nested value (employment.assignments). */
+  path: z.string().trim().min(1, 'Choose the list to split').max(300),
+  /** Column for each item, or the prefix of an object item's fields (`<as>_<field>`); empty = the list's own name. */
+  as: z.string().trim().max(40).regex(/^([A-Za-z_][A-Za-z0-9_]*)?$/, 'Use letters, numbers and underscores').default(''),
+  /** Object items: their fields become columns (nested ones joined with _). */
+  flattenItems: z.boolean().default(true),
+  /** Column holding the item's position (1, 2 …); empty = not added. */
+  indexColumn: z.string().trim().max(63).regex(/^([A-Za-z_][A-Za-z0-9_]*)?$/, 'Use letters, numbers and underscores').default(''),
+  /** A row whose list is empty or missing: kept once (without item values) or dropped. */
+  onEmpty: z.enum(['keep', 'drop']).default('keep'),
+  /** Leave the list column itself out of the output. */
+  dropList: z.boolean().default(true),
+  /** Items per row at most; the rest are left out and the row is flagged. */
+  maxItems: z.number().int().min(1).max(10_000).default(1000),
 })
 
 // ── Blocking steps (they need every row before they can answer): Aggregate, Deduplicate ──
@@ -600,13 +628,14 @@ export function apiDestinationIssues(spec: Pick<ApiDestinationSpec, 'body' | 'pa
   return issues
 }
 
-export const nodeSchema = z.union([sourceNode, filterNode, mapNode, validateNode, rulesNode, routerNode, joinNode, unionNode, aggregateNode, dedupeNode, enrichStepSchema, apiCallStepSchema, destinationNode])
+export const nodeSchema = z.union([sourceNode, filterNode, mapNode, splitNode, validateNode, rulesNode, routerNode, joinNode, unionNode, aggregateNode, dedupeNode, enrichStepSchema, apiCallStepSchema, destinationNode])
 export type PipelineNode = z.infer<typeof nodeSchema>
 /** @deprecated name kept for v1 call sites; a node is a step. */
 export type PipelineStep = PipelineNode
 export type SourceStep = z.infer<typeof sourceNode>
 export type FilterStep = z.infer<typeof filterNode>
 export type MapStep = z.infer<typeof mapNode>
+export type SplitStep = z.infer<typeof splitNode>
 export type ValidateStep = z.infer<typeof validateNode>
 export type RulesStep = z.infer<typeof rulesNode>
 export type RouterStep = z.infer<typeof routerNode>
@@ -682,6 +711,7 @@ export const definitionSchema = z.preprocess(
       ids.add(n.id)
     }
     for (const n of def.nodes) if (n.type === 'filter' && !n.conditions.length && !n.ruleId) issue('A Filter needs a condition or a business rule.')
+    for (const n of def.nodes) if (n.type === 'map') for (const message of outputPathIssues(n.fields.map((f) => f.to))) issue(`${stepTitle(n)}: ${message}`)
     const sources = def.nodes.filter((n): n is SourceStep => n.type === 'source')
     const destinations = def.nodes.filter((n) => n.type === 'destination')
     if (!sources.length) issue('A pipeline needs a Source.')
@@ -797,6 +827,8 @@ export function stepTitle(n: PipelineNode): string {
       return n.ruleId ? 'Filter (rule)' : `Filter (${n.conditions.length} condition${n.conditions.length === 1 ? '' : 's'})`
     case 'map':
       return `Map ${n.fields.length} field${n.fields.length === 1 ? '' : 's'}`
+    case 'split':
+      return `Split list ${n.path || 'list'}`
     case 'validate':
       return `Validate (${n.rules.length} rule${n.rules.length === 1 ? '' : 's'})`
     case 'rules':
@@ -899,16 +931,29 @@ export function describeDefinitionError(error: z.ZodError) {
   return issue.message
 }
 
-/** Lookup tables a definition reads: "dataset|key|value" (loaded before a run, MP-6). */
-export function lookupRefs(def: PipelineDefinition): { key: string; dataset: string; keyColumn: string; valueColumn: string }[] {
-  const refs = new Map<string, { key: string; dataset: string; keyColumn: string; valueColumn: string }>()
+export interface LookupRef {
+  key: string
+  dataset: string
+  keyColumn: string
+  valueColumn: string
+  /** relate: how references are compared (the loaded table's keys are normalized the same way). */
+  match?: 'loose' | 'loose_zeros' | 'exact'
+}
+
+/**
+ * Lookup tables a definition reads (loaded before a run): lookup (MP-6) "dataset|key|value";
+ * relate (MP-8) "dataset|key|value|match", keyed by the normalized reference.
+ */
+export function lookupRefs(def: PipelineDefinition): LookupRef[] {
+  const refs = new Map<string, LookupRef>()
   for (const n of def.nodes) {
     if (n.type !== 'map') continue
     for (const f of n.fields) for (const t of f.transforms) {
-      if (t.fn !== 'lookup') continue
-      const [dataset = '', keyColumn = '', valueColumn = ''] = t.args.map((x) => x.trim())
-      const key = `${dataset}|${keyColumn}|${valueColumn}`
-      refs.set(key, { key, dataset, keyColumn, valueColumn })
+      if (t.fn !== 'lookup' && t.fn !== 'relate') continue
+      const [dataset = '', keyColumn = '', valueColumn = '', , rawMatch = ''] = t.args.map((x) => x.trim())
+      const match = t.fn === 'relate' ? (rawMatch === 'loose_zeros' || rawMatch === 'exact' ? rawMatch : 'loose') : undefined
+      const key = `${dataset}|${keyColumn}|${valueColumn}${match ? `|${match}` : ''}`
+      refs.set(key, { key, dataset, keyColumn, valueColumn, ...(match ? { match } : {}) })
     }
   }
   return [...refs.values()]

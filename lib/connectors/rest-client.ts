@@ -9,6 +9,7 @@ import { applyVariables, parseVariablesJson } from './rest/variables'
 import { parseJsonObject, redactRestRequest, type RestConfig, type RestIntegrationScheme, type RestRequestPreview } from './rest/config'
 import { connectorFetch, type ConnectorFetchOptions } from '@/lib/net/safe-url'
 import { isWithinBaseUrl } from './rest/agent-request'
+import { collectPaths, isPlainObject } from '@/lib/pipelines/nested'
 
 /**
  * Makes REST requests (server and Nexus Agent only). Every URL goes through
@@ -362,12 +363,15 @@ export function extractRecords(payload: unknown, dataPath: string): Record<strin
   return []
 }
 
+/** Columns of the first record; objects and lists are JSON with the nested values seen in the records (MP-7). */
 function inferColumnsFromRows(rows: Record<string, unknown>[]) {
   if (!rows.length) return []
+  const paths = collectPaths(rows)
   return Object.entries(rows[0]).map(([name, value]) => ({
     name,
-    type: typeof value === 'number' ? 'NUMERIC' : typeof value === 'boolean' ? 'BOOLEAN' : 'TEXT',
+    type: typeof value === 'number' ? 'NUMERIC' : typeof value === 'boolean' ? 'BOOLEAN' : isPlainObject(value) || Array.isArray(value) ? 'JSON' : 'TEXT',
     nullable: true,
+    ...(paths.get(name)?.length ? { paths: paths.get(name) } : {}),
   }))
 }
 

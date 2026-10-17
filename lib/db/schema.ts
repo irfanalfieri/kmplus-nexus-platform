@@ -189,6 +189,10 @@ export const dataSources = pgTable('data_sources', {
   healthFailures: integer('healthFailures').notNull().default(0),
   /** DS-8: changes found by the last schema scan that pipelines may feel, until someone reviews them (lib/connectors/drift.ts). */
   schemaDrift: jsonb('schemaDrift'),
+  /** DS-11: the person responsible for this source (a workspace member; the creator by default). Gets its health alerts too. */
+  ownerId: text('ownerId'),
+  /** DS-11: labels to find and group sources by (lib/connectors/ownership.ts normalizes them). */
+  tags: jsonb('tags').$type<string[]>().notNull().default([]),
   createdAt: timestamp('createdAt', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updatedAt', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [index('data_sources_workspace_idx').on(t.workspaceId), index('data_sources_health_due_idx').on(t.nextHealthCheckAt)])

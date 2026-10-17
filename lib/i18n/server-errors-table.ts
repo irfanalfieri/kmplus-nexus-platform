@@ -520,4 +520,12 @@ export const SERVER_ERRORS: readonly { en: string; id: string }[] = [
   { en: "Send test requests from a pipeline you can edit.", id: "Kirim permintaan uji dari pipeline yang dapat Anda sunting." },
   { en: "Reached {p0} (HTTP {p1}). Writes are tried with Send test request in a pipeline's Destination step.", id: "{p0} berhasil dijangkau (HTTP {p1}). Penulisan dicoba dengan Kirim permintaan uji di langkah Tujuan pipeline." },
   { en: '{p0}: the dataset has no key columns to upsert on. Set them in its schema.', id: '{p0}: dataset tidak memiliki kolom kunci untuk upsert. Tetapkan di skemanya.' },
+  // MP-7 nested JSON, MP-8 relationships.
+  { en: 'Use letters, numbers and underscores (dots build a nested object)', id: 'Gunakan huruf, angka, dan garis bawah (titik membentuk objek bertingkat)' },
+  { en: 'Choose the list to split', id: 'Pilih daftar yang akan dipecah' },
+  { en: '{p0}: "{p1}" is both a value and a group ({p2}).', id: '{p0}: "{p1}" sekaligus berupa nilai dan kelompok ({p2}).' },
+  // DS-11 ownership and environments.
+  { en: 'The owner must be a member of this workspace.', id: 'Pemilik harus anggota workspace ini.' },
+  { en: 'That workspace is not another environment of this group.', id: 'Workspace itu bukan lingkungan lain dalam grup ini.' },
+  { en: '{p0} already has a data source named "{p1}".', id: '{p0} sudah memiliki sumber data bernama "{p1}".' },
 ]

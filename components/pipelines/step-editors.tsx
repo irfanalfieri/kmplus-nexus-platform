@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Columns2, Plus, Scale, Sparkles, Trash2, Wand2, X } from 'lucide-react'
+import { Braces, Columns2, List, ListTree, Plus, Scale, Sparkles, Trash2, Wand2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Notice, type NoticeTone } from '@/components/ui/notice'
@@ -32,6 +32,7 @@ import {
   type RouterStep,
   type RulesStep,
   type SourceStep,
+  type SplitStep,
   type TransformName,
   type UnionStep,
   type ValidateStep,
@@ -48,10 +49,12 @@ import { ApiDestinationFields, newApiDestination } from './api-destination-edito
 import { SchemaMappingFields, schemaFor } from './schema-mapping'
 import { TwoPaneMapper } from './two-pane-mapper'
 import { recencyColumn } from '@/lib/pipelines/aggregate'
+import { flattenFields, flattenName, isPath, listCandidates, splitItemName, splitOutputColumns, type NestedPath } from '@/lib/pipelines/nested'
+import { RELATE_MATCH, RELATE_MISSING, relateArgs } from '@/lib/pipelines/transforms'
 import type { steps as stepsMessages } from '@/lib/i18n/messages/en/steps'
 
 export type BuilderOptions = Awaited<ReturnType<typeof getBuilderOptions>>
-export type Column = { name: string; type: string }
+export type Column = { name: string; type: string; paths?: NestedPath[] }
 
 export const selectClass =
   'h-8 w-full rounded-md border border-input bg-card px-2 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-60'
@@ -333,6 +336,14 @@ export function MapEditor({ step, columns, options, source, onChange }: { step: 
     const added = autoMapFields(columns, existing).filter((f) => !step.fields.some((x) => x.to === f.to))
     onChange({ ...step, fields: [...step.fields.filter((f) => f.from), ...added] })
   }
+  const nested = columns.some((c) => c.paths?.length || c.type === 'json')
+  const flatten = () => {
+    // MP-7: one field per nested value (address.city → address_city); lists stay whole.
+    const added = flattenFields(columns, new Set(step.fields.map((f) => f.to))).filter((f) => !step.fields.some((x) => x.from === f.from))
+    if (!added.length) return setTemplateMsg({ tone: 'info', text: t('steps.map.flattenNone') })
+    onChange({ ...step, fields: [...step.fields.filter((f) => f.from), ...added.map((f) => ({ ...f, transforms: [] }))] })
+    setTemplateMsg({ tone: 'success', text: t('steps.map.flattenAdded', { count: added.length }) })
+  }
   const templates: MappingTemplate[] = [...BUILTIN_MAPPING_TEMPLATES, ...(options?.mappingTemplates ?? [])]
   const applyTemplate = (id: string) => {
     const tpl = templates.find((x) => x.id === id)
@@ -382,6 +393,11 @@ export function MapEditor({ step, columns, options, source, onChange }: { step: 
         <Button size="sm" variant="outline" onClick={autoMap} disabled={!columns.length}>
           <Wand2 aria-hidden /> {t('steps.map.autoMap')}
         </Button>
+        {nested && (
+          <Button size="sm" variant="outline" onClick={flatten}>
+            <ListTree aria-hidden /> {t('steps.map.flatten')}
+          </Button>
+        )}
         <NativeSelect value="" onChange={applyTemplate} className="w-auto text-xs" aria-label={t('steps.map.applyTemplateLabel')}>
           <option value="">{t('steps.map.applyTemplate')}</option>
           {templates.map((tpl) => (
@@ -425,6 +441,7 @@ export function MapEditor({ step, columns, options, source, onChange }: { step: 
         </form>
       )}
       <p className="text-xs text-muted-foreground">{t('steps.map.help')}</p>
+      <p className="text-xs text-muted-foreground">{t('steps.map.nestedHelp')}</p>
       {templateMsg && (
         <Notice tone={templateMsg.tone} className="text-xs">
           {templateMsg.text}
@@ -433,7 +450,7 @@ export function MapEditor({ step, columns, options, source, onChange }: { step: 
       {step.fields.map((f, i) => (
         <div key={i} className="rounded-md border border-border p-2">
           <div className="grid grid-cols-[1fr_1fr_auto] gap-1.5">
-            <ColumnPicker columns={columns} value={f.from} onChange={(v) => update(i, { from: v, to: f.to || autoMapName(v) })} label={t('steps.map.sourceColumn', { n: i + 1 })} />
+            <SourcePicker columns={columns} value={f.from} onChange={(v) => update(i, { from: v, to: f.to || (isPath(v) ? flattenName(v) : autoMapName(v)) })} label={t('steps.map.sourceColumn', { n: i + 1 })} />
             <Input value={f.to} placeholder={t('steps.map.targetPlaceholder')} onChange={(e) => update(i, { to: e.target.value })} aria-label={t('steps.map.targetColumn', { n: i + 1 })} className="font-mono" />
             <Button size="icon-sm" variant="ghost" disabled={step.fields.length === 1} onClick={() => onChange({ ...step, fields: step.fields.filter((_, j) => j !== i) })} aria-label={t('steps.map.removeField', { name: f.to || i + 1 })}>
               <Trash2 aria-hidden />
@@ -450,6 +467,9 @@ export function MapEditor({ step, columns, options, source, onChange }: { step: 
             {f.transforms.map((tr, ti) => (
               <div key={ti} className="flex flex-wrap items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs">
                 <span className="font-medium">{t(`steps.transforms.${tr.fn}`)}</span>
+                {tr.fn === 'relate' && (
+                  <RelateArgs args={tr.args} datasets={options?.datasets ?? []} onChange={(args) => update(i, { transforms: f.transforms.map((x, xi) => (xi === ti ? { ...x, args } : x)) })} />
+                )}
                 {(TRANSFORM_ARGS[tr.fn] ?? []).map((arg, ai) => (
                   <input
                     key={ai}
@@ -477,7 +497,7 @@ export function MapEditor({ step, columns, options, source, onChange }: { step: 
             <NativeSelect
               value=""
               aria-label={t('steps.map.addTransformTo', { name: f.to || t('steps.map.fieldN', { n: i + 1 }) })}
-              onChange={(v) => v && update(i, { transforms: [...f.transforms, { fn: v as TransformName, args: [] }] })}
+              onChange={(v) => v && update(i, { transforms: [...f.transforms, { fn: v as TransformName, args: v === 'relate' ? ['', '', '', 'quarantine', 'loose'] : [] }] })}
               className="h-7 w-auto border-dashed px-1 text-xs text-muted-foreground"
             >
               <option value="">{t('steps.map.addTransform')}</option>
@@ -488,11 +508,190 @@ export function MapEditor({ step, columns, options, source, onChange }: { step: 
               ))}
             </NativeSelect>
           </div>
+          {f.transforms.some((tr) => tr.fn === 'relate') && <p className="mt-1 text-xs text-muted-foreground">{t('steps.map.relate.help')}</p>}
         </div>
       ))}
       <Button size="sm" variant="outline" onClick={() => onChange({ ...step, fields: [...step.fields, { from: '', to: '', type: 'text', transforms: [] }] })}>
         <Plus aria-hidden /> {t('steps.map.addField')}
       </Button>
+    </div>
+  )
+}
+
+/** A Map source: a column, or a path into a nested value (MP-7), picked from the known paths or typed. */
+function SourcePicker({ columns, value, onChange, label }: { columns: Column[]; value: string; onChange: (v: string) => void; label: string }) {
+  const t = useT()
+  const nestedOf = (c: Column): NestedPath[] => (c.paths ?? []).filter((p) => !p.path.includes('[]'))
+  const known = columns.some((c) => c.name === value || nestedOf(c).some((p) => p.path === value))
+  const [typing, setTyping] = useState(() => Boolean(value) && !known && isPath(value))
+  if (!columns.length || typing) {
+    return (
+      <div className="flex min-w-0 gap-1">
+        <Input value={value} onChange={(e) => onChange(e.target.value.trim())} placeholder={t('steps.map.pathPlaceholder')} aria-label={label} className="font-mono" />
+        {columns.length > 0 && (
+          <Button size="icon-sm" variant="ghost" onClick={() => setTyping(false)} aria-label={t('steps.map.pickColumn')} title={t('steps.map.pickColumn')}>
+            <List aria-hidden />
+          </Button>
+        )}
+      </div>
+    )
+  }
+  return (
+    <div className="flex min-w-0 gap-1">
+      <NativeSelect value={value} onChange={onChange} aria-label={label}>
+        <option value="">{t('steps.columnPicker.choose')}</option>
+        {!known && value && <option value={value}>{t('steps.columnPicker.notInSchema', { name: value })}</option>}
+        {columns.map((c) =>
+          nestedOf(c).length ? (
+            <optgroup key={c.name} label={c.name}>
+              <option value={c.name}>{c.name}</option>
+              {nestedOf(c).map((p) => (
+                <option key={p.path} value={p.path}>
+                  {p.path}
+                </option>
+              ))}
+            </optgroup>
+          ) : (
+            <option key={c.name} value={c.name}>
+              {c.name}
+            </option>
+          )
+        )}
+      </NativeSelect>
+      <Button size="icon-sm" variant="ghost" onClick={() => setTyping(true)} aria-label={t('steps.map.typePath')} title={t('steps.map.typePath')}>
+        <Braces aria-hidden />
+      </Button>
+    </div>
+  )
+}
+
+const chipSelectClass = 'h-6 w-auto max-w-40 px-1 text-xs'
+
+/** The relate transform's arguments (MP-8): dataset, key column, id column, if not found, compare. */
+function RelateArgs({ args, datasets, onChange }: { args: string[]; datasets: { name: string; columns: { name: string }[] }[]; onChange: (args: string[]) => void }) {
+  const t = useT()
+  const r = relateArgs(args)
+  const ds = datasets.find((d) => d.name === r.dataset)
+  const cols = ds?.columns.map((c) => c.name).filter((c) => !c.startsWith('_nexus_')) ?? []
+  const set = (patch: Partial<typeof r>) => {
+    const next = { ...r, ...patch }
+    onChange([next.dataset, next.keyColumn, next.valueColumn, next.missing, next.match])
+  }
+  const colSelect = (value: string, key: 'keyColumn' | 'valueColumn') => (
+    <NativeSelect value={value} onChange={(v) => set({ [key]: v })} className={chipSelectClass} aria-label={t(`steps.map.relate.${key}`)} title={t(`steps.map.relate.${key}`)}>
+      <option value="">{t(`steps.map.relate.${key}`)}…</option>
+      {value && !cols.includes(value) && <option value={value}>{value}</option>}
+      {cols.map((c) => (
+        <option key={c} value={c}>
+          {c}
+        </option>
+      ))}
+    </NativeSelect>
+  )
+  return (
+    <>
+      <NativeSelect
+        value={r.dataset}
+        onChange={(v) => {
+          const next = datasets.find((d) => d.name === v)?.columns.map((c) => c.name) ?? []
+          set({ dataset: v, keyColumn: '', valueColumn: next.includes('id') ? 'id' : '' })
+        }}
+        className={chipSelectClass}
+        aria-label={t('steps.map.relate.dataset')}
+        title={t('steps.map.relate.dataset')}
+      >
+        <option value="">{t('steps.map.relate.chooseDataset')}</option>
+        {r.dataset && !ds && <option value={r.dataset}>{r.dataset}</option>}
+        {datasets.map((d) => (
+          <option key={d.name} value={d.name}>
+            {d.name}
+          </option>
+        ))}
+      </NativeSelect>
+      {colSelect(r.keyColumn, 'keyColumn')}
+      <span aria-hidden>→</span>
+      {colSelect(r.valueColumn, 'valueColumn')}
+      <NativeSelect value={r.missing} onChange={(v) => set({ missing: v as typeof r.missing })} className={chipSelectClass} aria-label={t('steps.map.relate.missing')} title={t('steps.map.relate.missing')}>
+        {RELATE_MISSING.map((m) => (
+          <option key={m} value={m}>
+            {t(`steps.map.relate.missingOptions.${m}`)}
+          </option>
+        ))}
+      </NativeSelect>
+      <NativeSelect value={r.match} onChange={(v) => set({ match: v as typeof r.match })} className={chipSelectClass} aria-label={t('steps.map.relate.match')} title={t('steps.map.relate.match')}>
+        {RELATE_MATCH.map((m) => (
+          <option key={m} value={m}>
+            {t(`steps.map.relate.matchOptions.${m}`)}
+          </option>
+        ))}
+      </NativeSelect>
+    </>
+  )
+}
+
+// ── Split list (MP-7) ────────────────────────────────────────────────────────
+
+export function SplitEditor({ step, columns, onChange }: { step: SplitStep; columns: Column[]; onChange: (s: SplitStep) => void }) {
+  const t = useT()
+  const lists = listCandidates(columns)
+  const [typing, setTyping] = useState(() => Boolean(step.path) && !lists.includes(step.path))
+  const added = splitOutputColumns(columns, step).filter((c) => !columns.some((x) => x.name === c.name)).map((c) => c.name)
+  return (
+    <div className="grid gap-3">
+      <p className="text-xs text-muted-foreground">{t('steps.split.help')}</p>
+      <Field label={t('steps.split.path')}>
+        <div className="flex min-w-0 gap-1">
+          {typing || !lists.length ? (
+            <Input value={step.path} onChange={(e) => onChange({ ...step, path: e.target.value.trim() })} placeholder={t('steps.split.pathPlaceholder')} className="font-mono" />
+          ) : (
+            <NativeSelect value={step.path} onChange={(v) => onChange({ ...step, path: v })}>
+              <option value="">{t('steps.split.choose')}</option>
+              {step.path && !lists.includes(step.path) && <option value={step.path}>{step.path}</option>}
+              <optgroup label={t('steps.split.knownLists')}>
+                {lists.map((p) => (
+                  <option key={p} value={p}>
+                    {p}
+                  </option>
+                ))}
+              </optgroup>
+            </NativeSelect>
+          )}
+          {lists.length > 0 && (
+            <Button size="icon-sm" variant="ghost" onClick={() => setTyping(!typing)} aria-label={typing ? t('steps.split.pickList') : t('steps.split.typePath')} title={typing ? t('steps.split.pickList') : t('steps.split.typePath')}>
+              {typing ? <List aria-hidden /> : <Braces aria-hidden />}
+            </Button>
+          )}
+        </div>
+      </Field>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label={t('steps.split.as')}>
+          <Input value={step.as} onChange={(e) => onChange({ ...step, as: e.target.value.trim() })} placeholder={t('steps.split.asPlaceholder', { name: splitItemName({ path: step.path, as: '' }) })} className="font-mono" />
+        </Field>
+        <Field label={t('steps.split.indexColumn')}>
+          <Input value={step.indexColumn} onChange={(e) => onChange({ ...step, indexColumn: e.target.value.trim() })} placeholder={t('steps.split.indexPlaceholder')} className="font-mono" />
+        </Field>
+      </div>
+      <label className="flex items-center gap-2 text-sm">
+        <input type="checkbox" className="size-4 accent-primary" checked={step.flattenItems} onChange={(e) => onChange({ ...step, flattenItems: e.target.checked })} />
+        {t('steps.split.flattenItems')}
+      </label>
+      <label className="flex items-center gap-2 text-sm">
+        <input type="checkbox" className="size-4 accent-primary" checked={step.dropList} onChange={(e) => onChange({ ...step, dropList: e.target.checked })} />
+        {t('steps.split.dropList')}
+      </label>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label={t('steps.split.onEmpty')}>
+          <NativeSelect value={step.onEmpty} onChange={(v) => onChange({ ...step, onEmpty: v as SplitStep['onEmpty'] })}>
+            <option value="keep">{t('steps.split.keepEmpty')}</option>
+            <option value="drop">{t('steps.split.dropEmpty')}</option>
+          </NativeSelect>
+        </Field>
+        <Field label={t('steps.split.maxItems')}>
+          <Input type="number" min={1} max={10000} value={step.maxItems} onChange={(e) => onChange({ ...step, maxItems: Math.min(10000, Math.max(1, Number(e.target.value) || 1)) })} />
+        </Field>
+      </div>
+      <p className="text-xs text-muted-foreground">{t('steps.split.maxItemsHelp')}</p>
+      {step.path && added.length > 0 && <p className="text-xs text-muted-foreground">{t('steps.split.outputs', { columns: added.join(', ') })}</p>}
     </div>
   )
 }

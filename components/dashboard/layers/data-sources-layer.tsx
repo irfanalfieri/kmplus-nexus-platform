@@ -5,7 +5,7 @@ import { AiConnectorSuggest } from '@/components/ai/ai-connector-suggest'
 import { suggestConnector } from '@/lib/actions/ai'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { Activity, Database, Eye, KeyRound, Loader2, MoreHorizontal, Pencil, Plus, RefreshCw, Save, Trash2, Upload } from 'lucide-react'
+import { Activity, Database, Eye, KeyRound, Layers, Loader2, MoreHorizontal, Pencil, Plus, RefreshCw, Save, Tag, Trash2, Upload } from 'lucide-react'
 import EditCredentialsDialog from '@/components/connectors/edit-credentials-dialog'
 import { useCan } from '@/components/workspace/workspace-context'
 import { Button, buttonVariants } from '@/components/ui/button'
@@ -18,6 +18,9 @@ import { Table, TBody, Td, Th, THead, Tr } from '@/components/ui/data-table'
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from '@/components/ui/menu'
 import { StateMark } from '@/components/ui/flow-line'
 import { SourceHealthDialog } from '@/components/data-sources/source-health'
+import { EnvironmentMarks, EnvironmentsDialog, OwnershipDialog, memberName, type Member, type SourceEnvironments } from '@/components/data-sources/source-ownership'
+import { matchesSourceFilter, tagCounts, tagsOf, type SourceFilter } from '@/lib/connectors/ownership'
+import { listMembers } from '@/lib/actions/workspaces'
 import { useToast } from '@/components/ui/toast'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import ConnectorCredentialForm from '@/components/connectors/connector-credential-form'
@@ -32,7 +35,7 @@ import { REST_DEFAULTS, validateRestCredentials } from '@/lib/connectors/rest/co
 import { validateSalesforceCredentials } from '@/lib/connectors/salesforce/oauth'
 import { SALESFORCE_DEFAULTS } from '@/components/connectors/salesforce-connector-form'
 import type { SchemaScanResult } from '@/lib/connectors/types'
-import { createDataSource, deleteDataSource, getDataSources, renameDataSource, setDataSourceRole, testConnection } from '@/lib/actions/data-sources'
+import { createDataSource, deleteDataSource, getDataSources, getSourceEnvironments, renameDataSource, setDataSourceRole, testConnection } from '@/lib/actions/data-sources'
 import { getInstalledConnectorSlugs } from '@/lib/actions/connectors'
 import { previewRestConnection, testAndScanDataSource } from '@/lib/actions/connector-source'
 import type { RestRequestPreview } from '@/lib/connectors/rest/config'
@@ -49,7 +52,12 @@ type DataSourceRow = {
   /** DS-8: unreviewed schema changes. */
   schemaDrift: boolean
   config?: Record<string, unknown> | null
+  /** DS-11 */
+  ownerId: string | null
+  tags: string[]
 }
+
+const NO_FILTER: SourceFilter = { tag: '', owner: '', text: '' }
 
 function credentialsValid(slug: string, values: Record<string, string>) {
   if (slug === 'rest') return validateRestCredentials(values)
@@ -84,6 +92,11 @@ export default function DataSourcesLayer() {
   const [uploadFor, setUploadFor] = useState<string | null>(null)
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null)
   const [healthFor, setHealthFor] = useState<string | null>(null)
+  const [members, setMembers] = useState<(Member & { isYou: boolean })[]>([])
+  const [envs, setEnvs] = useState<SourceEnvironments | null>(null)
+  const [filter, setFilter] = useState<SourceFilter>(NO_FILTER)
+  const [ownershipFor, setOwnershipFor] = useState<DataSourceRow | null>(null)
+  const [envFor, setEnvFor] = useState<DataSourceRow | null>(null)
 
   const installedConnectors = useMemo(() => CONNECTOR_CATALOG.filter((c) => installedSlugs.includes(c.slug)), [installedSlugs])
 
@@ -100,8 +113,16 @@ export default function DataSourcesLayer() {
   // Initial state is loading; later refreshes update the list in place (no flicker).
   const loadAll = useCallback(async () => {
     try {
-      const [rows, slugs] = await Promise.all([getDataSources(), getInstalledConnectorSlugs()])
+      const [rows, slugs, people, environments] = await Promise.all([
+        getDataSources(),
+        getInstalledConnectorSlugs(),
+        listMembers().catch(() => []),
+        // DS-11: the same source in the other environments of the group (none without a group).
+        getSourceEnvironments().catch(() => null),
+      ])
       setInstalledSlugs(slugs)
+      setMembers(people)
+      setEnvs(environments)
       setSources(
         rows.map((row) => ({
           id: row.id,
@@ -113,6 +134,8 @@ export default function DataSourcesLayer() {
           lastConnected: row.lastConnected,
           schemaDrift: Boolean(row.schemaDrift),
           config: row.config as Record<string, unknown> | null,
+          ownerId: row.ownerId ?? null,
+          tags: tagsOf(row.tags),
         })),
       )
       setListError('')
@@ -146,6 +169,12 @@ export default function DataSourcesLayer() {
   const roleLabel = (role: Role) => (role === 'destination' ? t('sources.roleDestination') : t('sources.roleSource'))
   const selectedSource = selectedSourceId ? sources.find((s) => s.id === selectedSourceId) : null
   const selectedSchemaScan = selectedSource?.config?.schemaScan as SchemaScanResult | undefined
+  const tags = useMemo(() => tagCounts(sources), [sources])
+  const shown = useMemo(() => sources.filter((s) => matchesSourceFilter(s, filter)), [sources, filter])
+  const filtering = filter.tag !== '' || filter.owner !== '' || filter.text.trim() !== ''
+  const me = members.find((m) => m.isYou)?.userId ?? ''
+  const ownerOf = (s: DataSourceRow) => (s.ownerId ? (memberName(members.find((m) => m.userId === s.ownerId)) ?? t('sources.formerMember')) : null)
+  const hasEnvs = Boolean(envs?.environments.length)
 
   return (
     <div>
@@ -161,6 +190,29 @@ export default function DataSourcesLayer() {
         />
       )}
       {healthFor && <SourceHealthDialog sourceId={healthFor} onClose={() => setHealthFor(null)} onChanged={() => void loadAll()} />}
+      {ownershipFor && (
+        <OwnershipDialog
+          source={ownershipFor}
+          members={members}
+          onClose={() => setOwnershipFor(null)}
+          onSaved={(message) => {
+            setOwnershipFor(null)
+            toast({ message })
+            void loadAll()
+          }}
+        />
+      )}
+      {envFor && envs && (
+        <EnvironmentsDialog
+          source={envFor}
+          data={envs}
+          onClose={() => setEnvFor(null)}
+          onCopied={(message) => {
+            toast({ message })
+            void loadAll()
+          }}
+        />
+      )}
       {uploadFor &&
         (() => {
           const src = sources.find((x) => x.id === uploadFor)
@@ -269,6 +321,38 @@ export default function DataSourcesLayer() {
           </Notice>
         )}
         {listError && <Notice tone="danger">{listError}</Notice>}
+        {!loading && sources.length > 0 && (
+          <div role="search" aria-label={t('sources.filterLabel')} className="flex flex-wrap items-end gap-2">
+            <Input value={filter.text} onChange={(e) => setFilter({ ...filter, text: e.target.value })} placeholder={t('sources.filterText')} aria-label={t('sources.filterText')} className="w-64 max-w-full" />
+            {tags.length > 0 && (
+              <select value={filter.tag} onChange={(e) => setFilter({ ...filter, tag: e.target.value })} className={nativeSelectClass + ' w-auto'} aria-label={t('sources.filterTag')}>
+                <option value="">{t('sources.anyTag')}</option>
+                {tags.map((x) => (
+                  <option key={x.tag} value={x.tag}>
+                    {x.tag} ({x.count})
+                  </option>
+                ))}
+              </select>
+            )}
+            <select value={filter.owner} onChange={(e) => setFilter({ ...filter, owner: e.target.value })} className={nativeSelectClass + ' w-auto'} aria-label={t('sources.filterOwner')}>
+              <option value="">{t('sources.anyOwner')}</option>
+              {me && <option value={me}>{t('sources.ownedByMe')}</option>}
+              {members
+                .filter((m) => !m.isYou && sources.some((s) => s.ownerId === m.userId))
+                .map((m) => (
+                  <option key={m.userId} value={m.userId}>
+                    {memberName(m)}
+                  </option>
+                ))}
+              <option value="none">{t('sources.noOwner')}</option>
+            </select>
+            {filtering && (
+              <Button variant="ghost" size="sm" onClick={() => setFilter(NO_FILTER)}>
+                {t('sources.clearFilters')}
+              </Button>
+            )}
+          </div>
+        )}
 
         <section aria-label={t('pages.sources.title')} className="rounded-lg border border-border bg-card">
           {loading ? (
@@ -296,6 +380,9 @@ export default function DataSourcesLayer() {
               {t('sources.emptyBody')}
             </EmptyState>
           ) : (
+            shown.length === 0 ? (
+            <p className="p-8 text-center text-sm text-muted-foreground">{t('sources.noneMatch')}</p>
+            ) : (
             <Table label={t('pages.sources.title')} className="min-w-[760px]">
               <THead>
                 <tr>
@@ -304,13 +391,14 @@ export default function DataSourcesLayer() {
                   <Th>{t('sources.colStatus')}</Th>
                   <Th className="text-right">{t('sources.colTables')}</Th>
                   <Th>{t('sources.colChecked')}</Th>
+                  {hasEnvs && <Th>{t('sources.colEnvironments')}</Th>}
                   <Th className="text-right">
                     <span className="sr-only">{t('common.edit')}</span>
                   </Th>
                 </tr>
               </THead>
               <TBody>
-                {sources.map((source) => {
+                {shown.map((source) => {
                   const role: Role = source.role ?? 'source'
                   const connected = source.status === 'connected'
                   const scan = source.config?.schemaScan as SchemaScanResult | undefined
@@ -319,6 +407,18 @@ export default function DataSourcesLayer() {
                       <Td>
                         <div className="font-medium">{source.name}</div>
                         <div className="text-xs text-muted-foreground">{getConnectorDefinition(source.sourceType)?.name ?? source.sourceType.toUpperCase()}</div>
+                        <div className="mt-0.5 text-xs text-muted-foreground">{ownerOf(source) ? t('sources.ownerLine', { name: ownerOf(source)! }) : t('sources.noOwner')}</div>
+                        {source.tags.length > 0 && (
+                          <ul className="mt-1 flex flex-wrap gap-1" aria-label={t('sources.tagsOf', { name: source.name })}>
+                            {source.tags.map((tag) => (
+                              <li key={tag}>
+                                <button type="button" onClick={() => setFilter({ ...filter, tag })} className="rounded-sm border border-border bg-muted px-1.5 py-px font-mono text-[11px] hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring">
+                                  {tag}
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
                       </Td>
                       <Td>
                         {isSecretManager(source.sourceType) ? (
@@ -356,6 +456,13 @@ export default function DataSourcesLayer() {
                       </Td>
                       <Td className="text-right font-mono text-xs">{scan && !isSecretManager(source.sourceType) ? scan.tables.length : '—'}</Td>
                       <Td className="font-mono text-xs text-muted-foreground">{ago(source.lastConnected)}</Td>
+                      {hasEnvs && envs && (
+                        <Td>
+                          <button type="button" onClick={() => setEnvFor(source)} className="rounded-sm text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring" aria-label={t('sources.environmentsTitle', { name: source.name })}>
+                            <EnvironmentMarks rows={envs.sources[source.id] ?? []} environments={envs.environments} />
+                          </button>
+                        </Td>
+                      )}
                       <Td className="text-right">
                         <div className="flex items-center justify-end gap-1.5">
                           {canManage && source.sourceType === 'file' && (
@@ -393,6 +500,14 @@ export default function DataSourcesLayer() {
                                     <KeyRound aria-hidden /> {t('sources.editCredentials')}
                                   </MenuItem>
                                 )}
+                                <MenuItem onClick={() => setOwnershipFor(source)}>
+                                  <Tag aria-hidden /> {t('sources.ownership')}
+                                </MenuItem>
+                                {hasEnvs && (
+                                  <MenuItem onClick={() => setEnvFor(source)}>
+                                    <Layers aria-hidden /> {t('sources.environments')}
+                                  </MenuItem>
+                                )}
                                 <MenuItem
                                   onClick={() => {
                                     setEditName(source.name)
@@ -415,6 +530,7 @@ export default function DataSourcesLayer() {
                 })}
               </TBody>
             </Table>
+            )
           )}
         </section>
       </div>

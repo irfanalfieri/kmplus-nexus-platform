@@ -13,6 +13,7 @@
  */
 import { evalExpr, isEmpty, type Row } from './conditions'
 import { checkText } from './check-messages'
+import { readPath } from './nested'
 import { suggestCanonicalField } from '@/lib/domain/model'
 import { isBatchBody, PATH_PLACEHOLDER, walkBody, type ApiDestinationSpec, type BodyFormat, type BodyNode, type BodyValueType, type Expr } from './definition'
 
@@ -459,7 +460,7 @@ function renderValue(n: Extract<BodyNode, { t: 'value' }>, path: string, st: Ren
   let v: unknown
   const b = n.binding
   try {
-    v = b.kind === 'column' ? st.row[b.column] : b.kind === 'constant' ? b.value : b.kind === 'expr' ? evalExpr(st.row, b.expr) : b.kind === 'meta' ? st.meta[b.name] : null
+    v = b.kind === 'column' ? readPath(st.row, b.column) : b.kind === 'constant' ? b.value : b.kind === 'expr' ? evalExpr(st.row, b.expr) : b.kind === 'meta' ? st.meta[b.name] : null
   } catch (err) {
     st.errors.push(`${path}: ${err instanceof Error ? err.message : String(err)}`)
     return OMIT

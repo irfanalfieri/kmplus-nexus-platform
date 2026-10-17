@@ -5,6 +5,7 @@ import { ruleBodySchema, type BusinessRule } from '@/lib/rules/definition'
 import { lookupRefs, referencedRuleIds, type PipelineDefinition } from './definition'
 import { emptyContext, type EngineContext } from './engine'
 import { NonRetryableError, readDatasetColumnValues, readDatasetPairs } from './io'
+import { relateTable } from './transforms'
 
 /** Business rules of a workspace by id (invalid stored bodies are skipped). */
 export async function loadRules(workspaceId: string, ids: string[]): Promise<Map<string, BusinessRule>> {
@@ -49,7 +50,7 @@ export async function loadRunContext(workspaceId: string, def: PipelineDefinitio
     ctx.lookups.set(ref, await readDatasetColumnValues(ds.tableName, column))
   }
 
-  // Lookup tables for Map "lookup" transforms (MP-6).
+  // Lookup tables for Map "lookup" (MP-6) and "relate" (MP-8) transforms.
   for (const ref of lookupRefs(def)) {
     if (!ref.dataset || !ref.keyColumn || !ref.valueColumn) throw new NonRetryableError('A lookup transform needs a dataset, a key column and a value column.')
     const [ds] = await db
@@ -61,7 +62,8 @@ export async function loadRunContext(workspaceId: string, def: PipelineDefinitio
     const names = ((ds.columns as { name: string }[]) ?? []).map((c) => c.name)
     for (const col of [ref.keyColumn, ref.valueColumn]) if (!names.includes(col)) throw new NonRetryableError(`Dataset ${ref.dataset} has no column ${col}.`)
     ctx.lookupTables ??= new Map()
-    ctx.lookupTables.set(ref.key, await readDatasetPairs(ds.tableName, ref.keyColumn, ref.valueColumn))
+    const pairs = await readDatasetPairs(ds.tableName, ref.keyColumn, ref.valueColumn)
+    ctx.lookupTables.set(ref.key, ref.match ? relateTable(pairs, ref.match) : pairs)
   }
   return ctx
 }

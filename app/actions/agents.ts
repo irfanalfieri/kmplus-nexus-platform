@@ -113,6 +113,7 @@ async function addAgentDataSourceImpl(input: z.input<typeof addInput>) {
   await db.insert(dataSources).values({
     id,
     userId: ctx.userId,
+    ownerId: ctx.userId,
     workspaceId: ctx.workspaceId,
     name,
     type: 'database',

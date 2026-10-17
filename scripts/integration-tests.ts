@@ -16,7 +16,7 @@ import { db, pool } from '@/lib/db'
 import { agentTasks as agentTaskTable, agents as agentTable, apiCallCache, apiCallLedger, apiKeys, apiRateLimits, auditLogs, businessRuleVersions, businessRules, catalogEntries, connectorInstalls, dashboards, dataSources, datasetPolicies, datasetQualitySnapshots, domainMappings, mappingTemplates, notifications, pipelineApprovals, scimGroups, scimTokens, scimUsers, ssoProvider, webhookDeliveries, webhooks, workspaceSso, executionLogs, nexusDatasets, pipelineJobs, pipelineRunRejects, pipelines, pipelineStageTables, pipelineVersions, session, user, verification, workspaceInvites, workspaceMembers, workspaces, datasetColumnAliases, datasetSchemaVersions, datasetSchemas, upgradeNoticeDismissals, sourceHealthChecks, pipelineAlerts, alertChannels, maintenanceWindows, dashboardEmbeds, pipelineTriggerEvents } from '@/lib/db/schema'
 import { acceptInvite, changeMemberRole, createAccountFromInvite, createInvite, describeInvite, getWorkspaceContext, listMembers, resetMemberTwoFactor, switchWorkspace } from '@/lib/actions/workspaces'
 import { installConnector } from '@/lib/actions/connectors'
-import { createDataSource, deleteDataSource, getDataSources, getEditableCredentials, listSecretManagers, listSecretNames, renameDataSource, setDataSourceRole, testConnection, updateDataSourceCredentials, getSourceHealth, setHealthCheckInterval, reviewSchemaDrift } from '@/lib/actions/data-sources'
+import { createDataSource, deleteDataSource, getDataSources, getEditableCredentials, listSecretManagers, listSecretNames, renameDataSource, setDataSourceRole, testConnection, updateDataSourceCredentials, getSourceHealth, setHealthCheckInterval, reviewSchemaDrift, setDataSourceOwnership, getSourceEnvironments, copyDataSourceToEnvironment } from '@/lib/actions/data-sources'
 import { checkSourceHealth, runDueHealthChecks } from '@/lib/connectors/health'
 import { pruneWorkspaceLogs } from '@/lib/monitoring/log-retention'
 import { startInfraMock } from './test/infra-mock'
@@ -300,6 +300,44 @@ async function main() {
       assert.equal(rows[0].n, ROWS - Math.floor(ROWS / 1000) - 1)
       const staging = await pool.query(`SELECT 1 FROM pg_tables WHERE schemaname = 'nexus_data' AND tablename LIKE $1`, [`${ds.tableName.slice(0, 44)}__stg_%`])
       assert.equal(staging.rowCount, 0)
+    })
+
+    await test('MP-8 relate: a run resolves references through a dataset and quarantines the ones it cannot find', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      // Codes of rows 1000 and 2000 never reached the dataset (invalid emails): those references are missing.
+      const saved = await savePipeline({
+        publish: true,
+        name: `${RUN} relate`,
+        definition: {
+          steps: [
+            { id: 's', type: 'source', dataSourceId: sourceId, table: 'employees', maxRows: 2000 },
+            {
+              id: 'm',
+              type: 'map',
+              fields: [
+                { from: 'code', to: 'employee_code', type: 'text' },
+                { from: 'code', to: 'record.employee_id', type: 'integer', transforms: [{ fn: 'lowercase', args: [] }, { fn: 'relate', args: [`${RUN}_employees`, 'code', 'id', 'quarantine', 'loose'] }] },
+              ],
+            },
+            { id: 'd', type: 'destination', kind: 'dataset', datasetName: `${RUN}_related`, mode: 'replace' },
+          ],
+          settings: { retries: 0 },
+        },
+        schedule: { type: 'manual' } as never,
+      })
+      const run = await runPipelineNow(saved.id)
+      takeAfterCallbacks()
+      await processJobs({})
+      const done = await getRunStatus(run.runId)
+      assert.equal(done.status, 'partial', done.errorMessage ?? '')
+      assert.equal(done.recordsError, 2)
+      const rejects = await db.select({ errors: pipelineRunRejects.errors }).from(pipelineRunRejects).where(eq(pipelineRunRejects.runId, run.runId))
+      assert.ok(rejects.every((r) => /has no match in/.test(JSON.stringify(r.errors))), JSON.stringify(rejects[0]?.errors))
+      const [ds] = await db.select().from(nexusDatasets).where(and(eq(nexusDatasets.workspaceId, adminWs), eq(nexusDatasets.name, `${RUN}_related`)))
+      assert.deepEqual((ds.columns as { name: string; type: string }[]).map((c) => `${c.name}:${c.type}`), ['employee_code:text', 'record:json'], 'a dotted target is one json column')
+      const { rows } = await pool.query<{ code: string; record: { employee_id: number } }>(`SELECT employee_code AS code, record FROM "nexus_data"."${ds.tableName}" WHERE employee_code = 'E00042'`)
+      assert.deepEqual(rows, [{ code: 'E00042', record: { employee_id: 42 } }])
     })
 
     await test('configuration errors fail the run without retrying', async () => {
@@ -2317,6 +2355,52 @@ async function main() {
       await unlinkEnvironment(prodWs)
       const [devAfter] = await db.select().from(workspaces).where(eq(workspaces.id, adminWs))
       assert.equal(devAfter.environmentGroupId, null, 'a group of one is dissolved')
+    })
+
+    await test('DS-11: owner and tags; the source in each environment; adding it to another environment copies no credentials', async () => {
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      assert.equal((await getDataSources()).find((s) => s.id === sourceId)?.ownerId, admin.id, 'whoever adds a source owns it')
+      const res = await setDataSourceOwnership(sourceId, { ownerId: viewer.id, tags: ['HR', 'pii', 'hr '] })
+      assert.deepEqual(res.tags, ['hr', 'pii'])
+      await rejectsWith(() => setDataSourceOwnership(sourceId, { ownerId: outsider.id, tags: [] }), /must be a member/)
+      const [stored] = await db.select({ ownerId: dataSources.ownerId, tags: dataSources.tags }).from(dataSources).where(eq(dataSources.id, sourceId))
+      assert.deepEqual(stored, { ownerId: viewer.id, tags: ['hr', 'pii'] })
+      const { rows: updates } = await listAuditLogs({ action: 'UPDATE' })
+      assert.ok(updates.some((u) => u.resourceId === sourceId && JSON.stringify(u.changes).includes('pii')))
+      setTestUser(viewer)
+      await switchWorkspace(adminWs)
+      // This member is an analyst by now: only roles with sources:manage change owners and tags.
+      await rejectsWith(() => setDataSourceOwnership(sourceId, { ownerId: null, tags: [] }), /Your role \(Analyst\) can't do this/)
+      assert.deepEqual((await getSourceEnvironments()).environments, [], 'no group, no environments')
+
+      setTestUser(admin)
+      await switchWorkspace(adminWs)
+      const { created } = await setupEnvironments({ environment: 'dev', create: ['staging'] })
+      const stagingWs = created[0].id
+      const envs = await getSourceEnvironments()
+      assert.deepEqual(envs.environments.map((e) => [e.environment, e.canManage]), [['staging', true]])
+      assert.equal(envs.sources[sourceId][0].state, 'missing')
+      const copy = await copyDataSourceToEnvironment({ sourceId, workspaceId: stagingWs })
+      assert.equal(copy.workspaceId, stagingWs)
+      const [there] = await db.select().from(dataSources).where(eq(dataSources.id, copy.id))
+      assert.equal(there.workspaceId, stagingWs)
+      assert.equal(there.name, `${RUN} fixture`)
+      assert.equal(there.sourceType, 'postgres')
+      assert.equal(there.status, 'disconnected')
+      assert.equal(there.nextHealthCheckAt, null, 'no health checks until its own credentials are saved')
+      assert.equal(there.ownerId, admin.id, 'the owner is not a member there, so whoever added it owns it')
+      assert.deepEqual(there.tags, ['hr', 'pii'])
+      assert.deepEqual(decryptCredentials(there.id, there.credentials), {}, 'no credentials are copied')
+      assert.deepEqual(there.config, { role: 'source' }, 'no scan, files or agent link')
+      const after = await getSourceEnvironments()
+      assert.equal(after.sources[sourceId][0].state, 'present')
+      assert.equal(after.sources[sourceId][0].health, 'idle')
+      await rejectsWith(() => copyDataSourceToEnvironment({ sourceId, workspaceId: stagingWs }), /already has a data source named/)
+      await rejectsWith(() => copyDataSourceToEnvironment({ sourceId, workspaceId: adminWs }), /not another environment/)
+      const { rows: exports } = await listAuditLogs({ action: 'EXPORT' })
+      assert.ok(exports.some((e) => e.resourceId === sourceId))
+      await unlinkEnvironment(stagingWs)
     })
 
     await test('SCIM: provision, group roles, deactivate (signed out, no SSO rejoin), delete; tokens are workspace-scoped', async () => {

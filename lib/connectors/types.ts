@@ -72,6 +72,8 @@ export interface SchemaColumn {
   type: string
   nullable: boolean
   isPrimaryKey?: boolean
+  /** MP-7: nested values seen under an object / list column (address.city, assignments[].org), from sample rows. */
+  paths?: { path: string; type: string }[]
 }
 
 export interface SchemaTable {

@@ -43,6 +43,9 @@ const CHECKS = {
   notBoolean: { en: '"{value}" is not a boolean', id: '"{value}" bukan nilai benar/salah' },
   notDate: { en: '"{value}" is not a date', id: '"{value}" bukan tanggal' },
   notTimestamp: { en: '"{value}" is not a timestamp', id: '"{value}" bukan stempel waktu' },
+  // Map relate transforms (MP-8) and Split list steps (MP-7).
+  relationMissing: { en: '"{value}" has no match in {dataset}.{key}', id: '"{value}" tidak punya pasangan di {dataset}.{key}' },
+  splitTruncated: { en: 'The list {path} has {count} items; only the first {max} were kept', id: 'Daftar {path} berisi {count} item; hanya {max} item pertama yang dipakai' },
   // REST API destinations.
   apiPathValue: { en: "{field} \"{value}\" can't be used in the request path", id: '{field} "{value}" tidak dapat dipakai di path permintaan' },
   apiRefused: { en: 'The API refused the request (HTTP {status}): {message}', id: 'API menolak permintaan (HTTP {status}): {message}' },

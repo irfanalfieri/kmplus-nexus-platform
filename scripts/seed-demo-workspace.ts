@@ -12,12 +12,13 @@ import { createHmac, randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import Papa from 'papaparse'
 import readXlsxFile from 'read-excel-file/node'
-import { eq, inArray } from 'drizzle-orm'
+import { and, eq, inArray } from 'drizzle-orm'
 import { db, pool } from '@/lib/db'
-import { nexusDatasets, session, user, workspaceMembers } from '@/lib/db/schema'
+import { dataSources, nexusDatasets, session, user, workspaceMembers } from '@/lib/db/schema'
 import { getWorkspaceContext, renameWorkspace } from '@/lib/actions/workspaces'
 import { installConnector } from '@/lib/actions/connectors'
-import { createDataSource } from '@/lib/actions/data-sources'
+import { copyDataSourceToEnvironment, createDataSource, setDataSourceOwnership } from '@/lib/actions/data-sources'
+import { tagsOf } from '@/lib/connectors/ownership'
 import { uploadFilePart } from '@/lib/actions/files'
 import { getBuilderOptions, runPipelineNow, savePipeline } from '@/lib/actions/pipelines'
 import { saveRule } from '@/lib/actions/rules'
@@ -53,6 +54,14 @@ async function main() {
   if (!(await getEnvironments()).group.length) {
     const { created } = await setupEnvironments({ environment: 'dev', create: ['staging', 'prod'] })
     console.log(`Environments: ${created.map((c) => c.name).join(', ')}`)
+  }
+
+  // DS-11: the uploads source has an owner and tags; Staging has its own copy (no credentials), Production not yet.
+  const [uploads] = await db.select({ id: dataSources.id, tags: dataSources.tags }).from(dataSources).where(and(eq(dataSources.workspaceId, ctx.workspace.id), eq(dataSources.name, 'HR exports (uploads)')))
+  if (uploads && !tagsOf(uploads.tags).length) {
+    await setDataSourceOwnership(uploads.id, { ownerId: DEMO.id, tags: ['hr', 'uploads', 'pii'] })
+    const staging = (await getEnvironments()).group.find((g) => g.environment === 'staging')
+    if (staging) await copyDataSourceToEnvironment({ sourceId: uploads.id, workspaceId: staging.id })
   }
 
   // A local session for the browser (signed like Better Auth's own cookie).

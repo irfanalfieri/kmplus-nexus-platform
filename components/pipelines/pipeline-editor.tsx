@@ -16,7 +16,7 @@ import {
   type NodeProps,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { BellRing, CloudDownload, CopyMinus, Database, Webhook, Filter, FlaskConical, GitBranch, GitMerge, Layers, Sigma, Link2, Loader2, OctagonAlert, Rocket, Save, Scale, ShieldCheck, Shuffle, Trash2, Upload, X } from 'lucide-react'
+import { BellRing, CloudDownload, CopyMinus, Database, Webhook, Filter, FlaskConical, GitBranch, GitMerge, Layers, ListTree, Sigma, Link2, Loader2, OctagonAlert, Rocket, Save, Scale, ShieldCheck, Shuffle, Trash2, Upload, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -58,11 +58,13 @@ import { localizeStepTitle } from './step-title'
 import { ApiCallEditor, EnrichEditor } from './api-step-editors'
 import { isStagedStep, joinPrefix, laneLabel, planLanes, type LanePlan } from '@/lib/pipelines/lanes'
 import { joinOutputColumns } from '@/lib/pipelines/join'
+import { mapOutputColumns, splitOutputColumns, withPaths } from '@/lib/pipelines/nested'
 import { aggregateOutputTypes, recencyColumn } from '@/lib/pipelines/aggregate'
 import {
   DestinationEditor,
   AggregateEditor,
   DedupeEditor,
+  SplitEditor,
   FilterEditor,
   JoinEditor,
   MapEditor,
@@ -124,6 +126,7 @@ const META: Record<NodeType, { icon: typeof Database }> = {
   union: { icon: Layers },
   aggregate: { icon: Sigma },
   dedupe: { icon: CopyMinus },
+  split: { icon: ListTree },
   enrich: { icon: CloudDownload },
   apicall: { icon: Webhook },
   destination: { icon: Upload },
@@ -155,6 +158,8 @@ function stepLabel(n: PipelineNode, t: Translate): string {
     }
     case 'dedupe':
       return t('editor.stepTitle.dedupe', { keys: n.keys.join(', ') || '…' })
+    case 'split':
+      return t('editor.stepTitle.split', { path: n.path || '…' })
     case 'enrich':
       return t('editor.stepTitle.enrich', { request: `${n.method} ${n.path}` })
     case 'apicall':
@@ -163,7 +168,7 @@ function stepLabel(n: PipelineNode, t: Translate): string {
       return n.kind === 'dataset' ? t('editor.stepTitle.destinationDataset', { name: n.datasetName }) : n.kind === 'api' ? t('editor.stepTitle.destinationApi', { name: `${n.method} ${n.path}` }) : t('editor.stepTitle.destinationTable', { name: n.table })
   }
 }
-const ADDABLE: NodeType[] = ['source', 'filter', 'map', 'validate', 'rules', 'router', 'join', 'union', 'aggregate', 'dedupe', 'enrich', 'apicall', 'destination']
+const ADDABLE: NodeType[] = ['source', 'filter', 'map', 'split', 'validate', 'rules', 'router', 'join', 'union', 'aggregate', 'dedupe', 'enrich', 'apicall', 'destination']
 
 /** Node frame and icon colour by kind: sources in, destinations out, transforms neutral. */
 const KIND_BORDER: Record<NodeType, string> = {
@@ -177,6 +182,7 @@ const KIND_BORDER: Record<NodeType, string> = {
   union: 'border-border',
   aggregate: 'border-border',
   dedupe: 'border-border',
+  split: 'border-border',
   enrich: 'border-border',
   // Changes data elsewhere: drawn as an outward action.
   apicall: 'border-warning',
@@ -193,6 +199,7 @@ const KIND_ICON: Record<NodeType, string> = {
   union: 'text-muted-foreground',
   aggregate: 'text-muted-foreground',
   dedupe: 'text-muted-foreground',
+  split: 'text-muted-foreground',
   enrich: 'text-muted-foreground',
   apicall: 'text-warning-text',
   destination: 'text-live',
@@ -250,6 +257,11 @@ function newNode(type: NodeType, columns: Column[], position: { x: number; y: nu
     }
     case 'filter':
       return { id, type, position, match: 'all', conditions: [newCondition(first)], ruleId: '' }
+    case 'split': {
+      // The first column holding a list or JSON, else the first column.
+      const list = columns.find((c) => c.type === 'json' || /json|object|array/i.test(c.type)) ?? columns[0]
+      return { id, type, position, path: list?.name ?? '', as: '', flattenItems: true, indexColumn: '', onEmpty: 'keep', dropList: true, maxItems: 1000 }
+    }
     case 'map':
       return { id, type, position, keepUnmapped: false, fields: [{ from: first, to: first.toLowerCase(), type: 'text', transforms: [] }] }
     case 'validate':
@@ -291,8 +303,11 @@ function columnsPerNode(nodes: PipelineNode[], edges: PipelineEdge[], options: B
     } else if (node.type === 'source') {
       const src = options.dataSources.find((d) => d.id === node.dataSourceId)
       output.set(node.id, src?.tables.find((t) => t.name === node.table)?.columns ?? [])
+    } else if (node.type === 'split') {
+      output.set(node.id, splitOutputColumns(cols, node))
     } else if (node.type === 'map') {
-      const mapped = node.fields.filter((f) => f.to).map((f) => ({ name: f.to, type: f.type }))
+      // Dotted targets (address.city) are one json column per group, which a later step can read paths of.
+      const mapped = mapOutputColumns(node.fields.filter((f) => f.to))
       const used = new Set(node.fields.map((f) => f.from))
       output.set(node.id, node.keepUnmapped ? [...mapped, ...cols.filter((c) => !used.has(c.name) && !mapped.some((m) => m.name === c.name))] : mapped)
     } else if (node.type === 'rules') {
@@ -596,6 +611,8 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
   const selectedStat = selected ? statFor(selected.id) : undefined
   /** The first row that reached a step in the last test (what a test call sends). */
   const inputSample = (id: string) => draft.edges.filter((e) => e.to === id).map((e) => statFor(e.from)?.sample?.[0]).find(Boolean) as Record<string, unknown> | undefined
+  /** A step's input columns plus the nested paths seen in the last test's rows (MP-7). */
+  const nestedColumns = (id: string) => withPaths(columns.get(id) ?? [], draft.edges.filter((e) => e.to === id).flatMap((e) => (statFor(e.from)?.sample ?? []) as Record<string, unknown>[]))
 
   // The canvas shares the height with the panel below it: fit the steps again when its size changes.
   // A callback ref, because the editor mounts inside a dialog portal after the first effects run.
@@ -777,7 +794,8 @@ export default function PipelineEditor({ initial, options, onClose, onSaved }: {
                 />
               )}
               {selected.type === 'filter' && <FilterEditor step={selected} columns={columns.get(selected.id) ?? []} options={options} onChange={setNode} />}
-              {selected.type === 'map' && <MapEditor step={selected} columns={columns.get(selected.id) ?? []} options={options} source={sourceRef} onChange={setNode} />}
+              {selected.type === 'split' && <SplitEditor step={selected} columns={nestedColumns(selected.id)} onChange={setNode} />}
+              {selected.type === 'map' && <MapEditor step={selected} columns={nestedColumns(selected.id)} options={options} source={sourceRef} onChange={setNode} />}
               {selected.type === 'validate' && <ValidateEditor step={selected} columns={columns.get(selected.id) ?? []} options={options} onChange={setNode} />}
               {selected.type === 'rules' && <RulesEditor step={selected} options={options} onChange={setNode} />}
               {selected.type === 'router' && <RouterEditor step={selected} columns={columns.get(selected.id) ?? []} options={options} onChange={setNode} />}

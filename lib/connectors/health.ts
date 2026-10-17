@@ -40,11 +40,11 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   })
 }
 
-/** Everyone who manages data sources in the workspace (bell + email). */
-async function tellManagers(workspaceId: string, level: NotificationLevel, title: string, lines: string[]) {
+/** Everyone who manages data sources in the workspace, and the source's owner (DS-11) while a member (bell + email). */
+async function tellManagers(workspaceId: string, level: NotificationLevel, title: string, lines: string[], ownerId?: string | null) {
   const members = await db.select({ userId: workspaceMembers.userId, role: workspaceMembers.role }).from(workspaceMembers).where(eq(workspaceMembers.workspaceId, workspaceId))
   for (const m of members) {
-    if (!isRole(m.role) || !can(m.role, 'sources:manage')) continue
+    if (!isRole(m.role) || (!can(m.role, 'sources:manage') && m.userId !== ownerId)) continue
     try {
       await notify({ userId: m.userId, workspaceId, level, title, lines, email: { to: [] } })
     } catch (err) {
@@ -73,7 +73,7 @@ export async function recordScan(source: Source, scan: SchemaScanResult, extra: 
       ...breaking.slice(0, 10).map((c) => `• ${describeChange(c)}`),
       ...(drift.affected.length ? [`Pipelines that read them: ${drift.affected.map((a) => a.name).join(', ')}.`] : ['No published pipeline names these columns.']),
       'Review it in Data sources → Health & schema changes.',
-    ])
+    ], source.ownerId)
   }
   return drift
 }
@@ -145,9 +145,9 @@ export async function checkSourceHealth(source: Source, opts: { trigger: 'schedu
     .where(and(eq(dataSources.id, source.id), eq(dataSources.workspaceId, source.workspaceId)))
   // Alert once when a source starts failing, and once when it recovers.
   if (!ok && failures === 1) {
-    await tellManagers(source.workspaceId, 'error', `${source.name} is not reachable`, [`The health check of "${source.name}" failed: ${message}`, 'Pipelines reading it will fail until it is fixed. Open Data sources → Health & schema changes.'])
+    await tellManagers(source.workspaceId, 'error', `${source.name} is not reachable`, [`The health check of "${source.name}" failed: ${message}`, 'Pipelines reading it will fail until it is fixed. Open Data sources → Health & schema changes.'], source.ownerId)
   } else if (ok && (source.healthFailures ?? 0) > 0) {
-    await tellManagers(source.workspaceId, 'info', `${source.name} is reachable again`, [`The health check of "${source.name}" passed after ${source.healthFailures} failed check(s).`])
+    await tellManagers(source.workspaceId, 'info', `${source.name} is reachable again`, [`The health check of "${source.name}" passed after ${source.healthFailures} failed check(s).`], source.ownerId)
   }
   return { ok, message, latencyMs, scanned, drift }
 }

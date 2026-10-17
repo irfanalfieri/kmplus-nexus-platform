@@ -61,7 +61,8 @@ export function diffScans(prev: SchemaScanResult | null | undefined, next: Schem
     for (const c of t.columns) {
       const now = cols.get(c.name)
       if (!now) out.push({ kind: 'column_removed', table: name, column: c.name })
-      else if (typeFamily(now.type) !== typeFamily(c.type)) out.push({ kind: 'column_retyped', table: name, column: c.name, from: c.type, to: now.type })
+      // TEXT → JSON is how REST scans now report nested objects (MP-7): the values are the same.
+      else if (typeFamily(now.type) !== typeFamily(c.type) && !(typeFamily(c.type) === 'text' && typeFamily(now.type) === 'json')) out.push({ kind: 'column_retyped', table: name, column: c.name, from: c.type, to: now.type })
     }
     const had = new Set(t.columns.map((c) => c.name))
     for (const c of n.columns) if (!had.has(c.name)) out.push({ kind: 'column_added', table: name, column: c.name, type: c.type })

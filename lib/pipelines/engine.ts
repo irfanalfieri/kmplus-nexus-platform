@@ -2,6 +2,7 @@ import { OTHERWISE, stepTitle, topoOrder, type AggregateStep, type ApiCallStep, 
 import { checkText } from './check-messages'
 import { applyMap, matchesFilter, validateRow, type LookupTables, type Row } from './transforms'
 import { evalGroup } from './conditions'
+import { mapOutputColumns, splitRow } from './nested'
 import { compareWatermarks, inferColumns, maxWatermark, type OutputColumn, type TypeHints } from './columns'
 import type { BusinessRule } from '@/lib/rules/definition'
 import { applyRules } from '@/lib/rules/evaluate'
@@ -177,7 +178,8 @@ export function outputColumns(def: PipelineDefinition, rows: Row[], hints: TypeH
   const strip = (cols: OutputColumn[]) => cols.filter((c) => !c.name.startsWith('_nexus_'))
   const map = nearestMap(def, destId)
   if (map) {
-    const declared: OutputColumn[] = map.fields.map((f) => ({ name: f.to, type: f.type }))
+    // Dotted outputs (address.city) are one json column per group (MP-7).
+    const declared: OutputColumn[] = mapOutputColumns(map.fields).map((c) => ({ name: c.name, type: c.type }))
     if (!map.keepUnmapped) return declared
     const names = new Set(declared.map((c) => c.name))
     return strip([...declared, ...inferColumns(rows, hints).filter((c) => !names.has(c.name))])
@@ -200,7 +202,7 @@ function nearestMap(def: PipelineDefinition, destId?: string) {
       const n = byId.get(e.from)
       if (n?.type === 'map') return n
       // Rows past a Join or Union carry columns no single Map declares: infer them.
-      if (n?.type === 'join' || n?.type === 'union' || n?.type === 'aggregate') return undefined
+      if (n?.type === 'join' || n?.type === 'union' || n?.type === 'aggregate' || n?.type === 'split') return undefined
       seen.add(e.from)
       queue.push(e.from)
     }
@@ -329,12 +331,35 @@ export async function transformChunk(
       case 'map': {
         const next: Row[] = []
         for (const r of rows) {
-          const { row, errors } = applyMap(r, node, ctx.lookupTables)
+          const { row, errors, notes } = applyMap(r, node, ctx.lookupTables)
           if (errors.length) {
             stat.rejected++
             totals.rejectedCount++
             result.rejects.push({ stepId: node.id, row: r, errors, severity: 'error', kind: 'invalid' })
-          } else next.push(row)
+            continue
+          }
+          if (notes.length) {
+            // relate set to "flag": written without the reference, listed in Data quality.
+            stat.flagged = (stat.flagged ?? 0) + 1
+            totals.flaggedCount++
+            result.flags.push({ stepId: node.id, row: r, errors: notes, severity: 'warning', kind: 'flag' })
+          }
+          next.push(row)
+        }
+        stat.rowsOut += next.length
+        out.set('', next)
+        break
+      }
+      case 'split': {
+        const next: Row[] = []
+        for (const r of rows) {
+          const { rows: items, truncated } = splitRow(r, node)
+          if (truncated) {
+            stat.flagged = (stat.flagged ?? 0) + 1
+            totals.flaggedCount++
+            result.flags.push({ stepId: node.id, row: r, errors: [checkText('splitTruncated', { path: node.path, count: items.length + truncated, max: node.maxItems })], severity: 'warning', kind: 'flag' })
+          }
+          next.push(...items)
         }
         stat.rowsOut += next.length
         out.set('', next)

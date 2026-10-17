@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { COLUMN_TYPES, type ColumnType, type DestinationStep, type PipelineDefinition, type SchemaBinding } from '@/lib/pipelines/definition'
 import { coerce, type Row } from '@/lib/pipelines/transforms'
 import { evalExpr } from '@/lib/pipelines/conditions'
+import { readPath } from '@/lib/pipelines/nested'
 import { checkText } from '@/lib/pipelines/check-messages'
 import { suggestColumnPolicy } from '@/lib/governance/definition'
 import { autoMapName, type DomainEntity } from '@/lib/domain/model'
@@ -314,7 +315,7 @@ export function conformRows(schema: DatasetSchema, map: ColumnMapEntry[], rows: 
     for (const { m, col } of cols) {
       let v: unknown
       try {
-        v = m.binding.kind === 'column' ? row[m.binding.column] : m.binding.kind === 'constant' ? m.binding.value : m.binding.kind === 'expr' ? evalExpr(row, m.binding.expr) : null
+        v = m.binding.kind === 'column' ? readPath(row, m.binding.column) : m.binding.kind === 'constant' ? m.binding.value : m.binding.kind === 'expr' ? evalExpr(row, m.binding.expr) : null
       } catch (err) {
         errors.push(`${col.name}: ${err instanceof Error ? err.message : String(err)}`)
         continue
