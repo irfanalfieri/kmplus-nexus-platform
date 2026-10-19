@@ -132,6 +132,11 @@
   --chart-4: #697077;
   --chart-5: #33b1ff;
 
+  /* The Nexus mark's bars (components/brand/nexus-logo.tsx): KM+ Teal 40 in, Cyan 50 out.
+     Brand colours, the same in both themes; not for UI. */
+  --brand-ray-in: #08bdba;
+  --brand-ray-out: #1192e8;
+
   /* The rail: teal-100, the darkest step of the KM+ anchor. */
   --sidebar: #081a1c;
   --sidebar-foreground: #c1c7cd;

@@ -1,8 +1,8 @@
 {
   "what": "Screenshots shown in Help & FAQ (/dashboard/help). Real captures of the KMPlus Nexus interface, not mock-ups or generated images.",
   "data": "Demo workspace seeded by scripts/seed-demo-workspace.ts from the fictional HR files in test-data/ (every person, NIK and email is invented).",
-  "captured": "2026-10-17",
-  "commit": "0651df7",
+  "captured": "2026-10-19",
+  "commit": "5f129a9",
   "tool": "scripts/capture-help-screens.mjs (headless Chromium over the DevTools protocol)",
   "viewport": "1440x900 at 1x",
   "format": "WebP, quality 82",

@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Notice } from '@/components/ui/notice'
 import { KmLogo } from '@/components/brand/km-logo'
+import { NexusWordmark } from '@/components/brand/nexus-logo'
 import { useT } from '@/components/i18n/i18n-provider'
 import { TERMS_VERSION } from '@/lib/legal/terms'
 
@@ -28,9 +29,7 @@ export function AuthShell({ children, className }: { children: React.ReactNode; 
         aria-label={t('auth.shell.home')}
       >
         <KmLogo className="h-9" priority />
-        <span className="text-base font-semibold tracking-tight" aria-hidden>
-          Nexus
-        </span>
+        <NexusWordmark className="text-xl" label={null} />
       </Link>
       <section className={cn('w-full max-w-sm rounded-lg border border-border bg-card p-6', className)}>{children}</section>
     </main>

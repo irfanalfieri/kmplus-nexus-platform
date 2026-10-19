@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
 import { KmLogo } from '@/components/brand/km-logo'
+import { NexusWordmark } from '@/components/brand/nexus-logo'
 import { TermsArticle } from '@/components/legal/terms-article'
 import { getLocale, getTranslator } from '@/lib/i18n/server'
 import { TERMS_VERSION, termsFor } from '@/lib/legal/terms'
@@ -30,7 +31,7 @@ export default async function TermsPage({ searchParams }: { searchParams: Promis
         <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
           <Link href="/" className="flex items-center gap-2.5 rounded-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring">
             <KmLogo className="h-9" priority />
-            <span className="text-base font-semibold tracking-tight">Nexus</span>
+            <NexusWordmark className="text-xl" />
           </Link>
           <Link href={`/terms?lang=${other}`} hrefLang={other} className="text-sm font-medium text-info-text underline-offset-4 hover:underline">
             {locale === 'id' ? 'Read in English' : 'Baca dalam Bahasa Indonesia'}

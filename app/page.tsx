@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { buttonVariants } from '@/components/ui/button'
 import { KmLogo } from '@/components/brand/km-logo'
+import { NexusWordmark } from '@/components/brand/nexus-logo'
 import { FlowLine } from '@/components/ui/flow-line'
 import { cn } from '@/lib/utils'
 import { getTranslator } from '@/lib/i18n/server'
@@ -23,7 +24,7 @@ export default async function Page() {
       <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-4 py-5 sm:px-6">
         <span className="flex items-center gap-2.5">
           <KmLogo className="h-9" priority />
-          <span className="text-base font-semibold tracking-tight">Nexus</span>
+          <NexusWordmark className="text-xl" />
         </span>
       </header>
 

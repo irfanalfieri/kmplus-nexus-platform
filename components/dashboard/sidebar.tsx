@@ -6,6 +6,7 @@ import { Activity, BarChart3, BookOpen, Database, LayoutDashboard, LifeBuoy, Plu
 import { cn } from '@/lib/utils'
 import { NAV_GROUPS, sectionHref, type Section } from '@/lib/navigation'
 import { KmLogo } from '@/components/brand/km-logo'
+import { NexusWordmark } from '@/components/brand/nexus-logo'
 import WorkspaceSwitcher from '@/components/workspace/workspace-switcher'
 import { useT } from '@/components/i18n/i18n-provider'
 
@@ -38,7 +39,7 @@ export default function Sidebar({ attention, onNavigate }: { attention: { qualit
     <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
       <div className="flex items-end gap-2.5 px-5 pt-5 pb-4">
         <KmLogo tone="onDark" className="h-9" priority />
-        <span className="pb-0.5 text-[15px] font-light tracking-wide text-sidebar-accent-foreground">{t('shell.product')}</span>
+        <NexusWordmark className="pb-px text-[21px] text-sidebar-accent-foreground" label={t('shell.product')} />
       </div>
       <div className="px-3 pb-3">
         <WorkspaceSwitcher />

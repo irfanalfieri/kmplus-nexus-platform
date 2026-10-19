@@ -80,7 +80,7 @@ node public/downloads/nexus-agent.mjs --config nexus-agent.json [--check]       
 
 ## Layout
 - `app/actions/` server actions · `app/api/` auth + OAuth callbacks · `app/dashboard/` main app
-- `app/dashboard/layout.tsx` (session, workspace, `AppShell`) + `app/dashboard/<section>/page.tsx` one route per screen · `components/dashboard/{app-shell,sidebar,top-bar,profile-menu,jump-to,page-header}.tsx` shell · `components/dashboard/layers/` one screen per platform layer · `components/modals/` · `components/connectors/` · `components/ui/` (shadcn + Nexus blocks) · `components/brand/km-logo.tsx` (official logo, `public/brand/`) · `lib/i18n/*` + `components/i18n/i18n-provider.tsx` · `lib/navigation.ts`
+- `app/dashboard/layout.tsx` (session, workspace, `AppShell`) + `app/dashboard/<section>/page.tsx` one route per screen · `components/dashboard/{app-shell,sidebar,top-bar,profile-menu,jump-to,page-header}.tsx` shell · `components/dashboard/layers/` one screen per platform layer · `components/modals/` · `components/connectors/` · `components/ui/` (shadcn + Nexus blocks) · `components/brand/km-logo.tsx` (official logo, `public/brand/`) · `components/brand/nexus-logo.tsx` (Nexus mark and wordmark: the bridge; icons in `public/icon*`; rules in DESIGN.md) · `lib/i18n/*` + `components/i18n/i18n-provider.tsx` · `lib/navigation.ts`
 - `components/pipelines/` pipeline editor, step editors, run history
 - `lib/connectors/` catalog, runtime dispatch, drivers · `lib/pipelines/` definition, engine, transforms, I/O, runner, schedule · `lib/db/` Drizzle schema + pool · `lib/security/` credential encryption · `lib/auth.ts` Better Auth
 - `app/api/cron/pipelines` scheduler tick · `drizzle/` SQL migrations · `vercel.json` (functions run in Tokyo `hnd1`, next to the DB)
