@@ -5,7 +5,6 @@ import { usePathname } from 'next/navigation'
 import { Activity, BarChart3, BookOpen, Database, LayoutDashboard, LifeBuoy, Plug, Scale, Settings, Shield, ShieldCheck, Workflow, type LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { NAV_GROUPS, sectionHref, type Section } from '@/lib/navigation'
-import { KmLogo } from '@/components/brand/km-logo'
 import { NexusWordmark } from '@/components/brand/nexus-logo'
 import WorkspaceSwitcher from '@/components/workspace/workspace-switcher'
 import { useT } from '@/components/i18n/i18n-provider'
@@ -37,9 +36,10 @@ export default function Sidebar({ attention, onNavigate }: { attention: { qualit
 
   return (
     <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
-      <div className="flex items-end gap-2.5 px-5 pt-5 pb-4">
-        <KmLogo tone="onDark" className="h-9" priority />
-        <NexusWordmark className="pb-px text-[21px] text-sidebar-accent-foreground" label={t('shell.product')} />
+      {/* The Nexus lockup: KMPLUS caption over the wordmark (the KM+ logo stays on the public pages). */}
+      <div className="flex flex-col gap-1.5 px-5 pt-5 pb-4" role="img" aria-label="KMPlus Nexus">
+        <span aria-hidden className="font-mono text-[11px] font-medium tracking-[0.18em] text-sidebar-muted">KMPLUS</span>
+        <NexusWordmark className="text-[30px] text-sidebar-accent-foreground" label={null} />
       </div>
       <div className="px-3 pb-3">
         <WorkspaceSwitcher />
