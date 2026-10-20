@@ -117,7 +117,7 @@ export const ws: Messages['ws'] = {
     howAgent: 'Di samping Nexus Agent: pasang Ollama di server agent, jalankan {pull}, tambahkan {config} ke konfigurasi agent, mulai ulang agent, lalu pilih agent tersebut di atas.',
     howServer: 'Untuk server Nexus ini: jalankan server apa pun yang kompatibel dengan OpenAI dengan model terbuka (Ollama, vLLM, LM Studio) di lokasi yang dapat dijangkau Nexus, lalu atur {baseUrl} (diakhiri /v1) dan {model} (serta {apiKey} jika diperlukan).',
     hardware: 'RAM sekitar 8 GB cukup untuk menjalankan model 7-8B di CPU (lambat tetapi berfungsi); dengan GPU jawaban hanya butuh beberapa detik. Lebih kecil: qwen2.5:3b-instruct.',
-    howPaid: 'Atau model berbayar (oleh pengelola Nexus ini): isi {type} dan {key} (API key dari Claude Console); opsional {model} (bawaan claude-opus-5-5) dan {effort} (low hingga max, bawaan medium). Pengaturan open-source tetap tersimpan dan dipakai lagi saat tipe dikembalikan ke {back}.',
+    howPaid: 'Atau model berbayar (oleh pengelola Nexus ini): isi {type} dan {key} (API key dari Claude Console); opsional {model} (bawaan claude-opus-5-5), {effort} (low hingga max, bawaan medium), dan {workspace} (jika key tidak terikat ke workspace Console). Pengaturan open-source tetap tersimpan dan dipakai lagi saat tipe dikembalikan ke {back}.',
   },
   apiKeys: {
     title: 'Kunci Data API',

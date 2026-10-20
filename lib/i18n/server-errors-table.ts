@@ -535,6 +535,7 @@ export const SERVER_ERRORS: readonly { en: string; id: string }[] = [
   { en: "The paid AI model refused the API key (NEXUS_AI_PAID_API_KEY). Check the key and its workspace in the Claude Console.", id: "Model AI berbayar menolak API key (NEXUS_AI_PAID_API_KEY). Periksa key dan workspace-nya di Claude Console." },
   { en: "The paid AI model \"{p0}\" was not found. Check NEXUS_AI_PAID_MODEL.", id: "Model AI berbayar \"{p0}\" tidak ditemukan. Periksa NEXUS_AI_PAID_MODEL." },
   { en: "The paid AI model is rate limited or out of credit right now. Try again shortly, or check the Claude Console.", id: "Model AI berbayar sedang dibatasi atau kreditnya habis. Coba lagi sebentar lagi, atau periksa Claude Console." },
+  { en: "The paid AI model needs a workspace: this API key isn't scoped to one. Set NEXUS_AI_PAID_WORKSPACE_ID to the workspace ID from the Claude Console, or use a key created in a workspace.", id: "Model AI berbayar memerlukan workspace: API key ini tidak terikat ke workspace mana pun. Isi NEXUS_AI_PAID_WORKSPACE_ID dengan ID workspace dari Claude Console, atau pakai key yang dibuat di dalam sebuah workspace." },
   { en: "The paid AI model rejected the request: {p0}", id: "Model AI berbayar menolak permintaan: {p0}" },
   { en: "The paid AI model did not answer (network error or timeout).", id: "Model AI berbayar tidak merespons (gangguan jaringan atau batas waktu habis)." },
   { en: "The paid AI model returned HTTP {p0}.", id: "Model AI berbayar mengembalikan HTTP {p0}." },

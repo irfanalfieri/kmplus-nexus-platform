@@ -115,7 +115,7 @@ export const ws = {
     howAgent: 'Next to a Nexus Agent: install Ollama on the agent’s server, run {pull}, add {config} to the agent config, restart it, and pick the agent above.',
     howServer: 'For this Nexus server: run any OpenAI-compatible server with an open model (Ollama, vLLM, LM Studio) where Nexus can reach it, and set {baseUrl} (ending in /v1) and {model} (plus {apiKey} if it needs one).',
     hardware: 'About 8 GB of RAM runs a 7-8B model on CPU (slow but works); a GPU makes answers take seconds. Smaller: qwen2.5:3b-instruct.',
-    howPaid: 'A paid model instead (whoever runs this Nexus): set {type} and {key} (a Claude Console API key); optionally {model} (default claude-opus-5-5) and {effort} (low to max, default medium). The open-source settings stay as they are and are used again when the type is set back to {back}.',
+    howPaid: 'A paid model instead (whoever runs this Nexus): set {type} and {key} (a Claude Console API key); optionally {model} (default claude-opus-5-5), {effort} (low to max, default medium) and {workspace} (when the key isn’t scoped to a Console workspace). The open-source settings stay as they are and are used again when the type is set back to {back}.',
   },
   apiKeys: {
     title: 'Data API keys',

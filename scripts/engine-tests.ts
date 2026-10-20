@@ -912,6 +912,9 @@ async function main() {
     assert.match(readServerModel({ NEXUS_AI_MODEL_TYPE: 'cheap' }).problem ?? '', /must be "opensource" or "paid"/)
     assert.match(readServerModel({}).problem ?? '', /NEXUS_AI_BASE_URL and NEXUS_AI_MODEL/)
     assert.equal(readServerModel({ NEXUS_AI_MODEL_TYPE: 'open-source', ...open }).model?.type, 'opensource', 'spelling variants are accepted')
+    const w = readServerModel({ ...paid, NEXUS_AI_MODEL_TYPE: 'paid', NEXUS_AI_PAID_WORKSPACE_ID: ' wrkspc_test ' })
+    assert.ok(w.model?.type === 'paid' && w.model.config.workspaceId === 'wrkspc_test', 'workspace id for keys not scoped to a workspace')
+    assert.ok(b.model?.type === 'paid' && b.model.config.workspaceId === undefined)
   })
 
   await test('AI paid model: Claude request shape, answer text, refusals and key errors', async () => {
@@ -937,6 +940,18 @@ async function main() {
     assert.deepEqual(req.body.output_config, { effort: 'medium' })
     assert.ok(!('temperature' in req.body) && !('thinking' in req.body), 'no sampling or thinking settings on current Claude models')
     assert.ok((req.body.max_tokens as number) >= 16_000, 'room for thinking on top of the answer')
+    assert.equal(req.headers.get('anthropic-workspace-id'), null, 'no workspace header unless one is set')
+
+    sent.length = 0
+    await paidCompletion({ ...cfg, workspaceId: 'wrkspc_test' }, msgs, { fetchImpl: answer(200, message([{ type: 'text', text: '{}' }])) })
+    assert.equal(sent[0].headers.get('anthropic-workspace-id'), 'wrkspc_test')
+    const unscoped = { type: 'error', error: { type: 'invalid_request_error', message: 'This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header with the ID of the workspace to use.' } }
+    await assert.rejects(() => paidCompletion(cfg, msgs, { fetchImpl: answer(400, unscoped) }), /Set NEXUS_AI_PAID_WORKSPACE_ID/)
+    await assert.rejects(
+      () => paidCompletion(cfg, msgs, { fetchImpl: answer(400, { type: 'error', error: { type: 'invalid_request_error', message: 'messages: text content blocks must be non-empty' } }) }),
+      (err: Error) => err.message === 'The paid AI model rejected the request: messages: text content blocks must be non-empty',
+      'the API’s own message, not the raw JSON body',
+    )
 
     sent.length = 0
     await paidCompletion({ ...cfg, model: 'claude-haiku-5-5' }, msgs, { fetchImpl: answer(200, message([{ type: 'text', text: '{}' }])) })

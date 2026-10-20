@@ -10,6 +10,8 @@ import type { LlmConfig } from './llm'
  *                         NEXUS_AI_PAID_API_KEY (required), NEXUS_AI_PAID_PROVIDER (anthropic),
  *                         NEXUS_AI_PAID_MODEL (default claude-opus-5-5),
  *                         NEXUS_AI_PAID_EFFORT (low … max, default medium),
+ *                         NEXUS_AI_PAID_WORKSPACE_ID (optional: the Claude Console workspace,
+ *                         needed when the key isn't scoped to one),
  *                         NEXUS_AI_PAID_BASE_URL (optional, e.g. a company gateway)
  *
  * Switching the type never touches the other set, so both can stay configured.
@@ -30,6 +32,8 @@ export interface PaidModelConfig {
   apiKey: string
   model: string
   effort: PaidEffort
+  /** Sent as anthropic-workspace-id, for API keys that aren't scoped to a workspace. */
+  workspaceId?: string
   baseUrl?: string
 }
 
@@ -63,7 +67,7 @@ export function readServerModel(env: Env = process.env): { model: ServerModel | 
   return {
     model: {
       type: 'paid',
-      config: { provider: provider as PaidProvider, apiKey, model: read(env, 'NEXUS_AI_PAID_MODEL') ?? DEFAULT_PAID_MODEL, effort: effort as PaidEffort, baseUrl: read(env, 'NEXUS_AI_PAID_BASE_URL') },
+      config: { provider: provider as PaidProvider, apiKey, model: read(env, 'NEXUS_AI_PAID_MODEL') ?? DEFAULT_PAID_MODEL, effort: effort as PaidEffort, workspaceId: read(env, 'NEXUS_AI_PAID_WORKSPACE_ID'), baseUrl: read(env, 'NEXUS_AI_PAID_BASE_URL') },
     },
     type: 'paid',
     problem: null,

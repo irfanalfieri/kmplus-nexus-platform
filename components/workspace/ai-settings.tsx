@@ -129,6 +129,7 @@ export function AiSettings() {
                     key: <span className="font-mono">NEXUS_AI_PAID_API_KEY</span>,
                     model: <span className="font-mono">NEXUS_AI_PAID_MODEL</span>,
                     effort: <span className="font-mono">NEXUS_AI_PAID_EFFORT</span>,
+                    workspace: <span className="font-mono">NEXUS_AI_PAID_WORKSPACE_ID</span>,
                     back: <span className="font-mono">opensource</span>,
                   })}
                 </li>

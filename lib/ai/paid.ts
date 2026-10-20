@@ -25,6 +25,7 @@ export async function paidCompletion(config: PaidModelConfig, messages: ChatMess
   const client = new Anthropic({
     apiKey: config.apiKey,
     ...(config.baseUrl ? { baseURL: config.baseUrl } : {}),
+    ...(config.workspaceId ? { defaultHeaders: { 'anthropic-workspace-id': config.workspaceId } } : {}),
     timeout: opts.timeoutMs ?? 120_000,
     maxRetries: 2,
     ...(opts.fetchImpl ? { fetch: opts.fetchImpl } : {}),
@@ -51,7 +52,13 @@ export async function paidCompletion(config: PaidModelConfig, messages: ChatMess
     }
     if (err instanceof Anthropic.NotFoundError) throw new LlmError(`The paid AI model "${config.model}" was not found. Check NEXUS_AI_PAID_MODEL.`)
     if (err instanceof Anthropic.RateLimitError) throw new LlmError('The paid AI model is rate limited or out of credit right now. Try again shortly, or check the Claude Console.')
-    if (err instanceof Anthropic.BadRequestError) throw new LlmError(`The paid AI model rejected the request: ${err.message.slice(0, 300)}`)
+    if (err instanceof Anthropic.BadRequestError) {
+      const detail = apiMessage(err)
+      if (/anthropic-workspace-id/i.test(detail)) {
+        throw new LlmError("The paid AI model needs a workspace: this API key isn't scoped to one. Set NEXUS_AI_PAID_WORKSPACE_ID to the workspace ID from the Claude Console, or use a key created in a workspace.")
+      }
+      throw new LlmError(`The paid AI model rejected the request: ${detail.slice(0, 300)}`)
+    }
     if (err instanceof Anthropic.APIConnectionError) throw new LlmError('The paid AI model did not answer (network error or timeout).')
     if (err instanceof Anthropic.APIError) throw new LlmError(`The paid AI model returned HTTP ${err.status ?? 'error'}.`)
     throw err
@@ -62,4 +69,10 @@ export async function paidCompletion(config: PaidModelConfig, messages: ChatMess
     throw new LlmError(response.stop_reason === 'max_tokens' ? 'The paid AI model ran out of room before answering. Try a lower NEXUS_AI_PAID_EFFORT.' : 'The paid AI model returned no answer.')
   }
   return { content, model: response.model }
+}
+
+/** The API's own error text (`error.message` in the body), not the SDK's "400 {json}" form. */
+function apiMessage(err: InstanceType<typeof Anthropic.APIError>): string {
+  const body = err.error as { error?: { message?: unknown } } | undefined
+  return typeof body?.error?.message === 'string' ? body.error.message : err.message
 }
