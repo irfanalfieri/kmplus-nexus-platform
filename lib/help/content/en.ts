@@ -1092,7 +1092,7 @@ export const helpEn: HelpContent = {
                 ['Sign-in, SSO & SCIM', 'Single sign-on with verified domains, and SCIM provisioning.'],
                 ['Approvals & environments', 'Whether publishes need a second person; Development, Staging and Production; locking.'],
                 ['Nexus Agents', 'Agents in your network and their status.'],
-                ['AI assistant', 'Which open-source model the assistant uses: the server’s, one next to an agent, or off.'],
+                ['AI assistant', 'Which model the assistant uses: the server’s (open-source, or a paid Claude model if this Nexus is set up for one), one next to an agent, or off.'],
                 ['API keys · Webhooks', 'Data API keys and outbound webhooks.'],
                 ['Alert channels', 'Slack, Microsoft Teams and webhook channels for pipeline alerts.'],
                 ['Audit log', 'Every change and every view of real data, with who, when and from where.'],
@@ -1104,7 +1104,7 @@ export const helpEn: HelpContent = {
           id: 'ai',
           title: 'The AI assistant',
           blocks: [
-            { kind: 'p', text: 'The assistant drafts pipelines, explains failed runs, suggests connectors, searches the catalog and answers questions in Analytics. It uses **open-source models only**, through the server’s model or a model running next to your Nexus Agent, so prompts can stay inside your network. Admins choose the model or turn it off; everything else works without it.' },
+            { kind: 'p', text: 'The assistant drafts pipelines, explains failed runs, suggests connectors, searches the catalog and answers questions in Analytics. It uses a free **open-source model** by default, through the server’s model or a model running next to your Nexus Agent, so prompts can stay inside your network. Whoever runs your Nexus can switch the server’s model to a paid Claude model instead; Settings → AI assistant then says so, and prompts go to Anthropic’s API. Admins choose the model or turn it off; everything else works without it.' },
           ],
         },
       ],
@@ -1199,7 +1199,7 @@ export const helpEn: HelpContent = {
     { id: 'sso', group: 'access', q: 'Can we sign in with Microsoft Entra ID, Google or Okta?', a: 'Yes. An admin adds the provider under **Settings → Sign-in, SSO & SCIM** (OIDC or SAML 2.0) and verifies your email domain with a DNS record. SCIM can create and deactivate accounts automatically.' },
     { id: 'audit-who', group: 'access', q: 'Can we see who changed a pipeline or viewed salary data?', a: 'Yes: **Settings → Audit log** lists every change (with before and after) and every view of real data, with the person, time, IP address and browser.' },
     { id: 'ai-data', group: 'ai', q: 'Does the AI assistant see our employees’ data?', a: 'No. Prompts carry table and column names and examples from public columns only; personal and masked columns are left out, and check messages are redacted. Answers are drafts you review.' },
-    { id: 'ai-model', group: 'ai', q: 'Which AI model does Nexus use?', a: 'Open-source models only, through any OpenAI-compatible server (e.g. Ollama or vLLM): the one configured for Nexus, or one running next to your Nexus Agent so prompts never leave your network. Admins can turn the assistant off.' },
+    { id: 'ai-model', group: 'ai', q: 'Which AI model does Nexus use?', a: 'By default an open-source model, through any OpenAI-compatible server (e.g. Ollama or vLLM): the one configured for Nexus, or one running next to your Nexus Agent so prompts never leave your network. Whoever runs your Nexus can set the server’s model to a paid Claude model instead (NEXUS_AI_MODEL_TYPE=paid); Settings → AI assistant shows which one answers. A model next to an agent is always open-source. Admins can turn the assistant off.' },
     { id: 'ai-off', group: 'ai', q: 'Does anything stop working without AI?', a: 'No. Connector suggestions and catalog search answer from built-in rules first; the model only adds to them. Pipelines, rules and analytics work fully without it.' },
   ],
   roleGuides: {

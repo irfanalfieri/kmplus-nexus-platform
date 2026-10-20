@@ -20,18 +20,20 @@ function rich(text: string, slots: Record<string, React.ReactNode>) {
 function statusText(s: Settings, t: Translate): string {
   const agentName = s.agentModels.find((a) => a.id === s.agentId)?.name ?? s.where.replace(/^agent /, '')
   const host = s.where.match(/\((.+)\)$/)?.[1]
-  const where = s.provider === 'agent' ? t('ws.ai.whereAgent', { name: agentName }) : host ? t('ws.ai.whereServerHost', { host }) : t('ws.ai.whereServer')
+  const where = s.provider === 'agent' ? t('ws.ai.whereAgent', { name: agentName }) : s.paid ? t('ws.ai.whereServerPaid') : host ? t('ws.ai.whereServerHost', { host }) : t('ws.ai.whereServer')
   if (s.ready && s.model) return t('ws.ai.ready', { model: s.model, where })
   if (s.provider === 'off') return t('ws.ai.statusOff')
   if (s.provider === 'agent') {
     if (!s.agentId) return t('ws.ai.statusChooseAgent')
     return s.model ? t('ws.ai.statusOffline', { name: agentName }) : t('ws.ai.statusNoModel', { name: agentName })
   }
+  if (s.paid) return t('ws.ai.statusPaidMissing')
+  if (s.message.startsWith('NEXUS_AI_MODEL_TYPE')) return t('ws.ai.statusBadType')
   if (!s.model) return t('ws.ai.statusNoServer')
   return s.message
 }
 
-/** Settings → AI assistant (#14): which open-source model answers, or off. */
+/** Settings → AI assistant (#14): which model answers (this server's open-source or paid model, or one next to an agent), or off. */
 export function AiSettings() {
   const t = useT()
   const id = useId()
@@ -72,6 +74,7 @@ export function AiSettings() {
         ) : (
           <>
             <Notice tone={s.ready ? 'success' : 'info'}>{statusText(s, t)}</Notice>
+            {s.paid && s.provider === 'server' && <Notice tone="warning">{t('ws.ai.paidNotice')}</Notice>}
             <div className="flex flex-wrap items-end gap-3">
               <div className="space-y-1.5">
                 <Label htmlFor={`${id}-provider`}>{t('ws.ai.model')}</Label>
@@ -120,6 +123,15 @@ export function AiSettings() {
                   })}
                 </li>
                 <li>{t('ws.ai.hardware')}</li>
+                <li>
+                  {rich(t('ws.ai.howPaid'), {
+                    type: <span className="font-mono">NEXUS_AI_MODEL_TYPE=paid</span>,
+                    key: <span className="font-mono">NEXUS_AI_PAID_API_KEY</span>,
+                    model: <span className="font-mono">NEXUS_AI_PAID_MODEL</span>,
+                    effort: <span className="font-mono">NEXUS_AI_PAID_EFFORT</span>,
+                    back: <span className="font-mono">opensource</span>,
+                  })}
+                </li>
               </ul>
             </details>
           </>

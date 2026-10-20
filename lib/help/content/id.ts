@@ -1092,7 +1092,7 @@ export const helpId: HelpContent = {
                 ['Masuk, SSO & SCIM', 'Single sign-on dengan domain terverifikasi, dan provisioning SCIM.'],
                 ['Persetujuan & lingkungan', 'Apakah penerbitan perlu orang kedua; Development, Staging, dan Production; penguncian.'],
                 ['Nexus Agent', 'Agent di jaringan Anda dan statusnya.'],
-                ['Asisten AI', 'Model open-source yang dipakai asisten: milik server, yang berjalan di dekat agent, atau nonaktif.'],
+                ['Asisten AI', 'Model yang dipakai asisten: milik server (open-source, atau model Claude berbayar jika Nexus ini disiapkan untuknya), yang berjalan di dekat agent, atau nonaktif.'],
                 ['Kunci API · Webhook', 'Kunci Data API dan webhook keluar.'],
                 ['Kanal peringatan', 'Kanal Slack, Microsoft Teams, dan webhook untuk peringatan pipeline.'],
                 ['Log audit', 'Setiap perubahan dan setiap tampilan data asli, dengan siapa, kapan, dan dari mana.'],
@@ -1104,7 +1104,7 @@ export const helpId: HelpContent = {
           id: 'ai',
           title: 'Asisten AI',
           blocks: [
-            { kind: 'p', text: 'Asisten menyusun draf pipeline, menjelaskan eksekusi yang gagal, menyarankan konektor, mencari di katalog, dan menjawab pertanyaan di Analitik. Asisten **hanya memakai model open-source**, lewat model milik server atau model yang berjalan di dekat Nexus Agent Anda, sehingga prompt bisa tetap di dalam jaringan Anda. Admin memilih model atau menonaktifkannya; semua fitur lain tetap berjalan tanpanya.' },
+            { kind: 'p', text: 'Asisten menyusun draf pipeline, menjelaskan eksekusi yang gagal, menyarankan konektor, mencari di katalog, dan menjawab pertanyaan di Analitik. Secara bawaan asisten memakai **model open-source** gratis, lewat model milik server atau model yang berjalan di dekat Nexus Agent Anda, sehingga prompt bisa tetap di dalam jaringan Anda. Pengelola Nexus Anda bisa mengganti model server dengan model Claude berbayar; Pengaturan → Asisten AI lalu menyebutkannya, dan prompt dikirim ke API Anthropic. Admin memilih model atau menonaktifkannya; semua fitur lain tetap berjalan tanpanya.' },
           ],
         },
       ],
@@ -1199,7 +1199,7 @@ export const helpId: HelpContent = {
     { id: 'sso', group: 'access', q: 'Bisakah kami masuk dengan Microsoft Entra ID, Google, atau Okta?', a: 'Bisa. Admin menambahkan penyedia di **Pengaturan → Masuk, SSO & SCIM** (OIDC atau SAML 2.0) dan memverifikasi domain email Anda dengan catatan DNS. SCIM dapat membuat dan menonaktifkan akun secara otomatis.' },
     { id: 'audit-who', group: 'access', q: 'Bisakah kami melihat siapa yang mengubah pipeline atau melihat data gaji?', a: 'Bisa: **Pengaturan → Log audit** menampilkan setiap perubahan (dengan sebelum dan sesudah) dan setiap tampilan data asli, beserta orang, waktu, alamat IP, dan browser.' },
     { id: 'ai-data', group: 'ai', q: 'Apakah asisten AI melihat data karyawan kami?', a: 'Tidak. Prompt hanya membawa nama tabel dan kolom serta contoh dari kolom publik; kolom pribadi dan tersamar tidak disertakan, dan pesan pemeriksaan disamarkan. Jawaban adalah draf yang Anda tinjau.' },
-    { id: 'ai-model', group: 'ai', q: 'Model AI apa yang dipakai Nexus?', a: 'Hanya model open-source, lewat server apa pun yang kompatibel dengan OpenAI (mis. Ollama atau vLLM): yang dikonfigurasi untuk Nexus, atau yang berjalan di dekat Nexus Agent Anda sehingga prompt tidak pernah keluar dari jaringan Anda. Admin bisa menonaktifkan asisten.' },
+    { id: 'ai-model', group: 'ai', q: 'Model AI apa yang dipakai Nexus?', a: 'Secara bawaan model open-source, lewat server apa pun yang kompatibel dengan OpenAI (mis. Ollama atau vLLM): yang dikonfigurasi untuk Nexus, atau yang berjalan di dekat Nexus Agent Anda sehingga prompt tidak pernah keluar dari jaringan Anda. Pengelola Nexus Anda bisa mengatur model server menjadi model Claude berbayar (NEXUS_AI_MODEL_TYPE=paid); Pengaturan → Asisten AI menunjukkan model mana yang menjawab. Model di dekat agent selalu open-source. Admin bisa menonaktifkan asisten.' },
     { id: 'ai-off', group: 'ai', q: 'Apakah ada yang berhenti bekerja tanpa AI?', a: 'Tidak. Saran konektor dan pencarian katalog menjawab dari aturan bawaan terlebih dahulu; model hanya menambahkan. Pipeline, aturan, dan analitik berfungsi penuh tanpanya.' },
   ],
   roleGuides: {

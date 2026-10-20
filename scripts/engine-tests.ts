@@ -86,6 +86,8 @@ import { ScimError, applyGroupPatch, applyUserPatch, paging, parseFilter, parseP
 import { expandEnv, parseConfig } from '../agent/nexus-agent'
 import { payloadSchemas, wireRow } from '@/lib/agent/protocol'
 import { extractJson, LlmError } from '@/lib/ai/llm'
+import { DEFAULT_PAID_MODEL, readServerModel } from '@/lib/ai/model-config'
+import { paidCompletion } from '@/lib/ai/paid'
 import { AnswerError, checkAsk, checkMapping, checkRule, safeSamples } from '@/lib/ai/prompts'
 import {
   API_MAX_ATTEMPTS,
@@ -892,6 +894,58 @@ async function main() {
     assert.equal(localizeCheck('Needs approval (Contract employee)', 'id'), 'Perlu persetujuan (Contract employee)')
     assert.equal(localizeCheck('Refused by KMS: duplicate key', 'id'), 'Refused by KMS: duplicate key', 'unknown text is shown as written')
     assert.equal(localizeCheck(issues[0], 'en'), issues[0])
+  })
+
+  await test('AI model type: open-source and paid setups live side by side; the type picks one', () => {
+    const open = { NEXUS_AI_BASE_URL: 'http://localhost:11434/v1', NEXUS_AI_MODEL: 'qwen2.5:7b-instruct' }
+    const paid = { NEXUS_AI_PAID_API_KEY: 'sk-test', NEXUS_AI_PAID_MODEL: 'claude-sonnet-5-5' }
+    const a = readServerModel({ ...open, ...paid })
+    assert.equal(a.model?.type, 'opensource', 'open-source is the default type')
+    assert.equal(a.model?.config.model, 'qwen2.5:7b-instruct')
+    const b = readServerModel({ ...open, ...paid, NEXUS_AI_MODEL_TYPE: 'Paid' })
+    assert.ok(b.model?.type === 'paid' && b.model.config.model === 'claude-sonnet-5-5' && b.model.config.effort === 'medium' && b.model.config.provider === 'anthropic')
+    const c = readServerModel({ NEXUS_AI_MODEL_TYPE: 'paid', NEXUS_AI_PAID_API_KEY: 'sk-test' })
+    assert.ok(c.model?.type === 'paid' && c.model.config.model === DEFAULT_PAID_MODEL)
+    assert.match(readServerModel({ ...open, NEXUS_AI_MODEL_TYPE: 'paid' }).problem ?? '', /NEXUS_AI_PAID_API_KEY is not set/, 'paid without a key is not ready, even with open-source set')
+    assert.match(readServerModel({ ...paid, NEXUS_AI_MODEL_TYPE: 'paid', NEXUS_AI_PAID_PROVIDER: 'other' }).problem ?? '', /isn't supported/)
+    assert.match(readServerModel({ ...paid, NEXUS_AI_MODEL_TYPE: 'paid', NEXUS_AI_PAID_EFFORT: 'huge' }).problem ?? '', /NEXUS_AI_PAID_EFFORT must be/)
+    assert.match(readServerModel({ NEXUS_AI_MODEL_TYPE: 'cheap' }).problem ?? '', /must be "opensource" or "paid"/)
+    assert.match(readServerModel({}).problem ?? '', /NEXUS_AI_BASE_URL and NEXUS_AI_MODEL/)
+    assert.equal(readServerModel({ NEXUS_AI_MODEL_TYPE: 'open-source', ...open }).model?.type, 'opensource', 'spelling variants are accepted')
+  })
+
+  await test('AI paid model: Claude request shape, answer text, refusals and key errors', async () => {
+    const sent: { url: string; headers: Headers; body: Record<string, unknown> }[] = []
+    const answer = (status: number, json: unknown) =>
+      (async (input: RequestInfo | URL, init?: RequestInit) => {
+        sent.push({ url: String(input), headers: new Headers(init?.headers), body: JSON.parse(String(init?.body ?? '{}')) })
+        return new Response(JSON.stringify(json), { status, headers: { 'content-type': 'application/json', 'request-id': 'req_test' } })
+      }) as typeof fetch
+    const message = (content: unknown[], stop = 'end_turn') => ({ id: 'msg_1', type: 'message', role: 'assistant', model: 'claude-opus-5-5', content, stop_reason: stop, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 5 } })
+    const cfg = { provider: 'anthropic' as const, apiKey: 'sk-test', model: 'claude-opus-5-5', effort: 'medium' as const }
+    const msgs = [{ role: 'system' as const, content: 'Answer in JSON.' }, { role: 'user' as const, content: 'Map these columns.' }]
+
+    const ok = await paidCompletion(cfg, msgs, { fetchImpl: answer(200, message([{ type: 'thinking', thinking: '', signature: 's' }, { type: 'text', text: '{"fields":[]}' }])), maxTokens: 2000 })
+    assert.equal(ok.content, '{"fields":[]}', 'only text blocks are returned')
+    const req = sent[0]
+    assert.match(req.url, /\/v1\/messages/)
+    assert.equal(req.headers.get('x-api-key'), 'sk-test')
+    assert.match(req.headers.get('anthropic-beta') ?? '', /server-side-fallback-2026-07-01/)
+    assert.equal(req.body.system, 'Answer in JSON.')
+    assert.deepEqual(req.body.messages, [{ role: 'user', content: 'Map these columns.' }])
+    assert.equal(req.body.fallbacks, 'default')
+    assert.deepEqual(req.body.output_config, { effort: 'medium' })
+    assert.ok(!('temperature' in req.body) && !('thinking' in req.body), 'no sampling or thinking settings on current Claude models')
+    assert.ok((req.body.max_tokens as number) >= 16_000, 'room for thinking on top of the answer')
+
+    sent.length = 0
+    await paidCompletion({ ...cfg, model: 'claude-haiku-5-5' }, msgs, { fetchImpl: answer(200, message([{ type: 'text', text: '{}' }])) })
+    assert.ok(!('fallbacks' in sent[0].body) && !(sent[0].headers.get('anthropic-beta') ?? '').includes('fallback'), 'no fallback where the model has none')
+
+    await assert.rejects(() => paidCompletion(cfg, msgs, { fetchImpl: answer(200, message([], 'refusal')) }), /declined/)
+    await assert.rejects(() => paidCompletion(cfg, msgs, { fetchImpl: answer(401, { type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } }) }), /refused the API key/)
+    await assert.rejects(() => paidCompletion(cfg, msgs, { fetchImpl: answer(404, { type: 'error', error: { type: 'not_found_error', message: 'model' } }) }), /was not found/)
+    await assert.rejects(() => paidCompletion(cfg, msgs, { fetchImpl: answer(200, message([{ type: 'thinking', thinking: '', signature: 's' }], 'max_tokens')) }), /ran out of room/)
   })
 
   await test('AI-2/AI-3: plans become checked pipelines; fixes apply as drafts; personal values are hidden', () => {

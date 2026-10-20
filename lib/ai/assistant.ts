@@ -5,34 +5,31 @@ import type { WorkspaceContext } from '@/lib/auth/session'
 import { recordAudit } from '@/lib/audit'
 import { AGENT_OFFLINE_AFTER_MS } from '@/lib/agent/protocol'
 import { callAgent } from '@/lib/agent/server'
-import { chatCompletion, extractJson, LlmError, type ChatMessage, type LlmConfig } from './llm'
+import { chatCompletion, extractJson, LlmError, type ChatMessage } from './llm'
+import { readServerModel } from './model-config'
 import { AnswerError, repairMessages } from './prompts'
 
 /**
- * The AI assistant's model (#14): an open-source model behind an
- * OpenAI-compatible API. A workspace chooses where it runs:
- *   server  the model configured for this Nexus (NEXUS_AI_BASE_URL, NEXUS_AI_MODEL,
- *           optional NEXUS_AI_API_KEY), e.g. Ollama/vLLM on your own server
- *   agent   the model next to one of the workspace's Nexus Agents (prompts never
- *           leave the customer's network)
+ * The AI assistant's model (#14). A workspace chooses where it runs:
+ *   server  the model configured for this Nexus: open-source (NEXUS_AI_BASE_URL,
+ *           NEXUS_AI_MODEL, optional NEXUS_AI_API_KEY; e.g. Ollama/vLLM) or, with
+ *           NEXUS_AI_MODEL_TYPE=paid, Claude (NEXUS_AI_PAID_*); see model-config.ts
+ *   agent   the open-source model next to one of the workspace's Nexus Agents
+ *           (prompts never leave the customer's network)
  *   off
  */
 
 export const AI_PROVIDERS = ['off', 'server', 'agent'] as const
 export type AiProvider = (typeof AI_PROVIDERS)[number]
 
-export function serverModel(): LlmConfig | null {
-  const baseUrl = process.env.NEXUS_AI_BASE_URL?.trim()
-  const model = process.env.NEXUS_AI_MODEL?.trim()
-  return baseUrl && model ? { baseUrl, model, apiKey: process.env.NEXUS_AI_API_KEY?.trim() || undefined } : null
-}
-
 export interface AiStatus {
   provider: AiProvider
   ready: boolean
   model: string | null
-  /** Where prompts go, for the UI ("this Nexus server", "agent Jakarta office"). */
+  /** Where prompts go, for the UI ("this Nexus server", "agent Jakarta office", "Anthropic (paid API)"). */
   where: string
+  /** The server model is a paid API (NEXUS_AI_MODEL_TYPE=paid): prompts leave for that provider. */
+  paid: boolean
   message: string
   agentId: string | null
 }
@@ -40,18 +37,19 @@ export interface AiStatus {
 export async function aiStatus(workspaceId: string): Promise<AiStatus> {
   const [ws] = await db.select({ provider: workspaces.aiProvider, agentId: workspaces.aiAgentId }).from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1)
   const provider = (AI_PROVIDERS as readonly string[]).includes(ws?.provider ?? '') ? (ws!.provider as AiProvider) : 'server'
-  if (provider === 'off') return { provider, ready: false, model: null, where: '', message: 'The AI assistant is turned off for this workspace (Settings → AI assistant).', agentId: null }
+  if (provider === 'off') return { provider, ready: false, model: null, where: '', message: 'The AI assistant is turned off for this workspace (Settings → AI assistant).', agentId: null, paid: false }
   if (provider === 'agent') {
     const [agent] = ws?.agentId ? await db.select().from(agents).where(and(eq(agents.id, ws.agentId), eq(agents.workspaceId, workspaceId), isNull(agents.revokedAt))).limit(1) : []
     const model = (agent?.ai as { model?: string } | null)?.model ?? null
-    if (!agent) return { provider, ready: false, model: null, where: '', message: 'Choose the agent whose model to use (Settings → AI assistant).', agentId: null }
-    if (!model) return { provider, ready: false, model: null, where: `agent ${agent.name}`, message: `Agent "${agent.name}" has no AI model in its config.`, agentId: agent.id }
+    if (!agent) return { provider, ready: false, model: null, where: '', message: 'Choose the agent whose model to use (Settings → AI assistant).', agentId: null, paid: false }
+    if (!model) return { provider, ready: false, model: null, where: `agent ${agent.name}`, message: `Agent "${agent.name}" has no AI model in its config.`, agentId: agent.id, paid: false }
     const online = Boolean(agent.lastSeenAt) && Date.now() - agent.lastSeenAt!.getTime() < AGENT_OFFLINE_AFTER_MS
-    return { provider, ready: online, model, where: `agent ${agent.name}`, message: online ? '' : `Agent "${agent.name}" is offline.`, agentId: agent.id }
+    return { provider, ready: online, model, where: `agent ${agent.name}`, message: online ? '' : `Agent "${agent.name}" is offline.`, agentId: agent.id, paid: false }
   }
-  const cfg = serverModel()
-  if (!cfg) return { provider, ready: false, model: null, where: 'this Nexus server', message: 'No AI model is configured for this Nexus (NEXUS_AI_BASE_URL and NEXUS_AI_MODEL), and no agent model is selected.', agentId: null }
-  return { provider, ready: true, model: cfg.model, where: `this Nexus server (${new URL(cfg.baseUrl).host})`, message: '', agentId: null }
+  const { model: server, type, problem } = readServerModel()
+  if (!server) return { provider, ready: false, model: null, where: 'this Nexus server', message: problem ?? '', agentId: null, paid: type === 'paid' }
+  if (server.type === 'paid') return { provider, ready: true, model: server.config.model, where: 'Anthropic (paid API)', message: '', agentId: null, paid: true }
+  return { provider, ready: true, model: server.config.model, where: `this Nexus server (${new URL(server.config.baseUrl).host})`, message: '', agentId: null, paid: false }
 }
 
 async function complete(ctx: WorkspaceContext, status: AiStatus, messages: ChatMessage[]): Promise<string> {
@@ -59,7 +57,13 @@ async function complete(ctx: WorkspaceContext, status: AiStatus, messages: ChatM
     const res = (await callAgent(status.agentId!, 'ai', { messages, json: true, temperature: 0.1, maxTokens: 2000 }, { workspaceId: ctx.workspaceId, timeoutMs: 150_000 })) as { content: string }
     return res.content
   }
-  return (await chatCompletion(serverModel()!, messages, { json: true, temperature: 0.1, maxTokens: 2000, timeoutMs: 120_000 })).content
+  const server = readServerModel().model
+  if (!server) throw new LlmError('No AI model is configured for this Nexus (NEXUS_AI_BASE_URL and NEXUS_AI_MODEL), and no agent model is selected.')
+  if (server.type === 'paid') {
+    const { paidCompletion } = await import('./paid')
+    return (await paidCompletion(server.config, messages, { maxTokens: 2000, timeoutMs: 120_000 })).content
+  }
+  return (await chatCompletion(server.config, messages, { json: true, temperature: 0.1, maxTokens: 2000, timeoutMs: 120_000 })).content
 }
 
 /**

@@ -2550,6 +2550,20 @@ async function main() {
         const status = await getAiSettings()
         assert.equal(status.ready, true, status.message)
         assert.equal(status.model, 'qwen2.5:7b-instruct')
+        assert.equal(status.paid, false)
+
+        // The paid setup sits next to the open-source one; the type decides which answers.
+        process.env.NEXUS_AI_MODEL_TYPE = 'paid'
+        const noKey = await getAiSettings()
+        assert.ok(!noKey.ready && noKey.paid, 'paid without a key is not ready')
+        await rejectsWith(() => suggestMapping({ columns: [{ name: 'id', type: 'integer' }], dataSourceId: sourceId, table: 'people', entity: 'employee' }), /NEXUS_AI_PAID_API_KEY is not set/)
+        process.env.NEXUS_AI_PAID_API_KEY = 'sk-test-not-used'
+        const paid = await getAiSettings()
+        assert.ok(paid.ready && paid.paid && paid.model === 'claude-opus-5-5' && paid.where === 'Anthropic (paid API)', JSON.stringify(paid))
+        delete process.env.NEXUS_AI_PAID_API_KEY
+        process.env.NEXUS_AI_MODEL_TYPE = 'opensource'
+        assert.equal((await getAiSettings()).model, 'qwen2.5:7b-instruct', 'switching back uses the open-source settings again')
+        delete process.env.NEXUS_AI_MODEL_TYPE
 
         const mapping = await suggestMapping({ columns: [{ name: 'id', type: 'integer' }, { name: 'email', type: 'text' }], dataSourceId: sourceId, table: 'people', entity: 'employee' })
         assert.deepEqual(mapping.suggestions.map((m) => [m.from, m.to]), [['id', 'employee_code'], ['email', 'email']], 'invented columns and bad names are dropped')
