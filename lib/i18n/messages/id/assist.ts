@@ -5,7 +5,7 @@ export const assist: Messages['assist'] = {
   pipeline: {
     label: 'Jelaskan pipeline-nya',
     placeholder: 'mis. Sinkronkan karyawan aktif dari ekspor SAP ke dataset employees setiap hari kerja pukul 02.00',
-    hint: 'Asisten merencanakannya dari sumber dan tabel Anda yang sebenarnya. Anda meninjau draf di editor sebelum apa pun disimpan.',
+    hint: 'Asisten merencanakannya dari sumber, tabel, dan tujuan Anda yang sebenarnya. Anda meninjau draf di editor sebelum apa pun disimpan.',
     action: 'Buat draf pipeline',
     working: 'Membuat draf…',
     drafted: 'Draf dari {model}. Tinjau setiap langkah sebelum menyimpan.',

@@ -331,7 +331,7 @@ export const helpId: HelpContent = {
               kind: 'list',
               items: [
                 '**Dari templat**: HRIS → Employee (memetakan SAP, Talenta, atau tabel SDM apa pun ke entitas Employee, memeriksanya dengan paket aturan SDM, menjaga dataset tetap mutakhir, dan bisa juga mengirimnya ke produk KMPlus), Active Directory → Users, dan CSV / Excel → Dataset.',
-                '**Jelaskan dengan kata-kata**: tulis yang Anda inginkan dan asisten AI menyusun draf pipeline dari sumber dan tabel Anda yang sebenarnya. Draf terbuka di editor tanpa tersimpan, untuk Anda tinjau.',
+                '**Jelaskan dengan kata-kata**: tulis yang Anda inginkan (“salin People API ke REST API Payroll setiap malam”) dan asisten AI menyusun draf pipeline dari sumber dan tabel Anda yang sebenarnya. Draf menulis ke dataset atau ke tujuan mana pun yang sudah Anda tambahkan: tabel database (kolom dicocokkan menurut nama), REST API (body permintaan disusun dari contoh, seperti saat Anda menempelkannya) atau produk KMPlus. Draf terbuka di editor tanpa tersimpan dan tidak ada yang dikirim selama penyusunan; tinjau setiap langkah, dan coba langkah API dengan **Pratinjau permintaan** sebelum menjalankannya.',
                 '**Dari awal**: tambahkan langkah di kanvas lalu hubungkan.',
               ],
             },

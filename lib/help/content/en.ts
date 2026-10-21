@@ -331,7 +331,7 @@ export const helpEn: HelpContent = {
               kind: 'list',
               items: [
                 '**From a template**: HRIS → Employee (maps SAP, Talenta or any HR table to the Employee entity, checks it with the HR rule pack, keeps an up-to-date dataset and can also send it to a KMPlus product), Active Directory → Users, and CSV / Excel → Dataset.',
-                '**Describe it**: write what you want in plain words and the AI assistant drafts the pipeline from your real sources and tables. The draft opens in the editor unsaved, for you to review.',
+                '**Describe it**: write what you want in plain words (“copy the People API into the Payroll REST API every night”) and the AI assistant drafts the pipeline from your real sources and tables. It writes to a dataset or to any destination you added: a database table (columns matched by name), a REST API (the request body built from an example, as when you paste one) or a KMPlus product. The draft opens in the editor unsaved and nothing is sent while drafting; review every step, and try an API step with **Preview request** before you run it.',
                 '**From scratch**: add steps on the canvas and connect them.',
               ],
             },

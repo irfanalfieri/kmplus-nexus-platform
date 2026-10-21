@@ -60,6 +60,16 @@ export async function startLlmMock(port = 0) {
           schedule: { type: 'daily', time: '02:00' },
           explanation: 'Reads the table and writes a dataset daily at 02:00 WIB.',
         }
+        // "… into the <name> REST API": that listed REST destination, with a body from an example.
+        const rest = [...system.matchAll(/- id "([^"]+)": ([^\n]*?) \(REST API/g)].find((r) => user.includes(r[2]))
+        if (rest) {
+          answer = {
+            ...(answer as object),
+            template: 'copy',
+            datasetName: undefined,
+            destination: { kind: 'api', dataSourceId: rest[1], method: 'post', path: '/employees', body: { employee: Object.fromEntries(columns.slice(0, 2).map((c) => [c, `{{${c}}}`])), source: 'nexus' } },
+          }
+        }
       } else if (system.startsWith('You recommend which KMPlus Nexus connector')) {
         answer = { suggestions: [{ slug: 'rest', confidence: 'medium', reason: 'An HTTP API is the closest fit.' }] }
       } else if (system.startsWith('You find where data lives')) {

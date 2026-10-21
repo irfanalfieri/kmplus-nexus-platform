@@ -3,7 +3,7 @@ export const assist = {
   pipeline: {
     label: 'Describe the pipeline',
     placeholder: 'e.g. Sync active employees from the SAP export to the employees dataset every weekday at 02:00',
-    hint: 'The assistant plans it from your real sources and tables. You review the draft in the editor before anything is saved.',
+    hint: 'The assistant plans it from your real sources, tables and destinations. You review the draft in the editor before anything is saved.',
     action: 'Draft pipeline',
     working: 'Drafting…',
     drafted: 'Draft from {model}. Review every step before saving.',

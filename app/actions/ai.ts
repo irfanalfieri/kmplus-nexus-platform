@@ -153,23 +153,34 @@ async function askDataImpl(input: z.input<typeof askInput>) {
 
 const pipelineInput = z.object({ text: z.string().trim().min(10, 'Describe the pipeline in a sentence or two').max(2000) })
 
+/** A REST destination's base URL host for the prompt ('' behind an agent, with a secret reference, or unreadable). */
+function restHost(id: string, stored: unknown, workspaceId: string): string {
+  try {
+    return new URL(String(decryptCredentials(id, stored, workspaceId).baseUrl ?? '')).host
+  } catch {
+    return ''
+  }
+}
+
 /** A draft pipeline for the editor. Nothing is saved: the person reviews it there and saves it themselves. */
 async function draftPipelineImpl(input: z.input<typeof pipelineInput>) {
   const ctx = await requireWorkspace('pipelines:edit')
   const data = pipelineInput.parse(input)
   const [sourceRows, datasetRows] = await Promise.all([
-    db.select({ id: dataSources.id, name: dataSources.name, sourceType: dataSources.sourceType, config: dataSources.config }).from(dataSources).where(eq(dataSources.workspaceId, ctx.workspaceId)).orderBy(dataSources.name),
+    db.select({ id: dataSources.id, name: dataSources.name, sourceType: dataSources.sourceType, config: dataSources.config, credentials: dataSources.credentials }).from(dataSources).where(eq(dataSources.workspaceId, ctx.workspaceId)).orderBy(dataSources.name),
     db.select({ name: nexusDatasets.name, columns: nexusDatasets.columns }).from(nexusDatasets).where(eq(nexusDatasets.workspaceId, ctx.workspaceId)).orderBy(nexusDatasets.name),
   ])
-  // Schema only (names and types), never sample values.
+  // Schema only (names, types, keys), never sample values; for REST destinations the base URL's host, never credentials or headers.
   const sources: PlanSource[] = sourceRows.filter((r) => !isSecretManager(r.sourceType)).map((r) => {
     const config = (r.config ?? {}) as { role?: 'source' | 'destination'; schemaScan?: SchemaScanResult }
+    const role = config.role ?? 'source'
     return {
       id: r.id,
       name: r.name,
       sourceType: r.sourceType,
-      role: config.role ?? 'source',
-      tables: (config.schemaScan?.tables ?? []).slice(0, 60).map((t) => ({ name: t.name, columns: t.columns.slice(0, 80).map((c) => ({ name: c.name, type: c.type })) })),
+      role,
+      tables: (config.schemaScan?.tables ?? []).slice(0, 60).map((t) => ({ name: t.name, columns: t.columns.slice(0, 80).map((c) => ({ name: c.name, type: c.type, ...(c.isPrimaryKey ? { key: true } : {}) })) })),
+      ...(role === 'destination' && r.sourceType === 'rest' ? { host: restHost(r.id, r.credentials, ctx.workspaceId) } : {}),
     }
   })
   if (!sources.some((x) => x.role === 'source' && x.tables.length)) throw new Error('Connect and scan a data source first: the assistant plans pipelines from your real tables.')

@@ -2603,6 +2603,18 @@ async function main() {
         assert.equal((await db.select({ id: pipelines.id }).from(pipelines).where(eq(pipelines.workspaceId, adminWs))).length, pipelinesBefore, 'a draft is not saved')
         assert.ok(!JSON.stringify(llm.requests.at(-1)!.messages).includes('@kmplus.test'), 'pipeline drafts send the schema, not rows')
 
+        // AI-2 into a REST API added as a destination: named by host only; the Destination step is that API; nothing sent or saved.
+        const payrollId = await createDataSource({ name: `${RUN} Payroll API`, type: 'rest', sourceType: 'rest', config: { role: 'destination' }, credentials: { baseUrl: 'https://api.payroll.test/v2', authMethod: 'bearer', bearerToken: 'payroll-secret-token' } })
+        const apiDraft = await draftPipeline({ text: `Copy the people table into the ${RUN} Payroll API every day at 2am` })
+        const apiDest = apiDraft.definition.nodes.find((n) => n.type === 'destination')
+        assert.ok(apiDest?.type === 'destination' && apiDest.kind === 'api' && apiDest.dataSourceId === payrollId && apiDest.method === 'POST' && apiDest.path === '/employees', JSON.stringify(apiDest))
+        assert.ok(bodyLeaves(apiDest.body.template).some((l) => l.node.binding.kind === 'column'), 'the body is built from the example and bound to source columns')
+        const draftPrompt = llm.requests.at(-1)!.messages[0].content
+        assert.ok(draftPrompt.includes(`id "${payrollId}": ${RUN} Payroll API (REST API at api.payroll.test)`), 'the REST destination is listed with its host')
+        assert.ok(!draftPrompt.includes('payroll-secret-token') && !draftPrompt.includes('/v2'), 'never its credentials or the rest of its URL')
+        assert.equal((await db.select({ id: pipelines.id }).from(pipelines).where(eq(pipelines.workspaceId, adminWs))).length, pipelinesBefore, 'an API draft is not saved either')
+        await deleteDataSource(payrollId)
+
         // AI-3: a run that held rows back is explained; personal values are hidden from the model; the fix is saved as a draft.
         const [partialRun] = await db.select({ id: executionLogs.id }).from(executionLogs).where(and(eq(executionLogs.workspaceId, adminWs), eq(executionLogs.status, 'partial'))).limit(1)
         assert.ok(partialRun, 'a run that held rows back')

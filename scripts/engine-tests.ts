@@ -25,7 +25,7 @@ import { DOMAIN_ENTITIES, suggestCanonicalField } from '@/lib/domain/model'
 import { createTranslator, MESSAGES } from '@/lib/i18n/translate'
 import { landingSection, settingsHref } from '@/lib/navigation'
 import { localizeCheck, parseCheck } from '@/lib/pipelines/check-messages'
-import { applyFix, checkDiagnosis, checkPipelinePlan, redactMessage } from '@/lib/ai/pipelines'
+import { applyFix, checkDiagnosis, checkPipelinePlan, pipelinePrompt, redactMessage } from '@/lib/ai/pipelines'
 import { render } from '@/lib/email'
 import { SERVER_ERRORS } from '@/lib/i18n/server-errors-table'
 import { localizeServerError } from '@/lib/i18n/server-errors'
@@ -109,7 +109,7 @@ import {
   shortApiMessage,
   updateBodyNode,
 } from '@/lib/pipelines/body-template'
-import { apiDestinationIssues, apiDestinationSpec, type BodyNode } from '@/lib/pipelines/definition'
+import { apiDestinationIssues, apiDestinationSpec, isBatchBody, type BodyNode } from '@/lib/pipelines/definition'
 
 let passed = 0
 async function test(name: string, fn: () => void | Promise<void>) {
@@ -999,6 +999,114 @@ async function main() {
     assert.equal(redactMessage('national_id "3171012345678901" is not a valid NIK (16 digits with a birth date)'), 'national_id "<hidden>" is not a valid NIK (16 digits with a birth date)')
     assert.equal(redactMessage('status "x" is not one of active, inactive'), 'status "x" is not one of active, inactive', 'values of public fields stay')
     assert.equal(redactMessage('Lookup failed for "Budi Santoso" 081234567890'), 'Lookup failed for "<hidden>" <hidden>')
+  })
+
+  await test('AI-2: drafts write to datasets, database tables, REST APIs and KMPlus products', () => {
+    const sources = [
+      { id: 'api1', name: 'People API', sourceType: 'rest', role: 'source' as const, tables: [{ name: 'employees', columns: ['code', 'name', 'email', 'status', 'nik'].map((name) => ({ name, type: 'text' })) }] },
+      { id: 'pg', name: 'HR warehouse', sourceType: 'postgres', role: 'destination' as const, tables: [{ name: 'hr_employees', columns: [{ name: 'emp_code', type: 'varchar', key: true }, { name: 'full_name', type: 'text' }, { name: 'email', type: 'text' }, { name: 'hired_on', type: 'date' }] }] },
+      { id: 'pay', name: 'Payroll API', sourceType: 'rest', role: 'destination' as const, host: 'api.payroll.example', tables: [] },
+      { id: 'kms', name: 'KMS', sourceType: 'kmplus', role: 'destination' as const, tables: [{ name: 'employee', columns: [{ name: 'employee_code', type: 'text', key: true }, { name: 'full_name', type: 'text' }, { name: 'email', type: 'text' }] }] },
+      { id: 'sap', name: 'SAP out', sourceType: 'sap', role: 'destination' as const, tables: [{ name: 'PA0001', columns: [{ name: 'PERNR', type: 'text' }] }] },
+      { id: 'pgsrc', name: 'Reporting DB', sourceType: 'postgres', role: 'source' as const, tables: [{ name: 'people', columns: [{ name: 'id', type: 'integer' }] }] },
+    ]
+    const input = { sources, datasets: [] }
+    const base = { name: 'Copy', template: 'copy', dataSourceId: 'api1', table: 'employees' }
+    const dests = (plan: unknown) => checkPipelinePlan(plan, input).definition.nodes.filter((n) => n.type === 'destination')
+    const draft = (plan: unknown) => checkPipelinePlan(plan, input)
+
+    // The prompt lists writable destinations; REST APIs by host only.
+    const prompt = pipelinePrompt({ text: 'copy the People API into the Payroll API', sources, datasets: [] })[0].content
+    assert.match(prompt, /id "pay": Payroll API \(REST API at api\.payroll\.example\)/)
+    assert.match(prompt, /hr_employees \[emp_code \(key\), full_name/)
+    assert.ok(!prompt.includes('"sap"') && !prompt.includes('"pgsrc": Reporting DB (postgres database)'), 'no unwritable destinations, no sources among destinations')
+
+    // Dataset, as before; "copy" keeps every column.
+    const ds = dests({ ...base, destination: { kind: 'dataset', datasetName: 'people' } })
+    assert.deepEqual(ds.map((n) => n.type === 'destination' && n.kind === 'dataset' && n.datasetName), ['people'])
+
+    // Database: the model's pair, the rest by name; upsert on the table's key.
+    const db = draft({ ...base, destination: { kind: 'database', dataSourceId: 'pg', table: 'hr_employees', columns: [{ from: 'code', to: 'emp_code' }] } })
+    const dbMap = db.definition.nodes.find((n) => n.type === 'map')
+    assert.deepEqual(dbMap?.type === 'map' && dbMap.fields.map((f) => `${f.from}>${f.to}`), ['code>emp_code', 'email>email'])
+    const dbDest = db.definition.nodes.find((n) => n.type === 'destination')
+    assert.ok(dbDest?.type === 'destination' && dbDest.kind === 'datasource' && dbDest.dataSourceId === 'pg' && dbDest.table === 'hr_employees' && dbDest.mode === 'upsert')
+    assert.deepEqual(dbDest.keys, ['emp_code'])
+    assert.ok(db.notes.some((n) => n.includes('full_name, hired_on')), 'unwritten table columns are named')
+    assert.equal(dests({ ...base, destination: { kind: 'database', dataSourceId: 'pg', table: 'hr_employees', mode: 'append' } })[0].mode, 'append')
+    assert.throws(() => draft({ ...base, destination: { kind: 'database', dataSourceId: 'pg', table: 'staff' } }), /Table "staff" is not in HR warehouse/)
+    assert.throws(() => draft({ ...base, destination: { kind: 'database', dataSourceId: 'pg', table: 'hr_employees', columns: [{ from: 'code', to: 'badge' }] } }), /badge are not in hr_employees/)
+    assert.throws(() => draft({ ...base, destination: { kind: 'database', dataSourceId: 'pg', table: 'hr_employees', columns: [{ from: 'salary', to: 'emp_code' }] } }), /salary don't reach the destination/)
+    assert.throws(() => draft({ ...base, destination: { kind: 'database', dataSourceId: 'pg', table: 'hr_employees', keys: ['hired_on'] } }), /Key column\(s\) hired_on/)
+    assert.throws(() => draft({ ...base, destination: { kind: 'database', dataSourceId: 'sap', table: 'PA0001' } }), /"sap" is not a database added as a destination. Use one of: pg/)
+    assert.throws(() => draft({ ...base, destination: { kind: 'database', dataSourceId: 'pay' } }), /Payroll API is a REST API: use kind "api"/)
+
+    // REST API: method, path under the base URL, body built from the example like a pasted one.
+    const api = draft({ ...base, destination: { kind: 'rest', dataSourceId: 'pay', method: 'put', path: 'employees/{{code}}', body: { employee: { id: '{{code}}', name: 'name', email: null }, source: 'nexus' } } })
+    const apiDest = api.definition.nodes.find((n) => n.type === 'destination')
+    assert.ok(apiDest?.type === 'destination' && apiDest.kind === 'api' && apiDest.dataSourceId === 'pay')
+    assert.deepEqual([apiDest.method, apiDest.path, apiDest.body.format], ['PUT', '/employees/{{code}}', 'json'])
+    assert.deepEqual(
+      bodyLeaves(apiDest.body.template).map((l) => `${l.path}=${l.node.binding.kind === 'column' ? l.node.binding.column : l.node.binding.kind === 'constant' ? `"${l.node.binding.value}"` : l.node.binding.kind}`),
+      ['employee.id=code', 'employee.name=name', 'employee.email=email', 'source="nexus"'],
+      '{{column}} and bare names bind columns, null is matched by its key, other values are fixed'
+    )
+    assert.equal(JSON.parse(apiDest.body.sample).source, 'nexus', 'the example is kept for the editor')
+    const rendered = renderRequests(apiDest, [{ code: 'E 1', name: 'Ani', email: 'a@b.id', status: 'active', nik: '1' }], { runId: 'r', chunk: 0 })
+    assert.deepEqual([rendered.requests[0].path, JSON.parse(rendered.requests[0].body)], ['/employees/E%201', { employee: { id: 'E 1', name: 'Ani', email: 'a@b.id' }, source: 'nexus' }])
+    assert.ok(api.notes.some((n) => n.includes('Nothing was sent')) && api.notes.some((n) => n.includes('source = "nexus"')))
+
+    const batch = dests({ ...base, destination: { kind: 'api', dataSourceId: 'pay', path: '/employees/bulk', body: JSON.stringify({ batch_id: '{{batch_id}}', records: [{ code: '{{code}}', email: '{{email}}' }] }), rowsList: 'records' } })[0]
+    assert.ok(batch.kind === 'api' && batch.method === 'POST')
+    assert.ok(isBatchBody(batch.body.template), 'rowsList marks the list of rows')
+    assert.deepEqual(bodyLeaves(batch.body.template).map((l) => l.node.binding.kind), ['meta', 'column', 'column'])
+    const list = dests({ ...base, destination: { kind: 'api', dataSourceId: 'pay', path: '/employees', body: [{ code: '{{code}}' }] } })[0]
+    assert.ok(list.kind === 'api' && isBatchBody(list.body.template), 'a list body sends many rows per request')
+
+    const apiPlan = (destination: object) => ({ ...base, destination: { kind: 'api', dataSourceId: 'pay', path: '/e', body: { code: '{{code}}' }, ...destination } })
+    assert.throws(() => draft(apiPlan({ method: 'DELETE' })), /Method "DELETE" can't send rows. Use one of: POST, PUT, PATCH/)
+    assert.throws(() => draft(apiPlan({ path: '/employees/../admin' })), /"\." or "\.\." segments/)
+    assert.throws(() => draft(apiPlan({ path: '/a/%2E%2E/b' })), /"\." or "\.\." segments/)
+    assert.throws(() => draft(apiPlan({ path: 'https://evil.example/x' })), /not a full URL/)
+    assert.throws(() => draft(apiPlan({ path: '/employees/{{badge}}' })), /\{\{badge\}\} don't reach the destination/)
+    assert.throws(() => draft(apiPlan({ body: { code: '{{salary}}' } })), /\{\{salary\}\} don't reach the destination. Use only: code, name/)
+    assert.throws(() => draft(apiPlan({ body: { greeting: 'Hi {{name}}' } })), /mixes text and a column/)
+    assert.throws(() => draft(apiPlan({ body: { records: [] }, rowsList: 'items' })), /"items" is not a list in the body. Use one of: records/)
+    assert.throws(() => draft(apiPlan({ body: undefined })), /Give "body"/)
+    assert.throws(() => draft(apiPlan({ body: 'not json' })), /Give "body"/)
+    assert.throws(() => draft(apiPlan({ body: {} })), /Give "body"/)
+    assert.throws(() => draft(apiPlan({ dataSourceId: 'pg' })), /HR warehouse is not a REST API: use kind "database"/)
+    assert.throws(() => draft(apiPlan({ dataSourceId: 'nope' })), /"nope" is not a REST API added as a destination. Use one of: pay/)
+    assert.throws(() => draft(apiPlan({ path: '/employees/{{code}}', body: [{ code: '{{code}}' }] })), /only use \{\{column\}\} values when each request sends one row/)
+    assert.throws(
+      () => checkPipelinePlan(apiPlan({}), { sources: sources.filter((s) => s.id !== 'pay'), datasets: [] }),
+      /There is no "api" destination to write to. Use kind "dataset"/
+    )
+
+    // A template's Map renames: destination columns may use source names; Nexus follows them.
+    const hris = draft({ ...base, template: 'hris-employee', destination: { kind: 'api', dataSourceId: 'pay', path: '/employees', body: { id: '{{code}}', nik: '{{nik}}' } } })
+    assert.deepEqual(hris.definition.nodes.map((n) => n.type), ['source', 'map', 'validate', 'destination'])
+    const hrisDest = hris.definition.nodes.find((n) => n.type === 'destination')
+    assert.deepEqual(hrisDest?.type === 'destination' && hrisDest.kind === 'api' && bodyLeaves(hrisDest.body.template).map((l) => l.node.binding.kind === 'column' && l.node.binding.column), ['employee_code', 'national_id'])
+    const hrisDb = dests({ ...base, template: 'hris-employee', destination: { kind: 'database', dataSourceId: 'pg', table: 'hr_employees', columns: [{ from: 'code', to: 'emp_code' }], keys: ['code'] } })[0]
+    assert.deepEqual(hrisDb.keys, ['emp_code'], 'keys given as source names follow the mapping too')
+
+    // KMPlus: employees fan out beside the dataset (the template); other data goes to the entity.
+    const kmsHris = dests({ ...base, template: 'hris-employee', destination: { kind: 'kmplus', dataSourceId: 'kms' } })
+    assert.deepEqual(kmsHris.map((n) => (n.kind === 'dataset' ? n.datasetName : n.kind === 'datasource' ? `${n.dataSourceId}:${n.table}` : n.kind)), ['employees', 'kms:employee'])
+    const kmsCopy = dests({ ...base, destination: { kind: 'kmplus', dataSourceId: 'kms', table: 'employee', columns: [{ from: 'code', to: 'employee_code' }] } })
+    assert.ok(kmsCopy.length === 1 && kmsCopy[0].kind === 'datasource' && kmsCopy[0].table === 'employee' && kmsCopy[0].mode === 'upsert')
+    assert.throws(() => draft({ ...base, destination: { kind: 'kmplus', dataSourceId: 'pg' , table: 'x'} }), /Table "x" is not in HR warehouse/)
+    assert.throws(
+      () => checkPipelinePlan({ ...base, destination: { kind: 'kmplus', dataSourceId: 'kms' } }, { sources: sources.map((s) => (s.id === 'kms' ? { ...s, tables: [] } : s)), datasets: [] }),
+      /KMS has no scanned tables yet/
+    )
+
+    // A filter still comes right after the source.
+    const filtered = draft({ ...base, filter: { match: 'all', conditions: [{ field: 'status', operator: 'equals', value: 'active' }] }, destination: { kind: 'api', dataSourceId: 'pay', path: '/e', body: { code: '{{code}}' } } })
+    const src = filtered.definition.nodes.find((n) => n.type === 'source')!
+    const flt = filtered.definition.nodes.find((n) => n.type === 'filter')!
+    assert.ok(filtered.definition.edges.some((e) => e.from === src.id && e.to === flt.id) && filtered.definition.edges.some((e) => e.from === flt.id && filtered.definition.nodes.find((n) => n.id === e.to)?.type === 'destination'))
   })
 
   await test('email: branded layout, escaped text, plain-text twin, both languages', () => {
