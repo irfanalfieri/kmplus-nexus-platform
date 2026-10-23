@@ -33,7 +33,7 @@
     "lucide-react": "^1.16.0",
     "mssql": "12.7.2",
     "mysql2": "^3.24.4",
-    "next": "16.2.6",
+    "next": "16.4.2",
     "nodemailer": "^10.0.16",
     "oracledb": "^7.0.1",
     "papaparse": "^5.7.0",
@@ -42,7 +42,6 @@
     "react": "^19",
     "react-dom": "^19",
     "read-excel-file": "^9.3.12",
-    "shadcn": "^4.8.0",
     "snowflake-sdk": "^3.3.0",
     "ssh2": "1.16.0",
     "tailwind-merge": "^3.3.1",
@@ -61,14 +60,18 @@
     "@types/react-dom": "^19",
     "@types/ssh2": "1.15.5",
     "esbuild": "0.25.12",
-    "postcss": "^8.5",
+    "postcss": "^8.5.31",
+    "shadcn": "^4.22.1",
     "tailwindcss": "^4.2.0",
     "typescript": "5.7.3",
     "write-excel-file": "4.1.0"
   },
   "pnpm": {
     "overrides": {
-      "hono": "4.12.25"
+      "hono@<4.13.11": "^4.13.13",
+      "source-map-js@<1.2.2": "^1.2.2",
+      "toml@<5.0.1": "^5.0.1",
+      "baseline-browser-mapping@<2.11.0": "^2.11.31"
     }
   },
   "packageManager": "pnpm@10.34.6"
